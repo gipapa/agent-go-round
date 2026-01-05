@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { ChatMessage } from "../types";
 
 export default function ChatPanel(props: { history: ChatMessage[]; onSend: (input: string) => Promise<void> }) {
