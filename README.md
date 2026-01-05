@@ -32,9 +32,10 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 ## Quick start
 
 ```bash
-npm i
-npm run dev
+npm ci
+npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
 ```
+go to http://127.0.0.1:5566/agent-go-round/
 
 ## Deploy to GitHub Pages (two options)
 
