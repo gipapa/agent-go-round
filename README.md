@@ -29,13 +29,30 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - `1-to-1`
   - `Leader + Team` (leader plans tasks → dispatches to workers → leader synthesizes)
 
+## Leader + Team (agent-to-agent coordination)
+
+In **Leader + Team** mode you explicitly configure:
+
+1. **Leader agent**
+2. **Member agents**
+
+Then, in chat, your message is treated as a **GOAL**. The leader runs a controlled loop:
+
+- Leader decides the next action (**ask one member**, or **finish**)
+- The chosen member replies
+- Leader updates progress and decides who to ask next
+- Leader ends the session when the goal is achieved (or max rounds is reached)
+
+Implementation detail: the leader is instructed to output a strict JSON action object:
+- `{ "type": "ask_member", "memberId": "...", "message": "..." }`
+- `{ "type": "finish", "answer": "..." }`
+
 ## Quick start
 
 ```bash
-npm ci
-npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
+npm i
+npm run dev
 ```
-go to http://127.0.0.1:5566/agent-go-round/
 
 ## Deploy to GitHub Pages (two options)
 
@@ -142,4 +159,3 @@ jobs:
 ## License
 
 MIT
-test

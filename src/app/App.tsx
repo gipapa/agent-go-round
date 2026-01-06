@@ -8,7 +8,7 @@ import { ChromePromptAdapter } from "../adapters/chromePrompt";
 import { CustomAdapter } from "../adapters/custom";
 
 import { runOneToOne } from "../orchestrators/oneToOne";
-import { runLeaderTeam } from "../orchestrators/leaderTeam";
+import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import ChatPanel from "../ui/ChatPanel";
@@ -18,10 +18,10 @@ import McpPanel from "../ui/McpPanel";
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
   if (a.type === "custom") return CustomAdapter;
-  return OpenAICompatAdapter; // openai_compat default
+  return OpenAICompatAdapter;
 }
 
-function nowMsg(role: ChatMessage["role"], content: string, name?: string): ChatMessage {
+function msg(role: ChatMessage["role"], content: string, name?: string): ChatMessage {
   return { id: crypto.randomUUID(), role, content, name, ts: Date.now() };
 }
 
@@ -56,12 +56,16 @@ export default function App() {
   const [mode, setMode] = useState<OrchestratorMode>("one_to_one");
   const [history, setHistory] = useState<ChatMessage[]>([]);
 
+  // Leader+Team config
+  const [leaderAgentId, setLeaderAgentId] = useState<string>(() => agents[0]?.id ?? "");
+  const [memberAgentIds, setMemberAgentIds] = useState<string[]>(() => agents.slice(1).map((a) => a.id));
+
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docSelection, setDocSelection] = useState<string | null>(null);
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [log, setLog] = useState<string[]>([]);
-  const pushLog = (s: string) => setLog((x) => [s, ...x].slice(0, 120));
+  const pushLog = (s: string) => setLog((x) => [s, ...x].slice(0, 200));
 
   React.useEffect(() => {
     (async () => setDocs(await listDocs()))();
@@ -69,12 +73,20 @@ export default function App() {
 
   React.useEffect(() => {
     saveAgents(agents);
-  }, [agents]);
+
+    if (!agents.some((a) => a.id === leaderAgentId)) {
+      setLeaderAgentId(agents[0]?.id ?? "");
+    }
+
+    setMemberAgentIds((prev) => prev.filter((id) => agents.some((a) => a.id === id) && id !== leaderAgentId));
+  }, [agents, leaderAgentId]);
 
   async function onSaveAgent(a: AgentConfig) {
     upsertAgent(a);
-    setAgents(loadAgents());
+    const next = loadAgents();
+    setAgents(next);
     setActiveAgentId(a.id);
+    if (!leaderAgentId) setLeaderAgentId(a.id);
   }
 
   async function onDeleteAgent(id: string) {
@@ -84,54 +96,100 @@ export default function App() {
     setActiveAgentId(next[0]?.id ?? "");
   }
 
+  function toggleMember(id: string) {
+    if (id === leaderAgentId) return;
+    setMemberAgentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function append(m: ChatMessage) {
+    setHistory((h) => [...h, m]);
+  }
+
   async function onSend(input: string) {
     if (!activeAgent) return;
 
-    // Inject selected doc into system context (MVP).
     const selectedDoc = docs.find((d) => d.id === docSelection) ?? null;
-    const system = selectedDoc
+    const userSystem = selectedDoc
       ? `You may use this document as context:\n\n[DOC:${selectedDoc.title}]\n${selectedDoc.content}`
       : undefined;
 
-    const userMsg = nowMsg("user", input, "user");
-    setHistory((h) => [...h, userMsg]);
-
-    const assistantMsgId = crypto.randomUUID();
-    setHistory((h) => [...h, { id: assistantMsgId, role: "assistant", content: "", ts: Date.now() }]);
-
-    const onDelta = (t: string) => {
-      setHistory((h) => h.map((m) => (m.id === assistantMsgId ? { ...m, content: m.content + t } : m)));
-    };
+    // User message
+    append(msg("user", input, "user"));
 
     try {
       if (mode === "one_to_one") {
+        // streaming into a reserved assistant message
+        const assistantId = crypto.randomUUID();
+        setHistory((h) => [...h, { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name }]);
+
+        const onDelta = (t: string) => {
+          setHistory((h) => h.map((m) => (m.id === assistantId ? { ...m, content: m.content + t } : m)));
+        };
+
         const adapter = pickAdapter(activeAgent);
         await runOneToOne({
           adapter,
           agent: activeAgent,
           input,
           history,
-          system,
+          system: userSystem,
           onDelta
         });
-      } else {
-        const leader = { agent: activeAgent, adapter: pickAdapter(activeAgent) };
-        const workers = agents
-          .filter((a) => a.id !== activeAgent.id)
-          .map((a) => ({ agent: a, adapter: pickAdapter(a) }));
-
-        await runLeaderTeam({
-          leader,
-          workers,
-          input,
-          history,
-          system,
-          onLog: pushLog,
-          onDelta
-        });
+        return;
       }
+
+      // Leader + Team: user input is a GOAL
+      const leaderAgent = agents.find((a) => a.id === leaderAgentId) ?? activeAgent;
+      const memberAgents = agents.filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id);
+
+      if (!leaderAgent) {
+        append(msg("assistant", "No leader agent selected.", "system"));
+        return;
+      }
+      if (memberAgents.length === 0) {
+        append(msg("assistant", "No member agents selected. Please select at least one member.", "system"));
+        return;
+      }
+
+      pushLog(`Leader+Team started. Leader="${leaderAgent.name}", Members=${memberAgents.map((m) => m.name).join(", ")}`);
+
+      // Show a visible kickoff message from the leader
+      append(msg("assistant", `Goal received. I'll coordinate the team to achieve it.`, leaderAgent.name));
+
+      const onEvent = (ev: LeaderTeamEvent) => {
+        if (ev.type === "leader_ask_member") {
+          append(msg("assistant", `@${ev.memberName} — ${ev.message}`, leaderAgent.name));
+          return;
+        }
+        if (ev.type === "member_reply") {
+          // Show the member's answer
+          append(msg("assistant", ev.reply, ev.memberName));
+          return;
+        }
+        if (ev.type === "leader_invalid_json") {
+          append(msg("assistant", `Leader produced an invalid action. Raw output:\n\n${ev.text}`, leaderAgent.name));
+          return;
+        }
+        if (ev.type === "leader_finish") {
+          append(msg("assistant", ev.answer, leaderAgent.name));
+          return;
+        }
+        // leader_decision_raw is mostly internal; keep it in log only to avoid clutter
+      };
+
+      await runLeaderTeam({
+        leader: { agent: leaderAgent, adapter: pickAdapter(leaderAgent) },
+        members: memberAgents.map((m) => ({ agent: m, adapter: pickAdapter(m) })),
+        goal: input,
+        userHistory: history,
+        userSystem,
+        maxRounds: 8,
+        onLog: pushLog,
+        onDelta: () => {},
+        onEvent
+      });
     } catch (e: any) {
-      onDelta(`\n\n[ERROR]\n${e?.message ?? String(e)}`);
+      append(msg("assistant", `[ERROR]\n${e?.message ?? String(e)}`, "system"));
     }
   }
 
@@ -181,6 +239,42 @@ export default function App() {
           </select>
         </div>
 
+        {mode === "leader_team" && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Leader + Team Setup</div>
+
+            <label style={label}>Leader agent</label>
+            <select value={leaderAgentId} onChange={(e) => setLeaderAgentId(e.target.value)} style={{ width: "100%", ...selectStyle }}>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name} ({a.type})
+                </option>
+              ))}
+            </select>
+
+            <div style={{ marginTop: 10 }}>
+              <div style={{ ...label, marginBottom: 6 }}>Member agents</div>
+              <div style={{ display: "grid", gap: 6 }}>
+                {agents.filter((a) => a.id !== leaderAgentId).map((a) => {
+                  const checked = memberAgentIds.includes(a.id);
+                  return (
+                    <label key={a.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleMember(a.id)} />
+                      <span>
+                        {a.name} <span style={{ opacity: 0.7 }}>({a.type}{a.model ? ` · ${a.model}` : ""})</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
+                In chat, send a <b>goal</b>. The leader will ask members one-by-one and you will see the conversation here.
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
           Security note: This MVP stores API keys in the browser. For production, use a small server-side proxy to protect keys.
         </div>
@@ -209,6 +303,8 @@ export default function App() {
     </div>
   );
 }
+
+const label: React.CSSProperties = { fontSize: 12, opacity: 0.8 };
 
 const selectStyle: React.CSSProperties = {
   padding: "8px 10px",
