@@ -1,12 +1,12 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { ChatMessage } from "../types";
 
 export default function ChatPanel(props: { history: ChatMessage[]; onSend: (input: string) => Promise<void> }) {
   const [text, setText] = useState("");
 
   return (
-    <>
-      <div style={{ overflow: "auto", padding: 6 }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 10 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: 6 }}>
         {props.history.map((m) => (
           <div key={m.id} style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 12, opacity: 0.7 }}>
@@ -52,6 +52,6 @@ export default function ChatPanel(props: { history: ChatMessage[]; onSend: (inpu
           Send
         </button>
       </div>
-    </>
+    </div>
   );
 }

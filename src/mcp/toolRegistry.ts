@@ -1,10 +1,5 @@
+import { McpTool } from "../types";
 import { McpSseClient } from "./sseClient";
-
-export type McpTool = {
-  name: string;
-  description?: string;
-  inputSchema?: any;
-};
 
 export async function listTools(client: McpSseClient): Promise<McpTool[]> {
   const res = await client.request("tools/list");

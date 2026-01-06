@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { AgentConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig } from "../types";
+import { AgentConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool } from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
 
@@ -9,6 +9,7 @@ import { CustomAdapter } from "../adapters/custom";
 
 import { runOneToOne } from "../orchestrators/oneToOne";
 import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
+import { runGoalDrivenTalk } from "../orchestrators/goalDrivenTalk";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import ChatPanel from "../ui/ChatPanel";
@@ -64,6 +65,8 @@ export default function App() {
   const [docSelection, setDocSelection] = useState<string | null>(null);
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
+  const [activeMcpId, setActiveMcpId] = useState<string | null>(null);
+  const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
   const [log, setLog] = useState<string[]>([]);
   const pushLog = (s: string) => setLog((x) => [s, ...x].slice(0, 200));
 
@@ -114,9 +117,30 @@ export default function App() {
       : undefined;
 
     // User message
-    append(msg("user", input, "user"));
+    const userMsg = msg("user", input, "user");
+    append(userMsg);
 
     try {
+      if (mode === "goal_driven_talk") {
+        const adapter = pickAdapter(activeAgent);
+        const activeMcp = mcpServers.find((s) => s.id === activeMcpId) ?? null;
+        const activeMcpTools = activeMcpId ? mcpToolsByServer[activeMcpId] ?? [] : [];
+
+        await runGoalDrivenTalk({
+          adapter,
+          agent: activeAgent,
+          goal: input,
+          history: [...history, userMsg],
+          system: userSystem,
+          selectedDoc,
+          activeMcpServer: activeMcp,
+          activeMcpTools,
+          onEvent: (ev) => append(ev.message),
+          onLog: pushLog
+        });
+        return;
+      }
+
       if (mode === "one_to_one") {
         // streaming into a reserved assistant message
         const assistantId = crypto.randomUUID();
@@ -236,6 +260,7 @@ export default function App() {
           <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ width: "100%", ...selectStyle }}>
             <option value="one_to_one">1-to-1</option>
             <option value="leader_team">Leader + Team</option>
+            <option value="goal_driven_talk">Goal-driven Talk</option>
           </select>
         </div>
 
@@ -275,6 +300,16 @@ export default function App() {
           </div>
         )}
 
+        {mode === "goal_driven_talk" && (
+          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>Goal-driven Talk</div>
+            <div>
+              Send a goal; the active agent will iterate think / act / review, pulling from the selected Doc and active MCP tools. All steps are
+              streamed into the chat window.
+            </div>
+          </div>
+        )}
+
         <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
           Security note: This MVP stores API keys in the browser. For production, use a small server-side proxy to protect keys.
         </div>
@@ -297,7 +332,16 @@ export default function App() {
         </div>
 
         <div className="card" style={{ padding: 12, overflow: "auto" }}>
-          <McpPanel servers={mcpServers} onChangeServers={setMcpServers} log={log} pushLog={pushLog} />
+          <McpPanel
+            servers={mcpServers}
+            activeId={activeMcpId}
+            toolsByServer={mcpToolsByServer}
+            onChangeServers={setMcpServers}
+            onSelectActive={setActiveMcpId}
+            onUpdateTools={(id, tools) => setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }))}
+            log={log}
+            pushLog={pushLog}
+          />
         </div>
       </div>
     </div>

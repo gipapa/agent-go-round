@@ -48,7 +48,7 @@ export type DetectResult = {
   notes?: string;
 };
 
-export type OrchestratorMode = "one_to_one" | "leader_team";
+export type OrchestratorMode = "one_to_one" | "leader_team" | "goal_driven_talk";
 
 export type DocItem = {
   id: string;
@@ -62,4 +62,10 @@ export type McpServerConfig = {
   name: string;
   sseUrl: string; // MCP over SSE endpoint
   authHint?: string; // Optional note (EventSource can't set headers)
+};
+
+export type McpTool = {
+  name: string;
+  description?: string;
+  inputSchema?: any;
 };

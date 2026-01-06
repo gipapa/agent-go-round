@@ -57,6 +57,8 @@ npm run dev -- --host 127.0.0.1 --port 5566 --strictPortd
 npm ci && npm run dev -- --host 127.0.0.1 --port 5566 --strictPortd
 ```
 
+During local dev the app is served from `/`. For GitHub Pages or any subpath deploy, set `BASE_PATH` or `VITE_BASE_PATH` (e.g., `/agent-go-round/`) before building; otherwise the build assumes `/` and assets may 404 if hosted under a subpath.
+
 ## Deploy to GitHub Pages (two options)
 
 ### Option A: `gh-pages` script
@@ -97,6 +99,15 @@ The client sends JSON like:
 And expects either:
 - An immediate JSON response to the POST, **or**
 - A response later via SSE with the same `id`.
+
+### MCP quickstart (local)
+
+1) Run an MCP server that exposes:
+   - SSE: `http://localhost:3333/mcp/sse`
+   - RPC: `http://localhost:3333/mcp/rpc` (POST) implementing `tools/list` and `tools/call`
+2) In the **MCP (SSE)** panel (right column), paste the SSE URL and click **Add**.
+3) Click **Connect & List Tools**. The returned tools are saved for that server and shown in the panel.
+4) You can manually call a tool in the panel, or switch chat **Mode** to **Goal-driven Talk** and mention a tool by name; the active MCP server + its tool list are injected into the agent prompt so it can pick `mcp_call` actions.
 
 ## Security
 
