@@ -109,6 +109,18 @@ And expects either:
 3) Click **Connect & List Tools**. The returned tools are saved for that server and shown in the panel.
 4) You can manually call a tool in the panel, or switch chat **Mode** to **Goal-driven Talk** and mention a tool by name; the active MCP server + its tool list are injected into the agent prompt so it can pick `mcp_call` actions.
 
+#### Example MCP server (repo: `../mcp-test`)
+
+- Location: `/Users/gipapa/work/mcp-test`
+- Tools: `echo` (returns text) and `time` (returns current server time)
+- Run it:
+  ```bash
+  cd /Users/gipapa/work/mcp-test
+  npm install
+  npm start
+  ```
+- Endpoints exposed: `http://localhost:3333/mcp/sse` and `http://localhost:3333/mcp/rpc`
+
 ## Security
 
 This MVP stores API keys in the browser (localStorage). Users can inspect the page and extract the key.
