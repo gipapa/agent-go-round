@@ -51,7 +51,10 @@ Implementation detail: the leader is instructed to output a strict JSON action o
 
 ```bash
 npm i
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5566 --strictPortd
+
+#non-first time
+npm ci && npm run dev -- --host 127.0.0.1 --port 5566 --strictPortd
 ```
 
 ## Deploy to GitHub Pages (two options)
