@@ -72,7 +72,7 @@ npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
 npm ci && npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
 ```
 
-During local dev the app is served from `/`. For GitHub Pages or any subpath deploy, set `BASE_PATH` or `VITE_BASE_PATH` (e.g., `/agent-go-round/`) before building; otherwise the build assumes `/` and assets may 404 if hosted under a subpath.
+During local dev the app is served from `/`. Production builds default to `/agent-go-round/` for GitHub Pages; override with `BASE_PATH` or `VITE_BASE_PATH` when deploying to a different subpath.
 
 ## Deploy to GitHub Pages (two options)
 
