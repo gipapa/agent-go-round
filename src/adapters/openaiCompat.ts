@@ -58,6 +58,20 @@ export const OpenAICompatAdapter: AgentAdapter = {
       return;
     }
 
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/event-stream")) {
+      try {
+        const json = await res.json();
+        const text = json?.choices?.[0]?.message?.content ?? "";
+        yield { type: "done", text };
+        return;
+      } catch {
+        const text = await res.text().catch(() => "");
+        yield { type: "done", text };
+        return;
+      }
+    }
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buf = "";
@@ -81,9 +95,16 @@ export const OpenAICompatAdapter: AgentAdapter = {
         try {
           const j = JSON.parse(data);
           const delta = j?.choices?.[0]?.delta?.content ?? "";
+          const msgContent = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? "";
           if (delta) {
             full += delta;
             yield { type: "delta", text: delta };
+            continue;
+          }
+          if (msgContent) {
+            const nextText = msgContent.startsWith(full) ? msgContent.slice(full.length) : msgContent;
+            full = msgContent;
+            if (nextText) yield { type: "delta", text: nextText };
           }
         } catch {
           // ignore malformed chunks

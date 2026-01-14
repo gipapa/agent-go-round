@@ -1,6 +1,6 @@
 # AgentGoRound
 
-**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **1-to-1**, **meeting-style**, and **leader + team**.
+**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **1-to-1**, **leader + team**, and **goal-driven talk**.
 
 This repository contains a working MVP built with **Vite + React + TypeScript**, designed to be deployed to **GitHub Pages**.
 
@@ -19,15 +19,21 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 
 - **Docs (local)**
   - Simple plaintext document vault backed by **IndexedDB**
-  - Selected doc is injected into the agent’s system context (MVP)
+  - Allowed docs for the active agent are injected into the system context (MVP)
 
 - **MCP (SSE)**
   - Connect to MCP servers via **SSE**
+  - Rename MCP servers for easier identification
   - List tools and call tools (client expects an accompanying POST RPC endpoint — see below)
 
 - **Orchestration modes**
   - `1-to-1`
   - `Leader + Team` (leader plans tasks → dispatches to workers → leader synthesizes)
+  - `Goal-driven Talk` (plan → execute → review loop)
+
+- **Chat controls**
+  - `Alt+Enter` sends the message
+  - Clear chat button resets the current conversation
 
 ## Leader + Team (agent-to-agent coordination)
 
@@ -46,6 +52,15 @@ Then, in chat, your message is treated as a **GOAL**. The leader runs a controll
 Implementation detail: the leader is instructed to output a strict JSON action object:
 - `{ "type": "ask_member", "memberId": "...", "message": "..." }`
 - `{ "type": "finish", "answer": "..." }`
+
+## Goal-driven Talk (plan → execute → review)
+
+Goal-driven Talk treats your message as a goal and asks the agent to:
+- propose a short plan
+- execute one subtask at a time
+- review each subtask before moving on
+
+If MCP tools are connected, the active MCP server and its tool list are injected into the prompt.
 
 ## Quick start
 
@@ -108,14 +123,15 @@ And expects either:
 2) In the **MCP (SSE)** panel (right column), paste the SSE URL and click **Add**.
 3) Click **Connect & List Tools**. The returned tools are saved for that server and shown in the panel.
 4) You can manually call a tool in the panel, or switch chat **Mode** to **Goal-driven Talk** and mention a tool by name; the active MCP server + its tool list are injected into the agent prompt so it can pick `mcp_call` actions.
+5) You can edit the MCP server name in the MCP panel for easier identification.
 
-#### Example MCP server (repo: `../mcp-test`)
+#### Example MCP server (repo: `./mcp-test`)
 
-- Location: `/Users/gipapa/work/mcp-test`
+- Location: `./mcp-test`
 - Tools: `echo` (returns text) and `time` (returns current server time)
 - Run it:
   ```bash
-  cd /Users/gipapa/work/mcp-test
+  cd mcp-test
   npm install
   npm start
   ```
@@ -198,6 +214,7 @@ src/
   mcp/             # MCP SSE client + tool registry
   storage/         # agentStore (localStorage) + docStore (IndexedDB)
   ui/              # React panels
+mcp-test/          # Example MCP server for local testing
   app/             # App shell
 ```
 

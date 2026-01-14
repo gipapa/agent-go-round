@@ -40,6 +40,9 @@ export type AgentConfig = {
     tools?: boolean;
     mcp?: boolean;
   };
+
+  allowedDocIds?: string[];
+  allowedMcpServerIds?: string[];
 };
 
 export type DetectResult = {

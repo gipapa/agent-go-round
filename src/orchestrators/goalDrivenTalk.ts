@@ -5,17 +5,21 @@ import { McpSseClient } from "../mcp/sseClient";
 import { callTool } from "../mcp/toolRegistry";
 
 type Action =
-  | { type: "plan"; items: Array<{ goal: string; agent: string }> }
+  | { type: "plan"; items: Array<{ task: string }> }
   | { type: "think"; thought: string }
   | { type: "doc_lookup"; query?: string }
   | { type: "mcp_call"; tool: string; input?: any; serverId?: string }
+  | { type: "execute"; task: string; output: string }
+  | { type: "review"; task: string; ok: boolean; notes?: string }
   | { type: "final"; answer: string };
 
 export type GoalDrivenEvent =
   | { type: "assistant"; message: ChatMessage }
   | { type: "tool"; message: ChatMessage }
   | { type: "final"; message: ChatMessage }
-  | { type: "error"; message: ChatMessage };
+  | { type: "error"; message: ChatMessage }
+  | { type: "plan"; items: string[] }
+  | { type: "review"; task: string; ok: boolean; notes?: string };
 
 function extractJsonObject(text: string): any | null {
   const m = text.match(/\{[\s\S]*\}/);
@@ -30,24 +34,58 @@ function extractJsonObject(text: string): any | null {
 function normalizeAction(obj: any): Action | null {
   if (!obj || typeof obj !== "object") return null;
 
-  if (obj.type === "plan" && Array.isArray(obj.items)) {
+  const type =
+    typeof obj.type === "string"
+      ? obj.type.toLowerCase()
+      : typeof obj.action === "string"
+      ? obj.action.toLowerCase()
+      : "";
+
+  if (type === "plan" && Array.isArray(obj.items)) {
     const items = obj.items
-      .map((it: any) => (it && typeof it.goal === "string" && typeof it.agent === "string" ? { goal: it.goal, agent: it.agent } : null))
-      .filter(Boolean) as Array<{ goal: string; agent: string }>;
+      .map((it: any) => {
+        if (typeof it === "string") return { task: it };
+        if (it && typeof it.task === "string") return { task: it.task };
+        if (it && typeof it.goal === "string") return { task: it.goal };
+        return null;
+      })
+      .filter(Boolean) as Array<{ task: string }>;
     if (items.length) return { type: "plan", items };
   }
 
-  if (obj.type === "final" && typeof obj.answer === "string") {
+  if (type === "final" && typeof obj.answer === "string") {
     return { type: "final", answer: obj.answer };
   }
-  if (obj.type === "think" && typeof obj.thought === "string") {
+  if (type === "think" && typeof obj.thought === "string") {
     return { type: "think", thought: obj.thought };
   }
-  if (obj.type === "doc_lookup") {
+  if (type === "doc_lookup") {
     return { type: "doc_lookup", query: typeof obj.query === "string" ? obj.query : undefined };
   }
-  if (obj.type === "mcp_call" && typeof obj.tool === "string") {
+  if (type === "mcp_call" && typeof obj.tool === "string") {
     return { type: "mcp_call", tool: obj.tool, input: obj.input, serverId: typeof obj.serverId === "string" ? obj.serverId : undefined };
+  }
+  if (type === "execute" && typeof obj.task === "string") {
+    const output =
+      typeof obj.output === "string"
+        ? obj.output
+        : typeof obj.result === "string"
+        ? obj.result
+        : typeof obj.notes === "string"
+        ? obj.notes
+        : obj.output ?? obj.result ?? obj.notes;
+    return { type: "execute", task: obj.task, output: stringifyAny(output ?? "") };
+  }
+  if (type === "review" && typeof obj.task === "string") {
+    const ok =
+      typeof obj.ok === "boolean"
+        ? obj.ok
+        : typeof obj.success === "boolean"
+        ? obj.success
+        : typeof obj.status === "string"
+        ? ["ok", "done", "success", "complete"].includes(obj.status.toLowerCase())
+        : false;
+    return { type: "review", task: obj.task, ok, notes: typeof obj.notes === "string" ? obj.notes : undefined };
   }
   return null;
 }
@@ -73,15 +111,16 @@ function buildActionPrompt(args: {
   activeMcpName?: string;
   activeMcpId?: string;
   mcpTools?: McpTool[];
-  agentName: string;
 }) {
   const toolLines = [
-    `- plan (first turn only): {"type":"plan","items":[{"goal":"sub-goal 1","agent":"${args.agentName}"}, ...]}`,
+    `- plan (first turn only): {"type":"plan","items":["subtask 1","subtask 2", ...]}`,
     `- think: {"type":"think","thought":"reasoning or review for next step"}`,
     args.hasDoc ? `- doc_lookup: {"type":"doc_lookup","query":"what you need from the doc"}` : `- doc_lookup: unavailable (no doc selected)`,
     args.activeMcpName
       ? `- mcp_call: {"type":"mcp_call","tool":"<tool name>","input":{...}} (active server: ${args.activeMcpName})`
       : `- mcp_call: unavailable (no active MCP server)`,
+    `- execute: {"type":"execute","task":"subtask","output":"what you did / found"}`,
+    `- review: {"type":"review","task":"subtask","ok":true,"notes":"optional brief notes"}`,
     `- final: {"type":"final","answer":"concise final answer or summary"}`
   ]
     .filter(Boolean)
@@ -96,13 +135,12 @@ function buildActionPrompt(args: {
       : "";
 
   return (
-    `You are in GOAL-DRIVEN TALK mode. Follow an analyze -> act -> review loop until you can provide the best final answer.\n` +
+    `You are in GOAL-DRIVEN TALK mode. Follow a plan -> execute -> review loop until you can provide the best final answer.\n` +
     `GOAL:\n${args.goal}\n\n` +
-    `Agents available: ${args.agentName} (primary executor). Always note which agent owns each sub-goal in the plan.\n\n` +
     (mcpToolSection ? `${mcpToolSection}\n\n` : "") +
     `At each turn, reply with exactly ONE JSON object (no Markdown, no code fences).\n` +
     `Allowed actions:\n${toolLines}\n\n` +
-    `Be deliberate. Prefer a quick think step when helpful. Turn #${args.turn}: choose the next action.`
+    `Plan first, then execute ONE subtask at a time, then review that subtask (ok=true/false). Turn #${args.turn}: choose the next action.`
   );
 }
 
@@ -125,7 +163,7 @@ export async function runGoalDrivenTalk(args: {
   let hasPlan = false;
 
   const emit = (ev: GoalDrivenEvent) => {
-    if (ev.message) session.push(ev.message);
+    if ("message" in ev && ev.message) session.push(ev.message);
     args.onEvent?.(ev);
   };
 
@@ -138,8 +176,7 @@ export async function runGoalDrivenTalk(args: {
       hasDoc: !!args.selectedDoc,
       activeMcpName: args.activeMcpServer?.name,
       activeMcpId: args.activeMcpServer?.id,
-      mcpTools: args.activeMcpTools ?? [],
-      agentName: args.agent.name
+      mcpTools: args.activeMcpTools ?? []
     });
 
     const text = await runOneToOne({
@@ -155,7 +192,8 @@ export async function runGoalDrivenTalk(args: {
     if (!action) {
       const m = makeMsg("assistant", text, args.agent.name);
       emit({ type: "assistant", message: m });
-      return text;
+      args.onLog?.(`Goal-driven turn ${turn}: invalid action JSON. Raw response logged to chat.`);
+      continue;
     }
 
     if (action.type === "think") {
@@ -166,9 +204,10 @@ export async function runGoalDrivenTalk(args: {
 
     if (action.type === "plan") {
       hasPlan = true;
-      const planLines = action.items.map((it, idx) => `${idx + 1}. ${it.goal} — assigned to ${it.agent}`).join("\n");
+      const planLines = action.items.map((it, idx) => `${idx + 1}. ${it.task}`).join("\n");
       const m = makeMsg("assistant", `Plan established:\n${planLines}`, args.agent.name);
       emit({ type: "assistant", message: m });
+      emit({ type: "plan", items: action.items.map((it) => it.task) });
       continue;
     }
 
@@ -204,6 +243,21 @@ export async function runGoalDrivenTalk(args: {
         const err = makeMsg("tool", `MCP error for ${action.tool}: ${e?.message ?? String(e)}`, "mcp");
         emit({ type: "tool", message: err });
       }
+      continue;
+    }
+
+    if (action.type === "execute") {
+      const m = makeMsg("assistant", `Task: ${action.task}\n\n${action.output}`, args.agent.name);
+      emit({ type: "assistant", message: m });
+      continue;
+    }
+
+    if (action.type === "review") {
+      const status = action.ok ? "done" : "not done";
+      const note = action.notes ? `\nNotes: ${action.notes}` : "";
+      const m = makeMsg("assistant", `Review: ${action.task} — ${status}.${note}`, args.agent.name);
+      emit({ type: "assistant", message: m });
+      emit({ type: "review", task: action.task, ok: action.ok, notes: action.notes });
       continue;
     }
 

@@ -53,7 +53,7 @@ export default function DocsPanel(props: {
 
           {!edit ? (
             <div style={{ opacity: 0.7, fontSize: 12 }}>
-              Select a doc to edit. (Selected doc is injected into the agent's system context.)
+              Select a doc to edit. The active chat doc is chosen in the Chat tab.
             </div>
           ) : (
             <div className="card" style={{ padding: 10 }}>

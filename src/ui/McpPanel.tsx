@@ -8,7 +8,7 @@ export default function McpPanel(props: {
   activeId: string | null;
   toolsByServer: Record<string, McpTool[]>;
   onChangeServers: (s: McpServerConfig[]) => void;
-  onSelectActive: (id: string) => void;
+  onSelectActive: (id: string | null) => void;
   onUpdateTools: (id: string, tools: McpTool[]) => void;
   log: string[];
   pushLog: (t: string) => void;
@@ -22,6 +22,17 @@ export default function McpPanel(props: {
   const [toolInput, setToolInput] = useState("{}");
   const [toolOutput, setToolOutput] = useState("");
 
+  function resolveToolName(input: string) {
+    const trimmed = input.trim();
+    if (!trimmed) return trimmed;
+    return trimmed;
+  }
+
+  function updateServerName(id: string, name: string) {
+    const next = props.servers.map((s) => (s.id === id ? { ...s, name } : s));
+    props.onChangeServers(next);
+  }
+
   function addServer() {
     const url = draftUrl.trim();
     if (!url) return;
@@ -29,6 +40,11 @@ export default function McpPanel(props: {
     props.onChangeServers([s, ...props.servers]);
     props.onSelectActive(s.id);
     setDraftUrl("");
+  }
+
+  function removeServer(id: string) {
+    props.onChangeServers(props.servers.filter((s) => s.id !== id));
+    if (props.activeId === id) props.onSelectActive(null);
   }
 
   async function connectAndList() {
@@ -50,9 +66,10 @@ export default function McpPanel(props: {
     client.connect(props.pushLog);
     try {
       const input = JSON.parse(toolInput || "{}");
-      const res = await callTool(client, toolName, input);
+      const resolved = resolveToolName(toolName);
+      const res = await callTool(client, resolved, input);
       setToolOutput(JSON.stringify(res, null, 2));
-      props.pushLog(`tools/call ${toolName} OK`);
+      props.pushLog(`tools/call ${resolved} OK`);
     } catch (e: any) {
       setToolOutput(String(e?.message ?? e));
       props.pushLog(`tools/call error: ${e?.message ?? String(e)}`);
@@ -79,21 +96,33 @@ export default function McpPanel(props: {
 
           <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
             {props.servers.map((s) => (
-              <button
+              <div
                 key={s.id}
-                onClick={() => props.onSelectActive(s.id)}
+                className="card"
                 style={{
-                  textAlign: "left",
                   padding: 10,
-                  borderRadius: 12,
                   border: s.id === props.activeId ? "1px solid #5b6bff" : "1px solid #222636",
-                  background: "#0f1118",
-                  color: "white"
+                  background: "#0f1118"
                 }}
               >
-                <div style={{ fontWeight: 650 }}>{s.name}</div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>{s.sseUrl}</div>
-              </button>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <div onClick={() => props.onSelectActive(s.id)} style={{ cursor: "pointer", flex: 1 }}>
+                      <div style={{ fontWeight: 650 }}>{s.name}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>{s.sseUrl}</div>
+                    </div>
+                    <button onClick={() => removeServer(s.id)} style={btnSmall}>
+                      Remove
+                    </button>
+                  </div>
+                  <input
+                    value={s.name}
+                    onChange={(e) => updateServerName(s.id, e.target.value)}
+                    placeholder="MCP name"
+                    style={inp}
+                  />
+                </div>
+              </div>
             ))}
           </div>
 
@@ -120,6 +149,16 @@ export default function McpPanel(props: {
           <hr style={{ margin: "12px 0" }} />
 
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Call Tool</div>
+          <select value={toolName} onChange={(e) => setToolName(e.target.value)} style={{ ...inp, marginBottom: 8 }}>
+            <option value="">Choose a tool</option>
+            {tools.map((t) => {
+              return (
+                <option key={t.name} value={t.name}>
+                  {t.name}
+                </option>
+              );
+            })}
+          </select>
           <input value={toolName} onChange={(e) => setToolName(e.target.value)} placeholder="tool name" style={inp} />
           <textarea value={toolInput} onChange={(e) => setToolInput(e.target.value)} rows={5} style={inp} />
           <button onClick={doCallTool} style={btnPrimary}>
