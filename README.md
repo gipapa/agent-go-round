@@ -51,10 +51,10 @@ Implementation detail: the leader is instructed to output a strict JSON action o
 
 ```bash
 npm i
-npm run dev -- --host 127.0.0.1 --port 5566 --strictPortd
+npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
 
 #non-first time
-npm ci && npm run dev -- --host 127.0.0.1 --port 5566 --strictPortd
+npm ci && npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
 ```
 
 During local dev the app is served from `/`. For GitHub Pages or any subpath deploy, set `BASE_PATH` or `VITE_BASE_PATH` (e.g., `/agent-go-round/`) before building; otherwise the build assumes `/` and assets may 404 if hosted under a subpath.
