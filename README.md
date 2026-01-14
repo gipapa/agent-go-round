@@ -65,11 +65,7 @@ If MCP tools are connected, the active MCP server and its tool list are injected
 ## Quick start
 
 ```bash
-npm i
-npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
-
-#non-first time
-npm ci && npm run dev -- --host 127.0.0.1 --port 5566 --strictPort
+bash run.sh
 ```
 
 During local dev the app is served from `/`. Production builds default to `/agent-go-round/` for GitHub Pages; override with `BASE_PATH` or `VITE_BASE_PATH` when deploying to a different subpath.
@@ -150,6 +146,7 @@ src/
   mcp/             # MCP SSE client + tool registry
   storage/         # agentStore (localStorage) + docStore (IndexedDB)
   ui/              # React panels
+run.sh             # Install deps if needed and start the dev server
 mcp-test/          # Example MCP server for local testing
   run.sh           # Install deps and start the MCP test server
   app/             # App shell
