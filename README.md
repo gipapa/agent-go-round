@@ -132,73 +132,9 @@ And expects either:
 - Run it:
   ```bash
   cd mcp-test
-  npm install
-  npm start
+  bash run.sh
   ```
 - Endpoints exposed: `http://localhost:3333/mcp/sse` and `http://localhost:3333/mcp/rpc`
-- Server code (`server.js`):
-  ```js
-  const express = require("express");
-  const cors = require("cors");
-
-  const app = express();
-  app.use(cors());
-  app.use(express.json());
-
-  const clients = new Set();
-
-  app.get("/mcp/sse", (req, res) => {
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.flushHeaders();
-    clients.add(res);
-    req.on("close", () => clients.delete(res));
-  });
-
-  function pushEvent(obj) {
-    const data = `data: ${JSON.stringify(obj)}\\n\\n`;
-    for (const res of clients) res.write(data);
-  }
-
-  app.post("/mcp/rpc", (req, res) => {
-    const { id, method, params } = req.body;
-    if (method === "tools/list") {
-      return res.json({
-        id,
-        result: {
-          tools: [
-            {
-              name: "echo",
-              description: "Echo input text",
-              inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] }
-            },
-            { name: "time", description: "Get current server time" }
-          ]
-        }
-      });
-    }
-
-    if (method === "tools/call") {
-      const { name, input } = params || {};
-      let result;
-      if (name === "echo") result = { text: input?.text ?? "" };
-      else if (name === "time") result = { now: new Date().toISOString() };
-      else result = { error: "Unknown tool" };
-
-      return res.json({ id, result });
-      // Or stream later via SSE:
-      // pushEvent({ id, result });
-      // return res.status(202).end();
-    }
-
-    res.json({ id, error: "Unknown method" });
-  });
-
-  app.listen(3333, () => {
-    console.log("MCP SSE server running at http://localhost:3333");
-  });
-  ```
 
 ## Security
 
@@ -215,6 +151,7 @@ src/
   storage/         # agentStore (localStorage) + docStore (IndexedDB)
   ui/              # React panels
 mcp-test/          # Example MCP server for local testing
+  run.sh           # Install deps and start the MCP test server
   app/             # App shell
 ```
 
