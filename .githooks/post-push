@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$branch" != "main" ]; then
+  exit 0
+fi
+
+if [ "${AGR_DEPLOYING:-}" = "1" ]; then
+  exit 0
+fi
+
+echo "[post-push] Deploying to gh-pages..."
+AGR_DEPLOYING=1 npm run deploy

@@ -1,6 +1,18 @@
 #!/bin/sh
 set -e
 
+skip_tests=true
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_ref" != "refs/heads/gh-pages" ] && [ -n "$local_ref" ]; then
+    skip_tests=false
+  fi
+done
+
+if [ "$skip_tests" = "true" ]; then
+  echo "[pre-push] Skipping tests for gh-pages push."
+  exit 0
+fi
+
 echo "[pre-push] Running tests..."
 {
   echo "----- $(date) -----"
