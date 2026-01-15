@@ -1,5 +1,5 @@
-#!/bin/sh
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 skip_tests=true
 while read local_ref local_sha remote_ref remote_sha; do

@@ -1,5 +1,5 @@
+import React, { act } from "react";
 import { createRoot, Root } from "react-dom/client";
-import { act } from "react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRequest } from "../adapters/base";
 import type { AgentConfig, DocItem, McpServerConfig } from "../types";
