@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { AgentConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool } from "../types";
+import { AgentConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool, LogEntry } from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
 import { loadMcpServers, loadUiState, saveMcpServers, saveUiState } from "../storage/settingsStore";
@@ -66,6 +66,7 @@ function stringifyAny(v: any): string {
 }
 
 type ActiveTab = "chat" | "resources" | "agents";
+type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
 
 export default function App() {
   const initialUi = loadUiState();
@@ -111,11 +112,26 @@ export default function App() {
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => loadMcpServers());
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
-  const [log, setLog] = useState<string[]>([]);
+  const [log, setLog] = useState<LogEntry[]>([]);
   const [logCollapsed, setLogCollapsed] = useState(true);
   const [logHeight, setLogHeight] = useState(160);
-  const pushLog = (s: string) => setLog((x) => [s, ...x].slice(0, 200));
+  const [logSort, setLogSort] = useState<{ key: LogSortKey; dir: "asc" | "desc" }>({ key: "ts", dir: "desc" });
+  const pushLog = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => {
+    const normalized: LogEntry = {
+      id: crypto.randomUUID(),
+      ts: entry.ts ?? Date.now(),
+      category: entry.category || "general",
+      agent: entry.agent,
+      ok: entry.ok,
+      message: entry.message,
+      level: entry.level,
+      details: entry.details
+    };
+    setLog((x) => [normalized, ...x].slice(0, 200));
+  };
   const logResizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
+  const logNow = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => pushLog(entry);
+  const mcpCountRef = React.useRef(mcpServers.length);
 
   React.useEffect(() => {
     function onMove(e: MouseEvent) {
@@ -140,8 +156,14 @@ export default function App() {
 
   React.useEffect(() => {
     (async () => {
-      setDocs(await listDocs());
-      setDocsLoaded(true);
+      try {
+        const list = await listDocs();
+        setDocs(list);
+        setDocsLoaded(true);
+        logNow({ category: "docs", ok: true, message: `Docs loaded: ${list.length}` });
+      } catch (e: any) {
+        logNow({ category: "docs", ok: false, message: "Docs load failed", details: String(e?.message ?? e) });
+      }
     })();
   }, []);
 
@@ -167,6 +189,26 @@ export default function App() {
   React.useEffect(() => {
     saveMcpServers(mcpServers);
   }, [mcpServers]);
+
+  React.useEffect(() => {
+    logNow({ category: "ui", message: `Tab -> ${activeTab}` });
+  }, [activeTab]);
+
+  React.useEffect(() => {
+    logNow({ category: "ui", message: `Mode -> ${mode}` });
+  }, [mode]);
+
+  React.useEffect(() => {
+    const agentName = agents.find((a) => a.id === activeAgentId)?.name ?? activeAgentId;
+    if (agentName) logNow({ category: "agents", message: `Active agent -> ${agentName}` });
+  }, [activeAgentId, agents]);
+
+  React.useEffect(() => {
+    if (mcpCountRef.current !== mcpServers.length) {
+      mcpCountRef.current = mcpServers.length;
+      logNow({ category: "mcp", message: `MCP servers -> ${mcpServers.length}` });
+    }
+  }, [mcpServers.length]);
 
   React.useEffect(() => {
     if (!docsLoaded) return;
@@ -229,22 +271,39 @@ export default function App() {
   }, [activeAgent, mcpServers]);
 
   async function onSaveAgent(a: AgentConfig) {
-    upsertAgent(a);
-    const next = loadAgents();
-    setAgents(next);
-    setActiveAgentId(a.id);
+    try {
+      upsertAgent(a);
+      const next = loadAgents();
+      setAgents(next);
+      setActiveAgentId(a.id);
+      logNow({ category: "agents", agent: a.name, ok: true, message: "Agent saved", details: JSON.stringify(a, null, 2) });
+    } catch (e: any) {
+      logNow({ category: "agents", agent: a.name, ok: false, message: "Agent save failed", details: String(e?.message ?? e) });
+    }
   }
 
   async function onDeleteAgent(id: string) {
-    deleteAgent(id);
-    const next = loadAgents();
-    setAgents(next);
-    setActiveAgentId(next[0]?.id ?? "");
+    const target = agents.find((a) => a.id === id);
+    try {
+      deleteAgent(id);
+      const next = loadAgents();
+      setAgents(next);
+      setActiveAgentId(next[0]?.id ?? "");
+      logNow({ category: "agents", agent: target?.name, ok: true, message: "Agent deleted" });
+    } catch (e: any) {
+      logNow({ category: "agents", agent: target?.name, ok: false, message: "Agent delete failed", details: String(e?.message ?? e) });
+    }
   }
 
   function toggleMember(id: string) {
     if (id === activeAgentId) return;
-    setMemberAgentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setMemberAgentIds((prev) => {
+      const exists = prev.includes(id);
+      const next = exists ? prev.filter((x) => x !== id) : [...prev, id];
+      const agentName = agents.find((a) => a.id === id)?.name ?? id;
+      logNow({ category: "leader_team", message: `${exists ? "Member removed" : "Member added"}: ${agentName}` });
+      return next;
+    });
   }
 
   function append(m: ChatMessage) {
@@ -252,13 +311,31 @@ export default function App() {
   }
 
   async function onSend(input: string) {
-    if (!activeAgent) return;
+    if (!activeAgent) {
+      logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: input });
+      return;
+    }
+
+    const startedAt = Date.now();
+    logNow({
+      category: "chat",
+      agent: activeAgent.name,
+      message: `Send (${mode})`,
+      details: input
+    });
 
     const docBlocks = docsForAgent.map((d) => `[DOC:${d.title}]\n${d.content}`).join("\n\n");
     const userSystem = docBlocks ? `You may use these documents as context:\n\n${docBlocks}` : undefined;
     const selectedDocForLookup: DocItem | null = docBlocks
       ? { id: "allowed_docs", title: "Allowed Docs", content: docBlocks, updatedAt: Date.now() }
       : null;
+
+    logNow({
+      category: "chat",
+      agent: activeAgent.name,
+      message: "Context prepared",
+      details: `docs=${docsForAgent.length} history=${history.length}`
+    });
 
     // User message
     const userMsg = msg("user", input, "user");
@@ -272,6 +349,7 @@ export default function App() {
         const activeMcp = activeMcpServer;
         const activeMcpTools = activeMcp?.id ? mcpToolsByServer[activeMcp.id] ?? [] : [];
 
+        logNow({ category: "goal_talk", agent: activeAgent.name, message: "Goal-driven talk started", details: `history=${baseHistory.length}` });
         await runGoalDrivenTalk({
           adapter,
           agent: activeAgent,
@@ -287,23 +365,43 @@ export default function App() {
             }
             if (ev.type === "plan") {
               setGoalPlan(ev.items.map((task) => ({ id: crypto.randomUUID(), task, done: false })));
+              logNow({
+                category: "goal_talk",
+                agent: activeAgent.name,
+                message: `Plan created: ${ev.items.length} items`,
+                details: ev.items.join("\n")
+              });
             }
             if (ev.type === "review" && ev.ok) {
               setGoalPlan((prev) => prev.map((t) => (t.task === ev.task ? { ...t, done: true } : t)));
+              logNow({ category: "goal_talk", agent: activeAgent.name, ok: true, message: `Reviewed: ${ev.task}` });
             }
           },
-          onLog: pushLog
+          onLog: (t) => pushLog({ category: "goal_talk", agent: activeAgent?.name ?? undefined, message: t })
+        });
+        logNow({
+          category: "goal_talk",
+          agent: activeAgent.name,
+          ok: true,
+          message: "Goal-driven talk finished",
+          details: `elapsed_ms=${Date.now() - startedAt}`
         });
         return;
       }
 
       if (mode === "one_to_one") {
+        logNow({ category: "chat", agent: activeAgent.name, message: "1-to-1 started" });
         // streaming into a reserved assistant message
         const assistantId = crypto.randomUUID();
         setHistory((h) => [...h, { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name }]);
 
+        let sawDelta = false;
         const onDelta = (t: string) => {
           setHistory((h) => h.map((m) => (m.id === assistantId ? { ...m, content: m.content + t } : m)));
+          if (!sawDelta && t) {
+            sawDelta = true;
+            logNow({ category: "chat", agent: activeAgent.name, message: "1-to-1 streaming started" });
+          }
         };
 
         const adapter = pickAdapter(activeAgent);
@@ -315,14 +413,26 @@ export default function App() {
           system: userSystem,
           onDelta
         });
+        logNow({
+          category: "chat",
+          agent: activeAgent.name,
+          ok: true,
+          message: "1-to-1 completed",
+          details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${full.length}\n\n${full}`
+        });
         const action = normalizeMcpAction(extractJsonObject(full));
-        if (!action) return;
+        if (!action) {
+          logNow({ category: "mcp", agent: activeAgent.name, message: "No MCP action detected" });
+          return;
+        }
+        logNow({ category: "mcp", agent: activeAgent.name, message: `MCP action detected: ${action.tool}` });
 
         const targetServer =
           (action.serverId && activeMcpServer && activeMcpServer.id === action.serverId ? activeMcpServer : activeMcpServer) ?? null;
 
         if (!targetServer) {
           append(msg("tool", "MCP call skipped: no active MCP server selected.", "mcp"));
+          logNow({ category: "mcp", agent: activeAgent.name, ok: false, message: "MCP call skipped: no active server" });
           return;
         }
 
@@ -331,10 +441,18 @@ export default function App() {
         let toolOutput: any;
         try {
           const client = new McpSseClient(targetServer);
-          client.connect(pushLog);
+          client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
           toolOutput = await callTool(client, action.tool, action.input ?? {});
+          logNow({
+            category: "mcp",
+            agent: targetServer.name,
+            ok: true,
+            message: `MCP tool call OK: ${action.tool}`,
+            details: stringifyAny(toolOutput)
+          });
         } catch (e: any) {
           append(msg("tool", `MCP error for ${action.tool}: ${e?.message ?? String(e)}`, "mcp"));
+          pushLog({ category: "mcp", agent: targetServer.name, ok: false, message: `Tool call failed: ${action.tool}`, details: String(e?.message ?? e) });
           return;
         }
 
@@ -359,6 +477,13 @@ export default function App() {
           system: userSystem,
           onDelta: onDeltaFollowup
         });
+        logNow({
+          category: "chat",
+          agent: activeAgent.name,
+          ok: true,
+          message: "1-to-1 followup completed",
+          details: `elapsed_ms=${Date.now() - startedAt}`
+        });
         return;
       }
 
@@ -371,7 +496,12 @@ export default function App() {
         return;
       }
 
-      pushLog(`Leader+Team started. Leader="${leaderAgent.name}", Members=${memberAgents.map((m) => m.name).join(", ")}`);
+      pushLog({
+        category: "leader_team",
+        agent: leaderAgent.name,
+        ok: true,
+        message: `Started. Members=${memberAgents.map((m) => m.name).join(", ")}`
+      });
 
       // Show a visible kickoff message from the leader
       append(msg("assistant", `Goal received. I'll coordinate the team to achieve it.`, leaderAgent.name));
@@ -379,19 +509,28 @@ export default function App() {
       const onEvent = (ev: LeaderTeamEvent) => {
         if (ev.type === "leader_ask_member") {
           append(msg("assistant", `@${ev.memberName} — ${ev.message}`, leaderAgent.name));
+          logNow({
+            category: "leader_team",
+            agent: leaderAgent.name,
+            message: `Leader asked ${ev.memberName}`,
+            details: ev.message
+          });
           return;
         }
         if (ev.type === "member_reply") {
           // Show the member's answer
           append(msg("assistant", ev.reply, ev.memberName));
+          logNow({ category: "leader_team", agent: ev.memberName, message: "Member replied", details: ev.reply });
           return;
         }
         if (ev.type === "leader_invalid_json") {
           append(msg("assistant", `Leader produced an invalid action. Raw output:\n\n${ev.text}`, leaderAgent.name));
+          logNow({ category: "leader_team", agent: leaderAgent.name, ok: false, message: "Leader invalid JSON", details: ev.text });
           return;
         }
         if (ev.type === "leader_finish") {
           append(msg("assistant", ev.answer, leaderAgent.name));
+          logNow({ category: "leader_team", agent: leaderAgent.name, ok: true, message: "Leader finished", details: ev.answer });
           return;
         }
         // leader_decision_raw is mostly internal; keep it in log only to avoid clutter
@@ -404,34 +543,58 @@ export default function App() {
         userHistory: baseHistory,
         userSystem,
         maxRounds: 8,
-        onLog: pushLog,
+        onLog: (t) => pushLog({ category: "leader_team", agent: leaderAgent.name, message: t }),
         onDelta: () => {},
         onEvent
       });
+      logNow({
+        category: "leader_team",
+        agent: leaderAgent.name,
+        ok: true,
+        message: "Leader+Team finished",
+        details: `elapsed_ms=${Date.now() - startedAt}`
+      });
     } catch (e: any) {
       append(msg("assistant", `[ERROR]\n${e?.message ?? String(e)}`, "system"));
+      logNow({ category: "chat", agent: activeAgent?.name, ok: false, message: "Send failed", details: String(e?.message ?? e) });
     }
   }
 
   async function onCreateDoc() {
     const d: DocItem = { id: crypto.randomUUID(), title: "New Doc", content: "", updatedAt: Date.now() };
-    await upsertDoc(d);
-    setDocs(await listDocs());
-    setDocEditorId(d.id);
+    try {
+      await upsertDoc(d);
+      setDocs(await listDocs());
+      setDocEditorId(d.id);
+      logNow({ category: "docs", ok: true, message: "Doc created", details: JSON.stringify(d, null, 2) });
+    } catch (e: any) {
+      logNow({ category: "docs", ok: false, message: "Doc create failed", details: String(e?.message ?? e) });
+    }
   }
 
   async function onSaveDoc(d: DocItem) {
-    await upsertDoc({ ...d, updatedAt: Date.now() });
-    setDocs(await listDocs());
+    try {
+      await upsertDoc({ ...d, updatedAt: Date.now() });
+      setDocs(await listDocs());
+      logNow({ category: "docs", ok: true, message: "Doc saved", details: JSON.stringify(d, null, 2) });
+    } catch (e: any) {
+      logNow({ category: "docs", ok: false, message: "Doc save failed", details: String(e?.message ?? e) });
+    }
   }
 
   async function onDeleteDoc(id: string) {
-    await deleteDoc(id);
-    setDocs(await listDocs());
-    if (docEditorId === id) setDocEditorId(null);
+    try {
+      await deleteDoc(id);
+      setDocs(await listDocs());
+      if (docEditorId === id) setDocEditorId(null);
+      logNow({ category: "docs", ok: true, message: "Doc deleted", details: id });
+    } catch (e: any) {
+      logNow({ category: "docs", ok: false, message: "Doc delete failed", details: String(e?.message ?? e) });
+    }
   }
 
   function onChangeMcpServers(next: McpServerConfig[]) {
+    const prev = mcpServers;
     setMcpServers(next);
     setMcpToolsByServer((prev) => {
       const nextMap: Record<string, McpTool[]> = {};
@@ -440,6 +603,27 @@ export default function App() {
       });
       return nextMap;
     });
+    const prevIds = new Set(prev.map((s) => s.id));
+    const nextIds = new Set(next.map((s) => s.id));
+    const added = next.filter((s) => !prevIds.has(s.id));
+    const removed = prev.filter((s) => !nextIds.has(s.id));
+    const urlChanged = next.filter((s) => {
+      const prevItem = prev.find((p) => p.id === s.id);
+      return prevItem && prevItem.sseUrl !== s.sseUrl;
+    });
+    if (added.length || removed.length || urlChanged.length) {
+      logNow({
+        category: "mcp",
+        message: "MCP servers updated",
+        details: [
+          added.length ? `added: ${added.map((s) => s.name).join(", ")}` : "",
+          removed.length ? `removed: ${removed.map((s) => s.name).join(", ")}` : "",
+          urlChanged.length ? `url_changed: ${urlChanged.map((s) => s.name).join(", ")}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n")
+      });
+    }
   }
 
   return (
@@ -476,6 +660,7 @@ export default function App() {
                 onClear={() => {
                   setHistory([]);
                   setGoalPlan([]);
+                  logNow({ category: "chat", message: "Chat cleared" });
                 }}
               />
             </div>
@@ -484,7 +669,11 @@ export default function App() {
               <div style={{ fontWeight: 800, marginBottom: 8 }}>Chat Settings</div>
 
               <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Active Agent</div>
-              <select value={activeAgentId} onChange={(e) => setActiveAgentId(e.target.value)} style={{ width: "100%", marginBottom: 12, ...selectStyle }}>
+              <select
+                value={activeAgentId}
+                onChange={(e) => setActiveAgentId(e.target.value)}
+                style={{ width: "100%", marginBottom: 12, ...selectStyle }}
+              >
                 {agents.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name} ({a.type}{a.model ? ` · ${a.model}` : ""})
@@ -562,14 +751,20 @@ export default function App() {
         {activeTab === "resources" && (
           <div className="content-grid resources-grid">
             <div className="card panel">
-              <DocsPanel
-                docs={docs}
-                selectedId={docEditorId}
-                onSelect={setDocEditorId}
-                onCreate={onCreateDoc}
-                onSave={onSaveDoc}
-                onDelete={onDeleteDoc}
-              />
+                <DocsPanel
+                  docs={docs}
+                  selectedId={docEditorId}
+                  onSelect={(id) => {
+                    setDocEditorId(id);
+                    if (id) {
+                      const doc = docs.find((d) => d.id === id);
+                      logNow({ category: "docs", message: `Doc selected: ${doc?.title ?? id}` });
+                    }
+                  }}
+                  onCreate={onCreateDoc}
+                  onSave={onSaveDoc}
+                  onDelete={onDeleteDoc}
+                />
             </div>
 
             <div className="card panel">
@@ -578,8 +773,18 @@ export default function App() {
                 activeId={mcpPanelActiveId}
                 toolsByServer={mcpToolsByServer}
                 onChangeServers={onChangeMcpServers}
-                onSelectActive={setMcpPanelActiveId}
-                onUpdateTools={(id, tools) => setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }))}
+                onSelectActive={(id) => {
+                  setMcpPanelActiveId(id);
+                  if (id) {
+                    const server = mcpServers.find((s) => s.id === id);
+                    logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
+                  }
+                }}
+                onUpdateTools={(id, tools) => {
+                  setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
+                  const server = mcpServers.find((s) => s.id === id);
+                  logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
+                }}
                 pushLog={pushLog}
               />
             </div>
@@ -592,13 +797,19 @@ export default function App() {
               <AgentsPanel
                 agents={agents}
                 activeAgentId={activeAgentId}
-                onSelect={setActiveAgentId}
+                onSelect={(id) => setActiveAgentId(id)}
                 onSave={onSaveAgent}
                 onDelete={onDeleteAgent}
                 onDetect={async (a) => {
                   const adapter = pickAdapter(a);
                   const r = adapter.detect ? await adapter.detect(a) : { ok: false, detectedType: "unknown", notes: "No detect()" };
-                  pushLog(`Detect[${a.name}]: ${r.ok ? "OK" : "FAIL"} ${r.detectedType ?? ""} ${r.notes ?? ""}`);
+                  pushLog({
+                    category: "detect",
+                    agent: a.name,
+                    ok: r.ok,
+                    message: `${r.detectedType ?? ""} ${r.notes ?? ""}`.trim() || "detect()",
+                    details: r.notes ?? undefined
+                  });
                 }}
                 docs={docs}
                 mcpServers={mcpServers}
@@ -625,11 +836,64 @@ export default function App() {
               }}
             />
             {log.length === 0 && <div className="log-empty">No logs yet.</div>}
-            {log.map((l, i) => (
-              <div key={i} className="log-line">
-                {l}
+            {log.length > 0 && (
+              <div className="log-table">
+                <div className="log-row log-row-head">
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "category", dir: s.key === "category" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    Category{logSort.key === "category" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  </button>
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "agent", dir: s.key === "agent" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    Agent{logSort.key === "agent" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  </button>
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "ok", dir: s.key === "ok" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    OK{logSort.key === "ok" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  </button>
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "ts", dir: s.key === "ts" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    Time{logSort.key === "ts" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  </button>
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "message", dir: s.key === "message" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    Log{logSort.key === "message" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  </button>
+                </div>
+                {log
+                  .map((item, index) => ({ item, index }))
+                  .sort((a, b) => {
+                    const key = logSort.key;
+                    let cmp = 0;
+                    if (key === "ts") cmp = a.item.ts - b.item.ts;
+                    if (key === "ok") {
+                      const av = a.item.ok === true ? 1 : a.item.ok === false ? 0 : -1;
+                      const bv = b.item.ok === true ? 1 : b.item.ok === false ? 0 : -1;
+                      cmp = av - bv;
+                    }
+                    if (key === "category") cmp = (a.item.category || "").toLowerCase().localeCompare((b.item.category || "").toLowerCase());
+                    if (key === "agent") cmp = (a.item.agent || "").toLowerCase().localeCompare((b.item.agent || "").toLowerCase());
+                    if (key === "message") cmp = (a.item.message || "").toLowerCase().localeCompare((b.item.message || "").toLowerCase());
+                    if (cmp === 0) cmp = a.index - b.index;
+                    return logSort.dir === "asc" ? cmp : -cmp;
+                  })
+                  .map(({ item }) => {
+                    const okLabel = item.ok === true ? "OK" : item.ok === false ? "FAIL" : "-";
+                    const tsLabel = new Date(item.ts).toLocaleString();
+                    const detailsText = item.details ? `${item.message}\n\n${item.details}` : item.message;
+                    return (
+                      <details key={item.id} className="log-row log-entry">
+                        <summary className="log-summary">
+                          <div className="log-cell log-category">{item.category}</div>
+                          <div className="log-cell log-agent">{item.agent ?? "-"}</div>
+                          <div className={`log-cell log-ok ${item.ok === true ? "ok" : item.ok === false ? "fail" : ""}`}>{okLabel}</div>
+                          <div className="log-cell log-time">{tsLabel}</div>
+                          <div className="log-cell log-message">{item.message}</div>
+                        </summary>
+                        <div className="log-details">
+                          <div className="log-details-label">Log</div>
+                          <pre className="log-details-body">{detailsText}</pre>
+                        </div>
+                      </details>
+                    );
+                  })}
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>

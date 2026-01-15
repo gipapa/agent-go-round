@@ -150,6 +150,100 @@ hr {
   position: relative;
 }
 
+.log-table {
+  display: grid;
+  gap: 6px;
+}
+
+.log-row-head,
+.log-summary {
+  display: grid;
+  grid-template-columns: 110px 140px 70px 170px minmax(140px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.log-row-head {
+  position: sticky;
+  top: 8px;
+  padding: 6px 8px;
+  background: #0f1118;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 2;
+}
+
+.log-sort {
+  background: transparent;
+  border: none;
+  color: rgba(232, 232, 232, 0.75);
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+}
+
+.log-entry {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(18, 21, 32, 0.7);
+}
+
+.log-summary {
+  padding: 6px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.log-summary::-webkit-details-marker {
+  display: none;
+}
+
+.log-cell {
+  font-size: 12px;
+  color: rgba(232, 232, 232, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-ok.ok {
+  color: #7dffb2;
+  font-weight: 700;
+}
+
+.log-ok.fail {
+  color: #ff8f8f;
+  font-weight: 700;
+}
+
+.log-message {
+  color: rgba(232, 232, 232, 0.75);
+}
+
+.log-details {
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  padding: 8px 10px 10px 10px;
+  background: rgba(10, 12, 18, 0.6);
+}
+
+.log-details-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(232, 232, 232, 0.6);
+  margin-bottom: 6px;
+}
+
+.log-details-body {
+  margin: 0;
+  white-space: pre-wrap;
+  color: rgba(232, 232, 232, 0.88);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
 .log-resize-handle {
   position: sticky;
   top: 0;
@@ -158,6 +252,7 @@ hr {
   cursor: ns-resize;
   background: linear-gradient(90deg, rgba(91, 107, 255, 0.4), rgba(91, 107, 255, 0));
   border-radius: 8px;
+  z-index: 3;
 }
 
 .log-line {

@@ -72,3 +72,16 @@ export type McpTool = {
   description?: string;
   inputSchema?: any;
 };
+
+export type LogLevel = "info" | "warn" | "error" | "debug";
+
+export type LogEntry = {
+  id: string;
+  category: string;
+  agent?: string;
+  ok?: boolean;
+  ts: number;
+  message: string;
+  level?: LogLevel;
+  details?: string;
+};

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { McpServerConfig, McpTool } from "../types";
+import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { McpSseClient } from "../mcp/sseClient";
 import { listTools, callTool } from "../mcp/toolRegistry";
 
@@ -10,7 +10,7 @@ export default function McpPanel(props: {
   onChangeServers: (s: McpServerConfig[]) => void;
   onSelectActive: (id: string | null) => void;
   onUpdateTools: (id: string, tools: McpTool[]) => void;
-  pushLog: (t: string) => void;
+  pushLog: (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => void;
 }) {
   const [draftUrl, setDraftUrl] = useState("");
   const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? null, [props.servers, props.activeId]);
@@ -49,29 +49,41 @@ export default function McpPanel(props: {
   async function connectAndList() {
     if (!active) return;
     const client = new McpSseClient(active);
-    client.connect(props.pushLog);
+    client.connect((t) => props.pushLog({ category: "mcp", agent: active.name, message: t }));
     try {
       const ts = await listTools(client);
       props.onUpdateTools(active.id, ts);
-      props.pushLog(`tools/list -> ${ts.length} tools`);
+      props.pushLog({ category: "mcp", agent: active.name, ok: true, message: `tools/list -> ${ts.length} tools` });
     } catch (e: any) {
-      props.pushLog(`tools/list error: ${e?.message ?? String(e)}`);
+      props.pushLog({
+        category: "mcp",
+        agent: active.name,
+        ok: false,
+        message: "tools/list error",
+        details: String(e?.message ?? e)
+      });
     }
   }
 
   async function doCallTool() {
     if (!active) return;
     const client = new McpSseClient(active);
-    client.connect(props.pushLog);
+    client.connect((t) => props.pushLog({ category: "mcp", agent: active.name, message: t }));
     try {
       const input = JSON.parse(toolInput || "{}");
       const resolved = resolveToolName(toolName);
       const res = await callTool(client, resolved, input);
       setToolOutput(JSON.stringify(res, null, 2));
-      props.pushLog(`tools/call ${resolved} OK`);
+      props.pushLog({ category: "mcp", agent: active.name, ok: true, message: `tools/call ${resolved} OK` });
     } catch (e: any) {
       setToolOutput(String(e?.message ?? e));
-      props.pushLog(`tools/call error: ${e?.message ?? String(e)}`);
+      props.pushLog({
+        category: "mcp",
+        agent: active.name,
+        ok: false,
+        message: "tools/call error",
+        details: String(e?.message ?? e)
+      });
     }
   }
 
