@@ -99,6 +99,11 @@ export const OpenAICompatAdapter: AgentAdapter = {
       }
     }
 
+    if (!res.body) {
+      yield { type: "done", text: "Request failed: empty response body" };
+      return;
+    }
+
     const reader = res.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buf = "";
