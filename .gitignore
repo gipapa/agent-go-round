@@ -2,3 +2,4 @@ node_modules
 dist
 preview.log
 .DS_Store
+.git/pre-push.log
