@@ -1,8 +1,14 @@
 #!/bin/sh
 set -e
 
-branch="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$branch" != "main" ]; then
+should_deploy=false
+while read local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_ref" = "refs/heads/main" ]; then
+    should_deploy=true
+  fi
+done
+
+if [ "$should_deploy" != "true" ]; then
   exit 0
 fi
 
@@ -11,4 +17,7 @@ if [ "${AGR_DEPLOYING:-}" = "1" ]; then
 fi
 
 echo "[post-push] Deploying to gh-pages..."
-AGR_DEPLOYING=1 npm run deploy
+{
+  echo "----- $(date) -----"
+  AGR_DEPLOYING=1 npm run deploy
+} 2>&1 | tee -a .git/post-push.log
