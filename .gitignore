@@ -3,3 +3,4 @@ dist
 preview.log
 .DS_Store
 .git/pre-push.log
+.git/post-push.log
