@@ -10,7 +10,6 @@ export default function McpPanel(props: {
   onChangeServers: (s: McpServerConfig[]) => void;
   onSelectActive: (id: string | null) => void;
   onUpdateTools: (id: string, tools: McpTool[]) => void;
-  log: string[];
   pushLog: (t: string) => void;
 }) {
   const [draftUrl, setDraftUrl] = useState("");
@@ -170,14 +169,6 @@ export default function McpPanel(props: {
               {toolOutput}
             </pre>
           )}
-
-          <hr style={{ margin: "12px 0" }} />
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Log</div>
-          <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>
-            {props.log.map((l, i) => (
-              <div key={i}>{l}</div>
-            ))}
-          </div>
 
           <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
             Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies.

@@ -11,6 +11,8 @@ import { CustomAdapter } from "../adapters/custom";
 import { runOneToOne } from "../orchestrators/oneToOne";
 import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
 import { runGoalDrivenTalk } from "../orchestrators/goalDrivenTalk";
+import { McpSseClient } from "../mcp/sseClient";
+import { callTool } from "../mcp/toolRegistry";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import ChatPanel from "../ui/ChatPanel";
@@ -25,6 +27,42 @@ function pickAdapter(a: AgentConfig) {
 
 function msg(role: ChatMessage["role"], content: string, name?: string): ChatMessage {
   return { id: crypto.randomUUID(), role, content, name, ts: Date.now() };
+}
+
+type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
+
+function extractJsonObject(text: string): any | null {
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMcpAction(obj: any): McpAction | null {
+  if (!obj || typeof obj !== "object") return null;
+  const type =
+    typeof obj.type === "string"
+      ? obj.type.toLowerCase()
+      : typeof obj.action === "string"
+      ? obj.action.toLowerCase()
+      : "";
+  if (type === "mcp_call" && typeof obj.tool === "string") {
+    return { type: "mcp_call", tool: obj.tool, input: obj.input, serverId: typeof obj.serverId === "string" ? obj.serverId : undefined };
+  }
+  return null;
+}
+
+function stringifyAny(v: any): string {
+  if (v === null || v === undefined) return String(v);
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v, null, 2);
+  } catch {
+    return String(v);
+  }
 }
 
 type ActiveTab = "chat" | "resources" | "agents";
@@ -74,7 +112,31 @@ export default function App() {
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
   const [log, setLog] = useState<string[]>([]);
+  const [logCollapsed, setLogCollapsed] = useState(true);
+  const [logHeight, setLogHeight] = useState(160);
   const pushLog = (s: string) => setLog((x) => [s, ...x].slice(0, 200));
+  const logResizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
+
+  React.useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!logResizeRef.current) return;
+      const delta = logResizeRef.current.startY - e.clientY;
+      const next = Math.min(360, Math.max(80, logResizeRef.current.startHeight + delta));
+      setLogHeight(next);
+    }
+
+    function onUp() {
+      logResizeRef.current = null;
+      document.body.style.userSelect = "";
+    }
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
 
   React.useEffect(() => {
     (async () => {
@@ -245,13 +307,57 @@ export default function App() {
         };
 
         const adapter = pickAdapter(activeAgent);
-        await runOneToOne({
+        const full = await runOneToOne({
           adapter,
           agent: activeAgent,
           input,
           history: baseHistory,
           system: userSystem,
           onDelta
+        });
+        const action = normalizeMcpAction(extractJsonObject(full));
+        if (!action) return;
+
+        const targetServer =
+          (action.serverId && activeMcpServer && activeMcpServer.id === action.serverId ? activeMcpServer : activeMcpServer) ?? null;
+
+        if (!targetServer) {
+          append(msg("tool", "MCP call skipped: no active MCP server selected.", "mcp"));
+          return;
+        }
+
+        setHistory((h) => h.map((m) => (m.id === assistantId ? { ...m, content: `Calling MCP tool: ${action.tool}` } : m)));
+
+        let toolOutput: any;
+        try {
+          const client = new McpSseClient(targetServer);
+          client.connect(pushLog);
+          toolOutput = await callTool(client, action.tool, action.input ?? {});
+        } catch (e: any) {
+          append(msg("tool", `MCP error for ${action.tool}: ${e?.message ?? String(e)}`, "mcp"));
+          return;
+        }
+
+        const toolMsg = msg(
+          "tool",
+          `MCP ${targetServer.name} -> ${action.tool}\ninput:\n${stringifyAny(action.input ?? {})}\noutput:\n${stringifyAny(toolOutput)}`,
+          "mcp"
+        );
+        append(toolMsg);
+
+        const followupId = crypto.randomUUID();
+        setHistory((h) => [...h, { id: followupId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name }]);
+        const onDeltaFollowup = (t: string) => {
+          setHistory((h) => h.map((m) => (m.id === followupId ? { ...m, content: m.content + t } : m)));
+        };
+
+        await runOneToOne({
+          adapter,
+          agent: activeAgent,
+          input: "Tool result received. Provide the final answer to the user.",
+          history: [...baseHistory, msg("assistant", full, activeAgent.name), toolMsg],
+          system: userSystem,
+          onDelta: onDeltaFollowup
         });
         return;
       }
@@ -474,7 +580,6 @@ export default function App() {
                 onChangeServers={onChangeMcpServers}
                 onSelectActive={setMcpPanelActiveId}
                 onUpdateTools={(id, tools) => setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }))}
-                log={log}
                 pushLog={pushLog}
               />
             </div>
@@ -499,6 +604,32 @@ export default function App() {
                 mcpServers={mcpServers}
               />
             </div>
+          </div>
+        )}
+      </div>
+
+      <div className="log-shell card">
+        <div className="log-header">
+          <div className="log-title">Log</div>
+          <button className="log-toggle" onClick={() => setLogCollapsed((c) => !c)}>
+            {logCollapsed ? "Expand" : "Collapse"}
+          </button>
+        </div>
+        {!logCollapsed && (
+          <div className="log-body" style={{ height: logHeight }}>
+            <div
+              className="log-resize-handle"
+              onMouseDown={(e) => {
+                logResizeRef.current = { startY: e.clientY, startHeight: logHeight };
+                document.body.style.userSelect = "none";
+              }}
+            />
+            {log.length === 0 && <div className="log-empty">No logs yet.</div>}
+            {log.map((l, i) => (
+              <div key={i} className="log-line">
+                {l}
+              </div>
+            ))}
           </div>
         )}
       </div>

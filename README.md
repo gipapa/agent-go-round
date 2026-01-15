@@ -70,6 +70,20 @@ bash run.sh
 
 During local dev the app is served from `/`. Production builds default to `/agent-go-round/` for GitHub Pages; override with `BASE_PATH` or `VITE_BASE_PATH` when deploying to a different subpath.
 
+## Tests
+
+Run the test suite:
+
+```bash
+npm test
+```
+
+This repo uses a versioned pre-push hook to run tests before pushing. If hooks are not active, enable them with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Deploy to GitHub Pages (two options)
 
 ### Option A: `gh-pages` script
