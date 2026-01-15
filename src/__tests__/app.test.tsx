@@ -1,4 +1,3 @@
-import React from "react";
 import { createRoot, Root } from "react-dom/client";
 import { act } from "react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +5,7 @@ import type { ChatRequest } from "../adapters/base";
 import type { AgentConfig, DocItem, McpServerConfig } from "../types";
 import App from "../app/App";
 
-const responderRef = vi.hoisted(() => ({ current: (_req: ChatRequest) => "" }));
+const responderRef = vi.hoisted<{ current: (req: ChatRequest) => string }>(() => ({ current: () => "" }));
 const docsFixtureRef = vi.hoisted(() => ({ current: [] as DocItem[] }));
 const callTool = vi.hoisted(() =>
   vi.fn(async (_client: unknown, tool: string) => {
