@@ -214,37 +214,6 @@ describe("App chat flows (mocked)", () => {
     expect(reply).toBe("What do you call a sad strawberry? Ans: A blueberry");
   });
 
-  it("supports goal-driven MCP tool use (time)", async () => {
-    const agent: AgentConfig = {
-      id: "agent-3",
-      name: "Mock LLM",
-      type: "openai_compat",
-      endpoint: "http://mock-llm.test/v1",
-      model: "mock"
-    };
-    const server: McpServerConfig = {
-      id: "mcp-1",
-      name: "Mock MCP",
-      sseUrl: "http://mock-mcp.test/mcp/sse"
-    };
-
-    responderRef.current = (req) => {
-      if (req.input.includes("Turn #1")) return '{"type":"plan","items":["use time tool"]}';
-      if (req.input.includes("Turn #2")) return '{"type":"mcp_call","tool":"time","input":{}}';
-      if (req.input.includes("Turn #3")) return '{"type":"final","answer":"now: 2026-01-01 00:00:00"}';
-      return '{"type":"final","answer":"now: 2026-01-01 00:00:00"}';
-    };
-
-    seedAgents([{ ...agent, allowedMcpServerIds: [server.id] }]);
-    seedMcpServers([server]);
-    seedUi({ activeTab: "chat", mode: "goal_driven_talk", activeAgentId: agent.id, memberAgentIds: [] });
-
-    await renderApp();
-    await sendMessage("use time tool, tell me what time it is");
-    await waitForText("now: 2026-01-01 00:00:00");
-    expect(callTool).toHaveBeenCalledWith(expect.anything(), "time", {});
-  });
-
   it("supports 1-to-1 MCP tool use (time)", async () => {
     const agent: AgentConfig = {
       id: "agent-4",

@@ -20,6 +20,7 @@ export type AgentConfig = {
   id: string;
   name: string;
   type: AgentType;
+  description?: string;
 
   endpoint?: string; // e.g. https://api.openai.com/v1
   apiKey?: string;
@@ -51,7 +52,7 @@ export type DetectResult = {
   notes?: string;
 };
 
-export type OrchestratorMode = "one_to_one" | "leader_team" | "goal_driven_talk";
+export type OrchestratorMode = "one_to_one" | "leader_team";
 
 export type DocItem = {
   id: string;

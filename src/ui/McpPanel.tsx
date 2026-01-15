@@ -137,54 +137,58 @@ export default function McpPanel(props: {
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={connectAndList} style={btnPrimary}>
-              Connect & List Tools
-            </button>
-          </div>
-
-          {tools.length > 0 && (
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.9 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Tools</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {tools.map((t) => (
-                  <div key={t.name} className="card" style={{ padding: 8 }}>
-                    <div style={{ fontWeight: 650 }}>{t.name}</div>
-                    <div style={{ opacity: 0.7 }}>{t.description ?? ""}</div>
-                  </div>
-                ))}
+          {active && (
+            <>
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <button onClick={connectAndList} style={btnPrimary}>
+                  Connect & List Tools
+                </button>
               </div>
-            </div>
+
+              {tools.length > 0 && (
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.9 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Tools</div>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {tools.map((t) => (
+                      <div key={t.name} className="card" style={{ padding: 8 }}>
+                        <div style={{ fontWeight: 650 }}>{t.name}</div>
+                        <div style={{ opacity: 0.7 }}>{t.description ?? ""}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <hr style={{ margin: "12px 0" }} />
+
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Call Tool</div>
+              <select value={toolName} onChange={(e) => setToolName(e.target.value)} style={{ ...inp, marginBottom: 8 }}>
+                <option value="">Choose a tool</option>
+                {tools.map((t) => {
+                  return (
+                    <option key={t.name} value={t.name}>
+                      {t.name}
+                    </option>
+                  );
+                })}
+              </select>
+              <input value={toolName} onChange={(e) => setToolName(e.target.value)} placeholder="tool name" style={inp} />
+              <textarea value={toolInput} onChange={(e) => setToolInput(e.target.value)} rows={5} style={inp} />
+              <button onClick={doCallTool} style={btnPrimary}>
+                Call
+              </button>
+
+              {toolOutput && (
+                <pre style={{ whiteSpace: "pre-wrap", background: "#0f1118", border: "1px solid #222636", padding: 10, borderRadius: 12, marginTop: 10 }}>
+                  {toolOutput}
+                </pre>
+              )}
+
+              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+                Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies.
+              </div>
+            </>
           )}
-
-          <hr style={{ margin: "12px 0" }} />
-
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Call Tool</div>
-          <select value={toolName} onChange={(e) => setToolName(e.target.value)} style={{ ...inp, marginBottom: 8 }}>
-            <option value="">Choose a tool</option>
-            {tools.map((t) => {
-              return (
-                <option key={t.name} value={t.name}>
-                  {t.name}
-                </option>
-              );
-            })}
-          </select>
-          <input value={toolName} onChange={(e) => setToolName(e.target.value)} placeholder="tool name" style={inp} />
-          <textarea value={toolInput} onChange={(e) => setToolInput(e.target.value)} rows={5} style={inp} />
-          <button onClick={doCallTool} style={btnPrimary}>
-            Call
-          </button>
-
-          {toolOutput && (
-            <pre style={{ whiteSpace: "pre-wrap", background: "#0f1118", border: "1px solid #222636", padding: 10, borderRadius: 12, marginTop: 10 }}>
-              {toolOutput}
-            </pre>
-          )}
-
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-            Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies.
-          </div>
         </>
       )}
     </div>

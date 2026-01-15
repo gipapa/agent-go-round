@@ -5,6 +5,9 @@ export type UiState = {
   mode?: OrchestratorMode;
   activeAgentId?: string;
   memberAgentIds?: string[];
+  reactMax?: number;
+  retryDelaySec?: number;
+  retryMax?: number;
 };
 
 const UI_KEY = "agr_ui_v1";

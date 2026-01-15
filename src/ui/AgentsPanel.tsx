@@ -141,6 +141,14 @@ function Editor(props: {
       <label style={label}>Name</label>
       <input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} style={inp} />
 
+      <label style={label}>Agent Description</label>
+      <textarea
+        value={a.description ?? ""}
+        onChange={(e) => setA({ ...a, description: e.target.value })}
+        rows={4}
+        style={{ ...inp, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
+      />
+
       <label style={label}>Type</label>
       <select value={a.type} onChange={(e) => setA({ ...a, type: e.target.value as any })} style={inp as any}>
         <option value="openai_compat">openai_compat</option>

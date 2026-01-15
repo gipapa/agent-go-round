@@ -32,29 +32,56 @@ export const OpenAICompatAdapter: AgentAdapter = {
   async *chat(req: ChatRequest): AsyncGenerator<ChatEvent> {
     const endpoint = (req.agent.endpoint ?? "").replace(/\/$/, "");
     const url = endpoint + "/chat/completions";
+    const retryDelaySec = Math.max(0, req.retry?.delaySec ?? 0);
+    const retryMax = Math.max(0, req.retry?.max ?? 0);
 
     const messages: any[] = [];
     if (req.system?.trim()) messages.push({ role: "system", content: req.system.trim() });
     for (const m of req.history) messages.push(toOpenAIMessage(m));
     messages.push({ role: "user", content: req.input });
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
-        ...(req.agent.headers ?? {})
-      },
-      body: JSON.stringify({
-        model: req.agent.model ?? "gpt-4o-mini",
-        stream: true,
-        messages
-      })
-    });
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let res: Response | null = null;
 
-    if (!res.ok || !res.body) {
+    for (let attempt = 0; attempt <= retryMax; attempt++) {
+      try {
+        res = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
+            ...(req.agent.headers ?? {})
+          },
+          body: JSON.stringify({
+            model: req.agent.model ?? "gpt-4o-mini",
+            stream: true,
+            messages
+          })
+        });
+      } catch (e: any) {
+        if (attempt < retryMax) {
+          req.onLog?.(`[retry] network error, attempt ${attempt + 1}/${retryMax}, waiting ${retryDelaySec}s`);
+          await sleep(retryDelaySec * 1000);
+          continue;
+        }
+        yield { type: "done", text: `Request failed: ${e?.message ?? String(e)}` };
+        return;
+      }
+
+      if (res.ok && res.body) break;
+
       const text = await res.text().catch(() => "");
+      if (res.status === 429 && attempt < retryMax) {
+        req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${retryDelaySec}s`);
+        await sleep(retryDelaySec * 1000);
+        continue;
+      }
       yield { type: "done", text: `Request failed: HTTP ${res.status}\n${text}` };
+      return;
+    }
+
+    if (!res) {
+      yield { type: "done", text: "Request failed: No response" };
       return;
     }
 

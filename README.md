@@ -1,6 +1,6 @@
 # AgentGoRound
 
-**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **1-to-1**, **leader + team**, and **goal-driven talk**.
+**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **1-to-1** and **leader + team**.
 
 This repository contains a working MVP built with **Vite + React + TypeScript**, designed to be deployed to **GitHub Pages**.
 
@@ -29,7 +29,6 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 - **Orchestration modes**
   - `1-to-1`
   - `Leader + Team` (leader plans tasks → dispatches to workers → leader synthesizes)
-  - `Goal-driven Talk` (plan → execute → review loop)
 
 - **Chat controls**
   - `Alt+Enter` sends the message
@@ -52,15 +51,6 @@ Then, in chat, your message is treated as a **GOAL**. The leader runs a controll
 Implementation detail: the leader is instructed to output a strict JSON action object:
 - `{ "type": "ask_member", "memberId": "...", "message": "..." }`
 - `{ "type": "finish", "answer": "..." }`
-
-## Goal-driven Talk (plan → execute → review)
-
-Goal-driven Talk treats your message as a goal and asks the agent to:
-- propose a short plan
-- execute one subtask at a time
-- review each subtask before moving on
-
-If MCP tools are connected, the active MCP server and its tool list are injected into the prompt.
 
 ## Quick start
 
@@ -132,7 +122,7 @@ And expects either:
    - RPC: `http://localhost:3333/mcp/rpc` (POST) implementing `tools/list` and `tools/call`
 2) In the **MCP (SSE)** panel (right column), paste the SSE URL and click **Add**.
 3) Click **Connect & List Tools**. The returned tools are saved for that server and shown in the panel.
-4) You can manually call a tool in the panel, or switch chat **Mode** to **Goal-driven Talk** and mention a tool by name; the active MCP server + its tool list are injected into the agent prompt so it can pick `mcp_call` actions.
+4) You can manually call a tool in the panel; the active MCP server + its tool list are injected into the agent prompt so it can pick `mcp_call` actions.
 5) You can edit the MCP server name in the MCP panel for easier identification.
 
 #### Example MCP server (repo: `./mcp-test`)
@@ -150,6 +140,12 @@ And expects either:
 
 This MVP stores API keys in the browser (localStorage). Users can inspect the page and extract the key.
 For production, use a small server-side proxy (or your own gateway) to protect secrets.
+
+## Known issues (current review)
+
+- MCP SSE clients are created per list/call and never closed (`src/ui/McpPanel.tsx`, `src/app/App.tsx`), so repeated tool use can leak browser EventSource connections.
+- MCP tool routing ignores `serverId` provided by the model and always uses the active server (`src/app/App.tsx`), so multi-server setups cannot target a specific MCP server.
+- The sample MCP server lacks request validation and will throw on malformed JSON or missing fields (`mcp-test/server.js`); add guards before reading `req.body.id/method`.
 
 ## Repo structure
 

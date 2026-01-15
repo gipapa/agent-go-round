@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { ChatMessage } from "../types";
 
-export default function ChatPanel(props: { history: ChatMessage[]; onSend: (input: string) => Promise<void>; onClear: () => void }) {
+export default function ChatPanel(props: {
+  history: ChatMessage[];
+  onSend: (input: string) => Promise<void>;
+  onClear: () => void;
+  leaderName?: string | null;
+}) {
   const [text, setText] = useState("");
 
   const send = async () => {
@@ -24,15 +29,38 @@ export default function ChatPanel(props: { history: ChatMessage[]; onSend: (inpu
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 6 }}>
-        {props.history.map((m) => (
-          <div key={m.id} style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>
-              {m.role}
-              {m.name ? ` · ${m.name}` : ""}
+        {props.history.map((m) => {
+          const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;
+          const isPhase = m.role === "system" && m.name === "phase";
+          if (isPhase) {
+            return (
+              <div
+                key={m.id}
+                style={{
+                  margin: "14px 0",
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #3b4bd6",
+                  background: "rgba(59, 75, 214, 0.15)",
+                  fontWeight: 800,
+                  letterSpacing: "0.04em",
+                  textTransform: "uppercase"
+                }}
+              >
+                {m.content}
+              </div>
+            );
+          }
+          return (
+            <div key={m.id} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: isLeader ? 14 : 12, fontWeight: isLeader ? 800 : 400, opacity: isLeader ? 1 : 0.7 }}>
+                {m.role}
+                {m.name ? ` · ${isLeader ? `[planner] ${m.name}` : m.name}` : ""}
+              </div>
+              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5, fontSize: isLeader ? 14 : 13 }}>{m.content}</div>
             </div>
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{m.content}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", gap: 10 }}>

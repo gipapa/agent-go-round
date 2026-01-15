@@ -1,10 +1,17 @@
 import { AgentConfig, ChatMessage, DetectResult } from "../types";
 
+export type RetryConfig = {
+  delaySec: number;
+  max: number;
+};
+
 export type ChatRequest = {
   agent: AgentConfig;
   input: string;
   history: ChatMessage[];
   system?: string;
+  retry?: RetryConfig;
+  onLog?: (t: string) => void;
 };
 
 export type ChatDelta = { type: "delta"; text: string };
