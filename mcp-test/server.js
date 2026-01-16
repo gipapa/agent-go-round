@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 
 const app = express();
+const PORT = 3333;
 app.use(cors());
 app.use(express.json());
 
@@ -36,6 +37,24 @@ function pushEvent(obj) {
   }
 }
 
+const tools = [
+  {
+    name: "echo",
+    description: "Echo input text",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string" }
+      },
+      required: ["text"]
+    }
+  },
+  {
+    name: "time",
+    description: "Get current server time"
+  }
+];
+
 /**
  * RPC endpoint
  */
@@ -47,23 +66,7 @@ app.post("/mcp/rpc", (req, res) => {
     return res.json({
       id,
       result: {
-        tools: [
-          {
-            name: "echo",
-            description: "Echo input text",
-            inputSchema: {
-              type: "object",
-              properties: {
-                text: { type: "string" }
-              },
-              required: ["text"]
-            }
-          },
-          {
-            name: "time",
-            description: "Get current server time"
-          }
-        ]
+        tools
       }
     });
   }
@@ -95,7 +98,12 @@ app.post("/mcp/rpc", (req, res) => {
   res.json({ id, error: "Unknown method" });
 });
 
-app.listen(3333, () => {
-  console.log("MCP SSE server running at http://localhost:3333");
+app.listen(PORT, () => {
+  const base = `http://127.0.0.1:${PORT}`;
+  console.log(`MCP SSE endpoint: ${base}/mcp/sse`);
+  console.log(`MCP RPC endpoint: ${base}/mcp/rpc`);
+  console.log("Tools:");
+  for (const tool of tools) {
+    console.log(`- ${tool.name}${tool.description ? `: ${tool.description}` : ""}`);
+  }
 });
-

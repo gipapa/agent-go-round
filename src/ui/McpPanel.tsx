@@ -21,6 +21,16 @@ export default function McpPanel(props: {
   const [toolInput, setToolInput] = useState("{}");
   const [toolOutput, setToolOutput] = useState("");
 
+  function deriveRpcUrl(sseUrl: string) {
+    try {
+      const url = new URL(sseUrl);
+      url.pathname = url.pathname.replace(/\/sse$/, "/rpc");
+      return url.toString();
+    } catch {
+      return sseUrl.replace(/\/sse$/, "/rpc");
+    }
+  }
+
   function resolveToolName(input: string) {
     const trimmed = input.trim();
     if (!trimmed) return trimmed;
@@ -53,7 +63,21 @@ export default function McpPanel(props: {
     try {
       const ts = await listTools(client);
       props.onUpdateTools(active.id, ts);
-      props.pushLog({ category: "mcp", agent: active.name, ok: true, message: `tools/list -> ${ts.length} tools` });
+      const rpcUrl = deriveRpcUrl(active.sseUrl);
+      props.pushLog({
+        category: "mcp",
+        agent: active.name,
+        ok: true,
+        message: "MCP endpoints",
+        details: `SSE: ${active.sseUrl}\nRPC: ${rpcUrl}`
+      });
+      props.pushLog({
+        category: "mcp",
+        agent: active.name,
+        ok: true,
+        message: `tools/list -> ${ts.length} tools`,
+        details: ts.map((t) => t.name).join("\n") || "(no tools)"
+      });
     } catch (e: any) {
       props.pushLog({
         category: "mcp",
@@ -99,7 +123,12 @@ export default function McpPanel(props: {
       {!collapsed && (
         <>
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <input value={draftUrl} onChange={(e) => setDraftUrl(e.target.value)} placeholder="SSE URL (e.g. https://your-mcp/sse)" style={inp} />
+            <input
+              value={draftUrl}
+              onChange={(e) => setDraftUrl(e.target.value)}
+              placeholder="SSE URL (e.g. https://your-mcp/sse) — RPC will be derived automatically"
+              style={inp}
+            />
             <button onClick={addServer} style={btn}>
               Add
             </button>
@@ -185,7 +214,7 @@ export default function McpPanel(props: {
               )}
 
               <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-                Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies.
+                Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies. RPC is derived by replacing `/sse` with `/rpc`.
               </div>
             </>
           )}

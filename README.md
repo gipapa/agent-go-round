@@ -1,6 +1,6 @@
 # AgentGoRound
 
-**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **1-to-1** and **leader + team**.
+**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **normal talking** and **goal-driven talking**.
 
 This repository contains a working MVP built with **Vite + React + TypeScript**, designed to be deployed to **GitHub Pages**.
 
@@ -27,16 +27,16 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - List tools and call tools (client expects an accompanying POST RPC endpoint — see below)
 
 - **Orchestration modes**
-  - `1-to-1`
-  - `Leader + Team` (leader plans tasks → dispatches to workers → leader synthesizes)
+  - `normal talking`
+  - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
 
 - **Chat controls**
   - `Alt+Enter` sends the message
   - Clear chat button resets the current conversation
 
-## Leader + Team (agent-to-agent coordination)
+## goal-driven talking (agent-to-agent coordination)
 
-In **Leader + Team** mode you explicitly configure:
+In **goal-driven talking** mode you explicitly configure:
 
 1. **Leader agent**
 2. **Member agents**
@@ -134,7 +134,7 @@ And expects either:
   cd mcp-test
   bash run.sh
   ```
-- Endpoints exposed: `http://localhost:3333/mcp/sse` and `http://localhost:3333/mcp/rpc`
+- Endpoints exposed: `http://localhost:3333/mcp/sse` and `http://localhost:3333/mcp/rpc` (printed on startup with the tool list)
 
 ## Security
 
@@ -152,7 +152,7 @@ For production, use a small server-side proxy (or your own gateway) to protect s
 ```
 src/
   adapters/        # Provider adapters (Chrome Prompt API, OpenAI-compatible, Custom)
-  orchestrators/   # Collaboration patterns (1-to-1, leader+team)
+  orchestrators/   # Collaboration patterns (normal talking, goal-driven talking)
   mcp/             # MCP SSE client + tool registry
   storage/         # agentStore (localStorage) + docStore (IndexedDB)
   ui/              # React panels

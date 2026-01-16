@@ -367,7 +367,7 @@ export default function App() {
 
     try {
       if (mode === "one_to_one") {
-        logNow({ category: "chat", agent: activeAgent.name, message: "1-to-1 started" });
+        logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
         // streaming into a reserved assistant message
         const assistantId = crypto.randomUUID();
         setHistory((h) => [...h, { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name }]);
@@ -377,7 +377,7 @@ export default function App() {
           setHistory((h) => h.map((m) => (m.id === assistantId ? { ...m, content: m.content + t } : m)));
           if (!sawDelta && t) {
             sawDelta = true;
-            logNow({ category: "chat", agent: activeAgent.name, message: "1-to-1 streaming started" });
+            logNow({ category: "chat", agent: activeAgent.name, message: "normal talking streaming started" });
           }
         };
 
@@ -396,7 +396,7 @@ export default function App() {
           category: "chat",
           agent: activeAgent.name,
           ok: true,
-          message: "1-to-1 completed",
+          message: "normal talking completed",
           details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${full.length}\n\n${full}`
         });
         const action = normalizeMcpAction(extractJsonObject(full));
@@ -462,13 +462,13 @@ export default function App() {
           category: "chat",
           agent: activeAgent.name,
           ok: true,
-          message: "1-to-1 followup completed",
+          message: "normal talking followup completed",
           details: `elapsed_ms=${Date.now() - startedAt}`
         });
         return;
       }
 
-      // Leader + Team: user input is a GOAL
+      // goal-driven talking: user input is a GOAL
       const leaderAgent = activeAgent;
       const memberAgents = agents.filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id);
 
@@ -756,8 +756,8 @@ export default function App() {
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <label style={{ opacity: 0.8 }}>Mode</label>
                 <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ width: "100%", ...selectStyle }}>
-                  <option value="one_to_one">1-to-1</option>
-                  <option value="leader_team">Leader + Team</option>
+                  <option value="one_to_one">normal talking</option>
+                  <option value="leader_team">goal-driven talking</option>
                 </select>
               </div>
 
@@ -810,7 +810,7 @@ export default function App() {
 
               {mode === "leader_team" && (
                 <div style={{ marginTop: 10 }}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>Leader + Team Setup</div>
+                  <div style={{ fontWeight: 800, marginBottom: 6 }}>goal-driven talking setup</div>
                   <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>Leader is the active agent.</div>
 
                   <div style={{ marginTop: 10 }}>

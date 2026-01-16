@@ -146,7 +146,7 @@ afterEach(async () => {
 });
 
 describe("App chat flows (mocked)", () => {
-  it("supports 1-to-1 history memory", async () => {
+  it("supports normal talking history memory", async () => {
     const agent: AgentConfig = {
       id: "agent-1",
       name: "Mock LLM",
@@ -179,7 +179,7 @@ describe("App chat flows (mocked)", () => {
     expect(afterSecond).toBe("John");
   });
 
-  it("supports 1-to-1 doc context injection", async () => {
+  it("supports normal talking doc context injection", async () => {
     const agent: AgentConfig = {
       id: "agent-2",
       name: "Mock LLM",
@@ -214,7 +214,7 @@ describe("App chat flows (mocked)", () => {
     expect(reply).toBe("What do you call a sad strawberry? Ans: A blueberry");
   });
 
-  it("supports 1-to-1 MCP tool use (time)", async () => {
+  it("supports normal talking MCP tool use (time)", async () => {
     const agent: AgentConfig = {
       id: "agent-4",
       name: "Mock LLM",
