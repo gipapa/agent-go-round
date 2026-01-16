@@ -31,6 +31,7 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
 - **Polished dark UI**
   - Consistent card, button, and input styling with subtle gradients and shadows
+  - Tabs (Chat / Resources / Agents) now in a framed bar with clearer active state
 
 - **Chat controls**
   - `Alt+Enter` sends the message
