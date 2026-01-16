@@ -22,7 +22,14 @@ export default function ChatPanel(props: {
         <div style={{ fontWeight: 700, fontSize: 14 }}>Conversation</div>
         <button
           onClick={props.onClear}
-          style={{ borderRadius: 10, border: "1px solid #2a2f45", background: "#151827", color: "white", padding: "6px 10px", fontSize: 12 }}
+          style={{
+            borderRadius: 12,
+            border: "1px solid var(--border)",
+            background: "var(--panel-2)",
+            color: "var(--text)",
+            padding: "7px 11px",
+            fontSize: 12
+          }}
         >
           Clear chat
         </button>
@@ -39,9 +46,9 @@ export default function ChatPanel(props: {
                 style={{
                   margin: "14px 0",
                   padding: "6px 10px",
-                  borderRadius: 10,
-                  border: "1px solid #3b4bd6",
-                  background: "rgba(59, 75, 214, 0.15)",
+                  borderRadius: 12,
+                  border: "1px solid var(--primary)",
+                  background: "rgba(91, 123, 255, 0.12)",
                   fontWeight: 800,
                   letterSpacing: "0.04em",
                   textTransform: "uppercase"
@@ -79,9 +86,9 @@ export default function ChatPanel(props: {
             flex: 1,
             padding: "10px 12px",
             borderRadius: 12,
-            border: "1px solid #222636",
-            background: "#0f1118",
-            color: "white"
+            border: "1px solid var(--border)",
+            background: "var(--bg-2)",
+            color: "var(--text)"
           }}
         />
         <button
@@ -89,9 +96,9 @@ export default function ChatPanel(props: {
           style={{
             width: 120,
             borderRadius: 12,
-            border: "1px solid #4456ff",
-            background: "#1a2255",
-            color: "white",
+            border: "1px solid var(--primary)",
+            background: "var(--primary)",
+            color: "#0b0e14",
             fontWeight: 700
           }}
         >

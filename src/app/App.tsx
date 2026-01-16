@@ -1000,8 +1000,8 @@ const label: React.CSSProperties = { fontSize: 12, opacity: 0.8 };
 
 const selectStyle: React.CSSProperties = {
   padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px solid #222636",
-  background: "#0f1118",
-  color: "white"
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--bg-2)",
+  color: "var(--text)"
 };

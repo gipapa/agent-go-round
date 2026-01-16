@@ -227,35 +227,35 @@ export default function McpPanel(props: {
 const inp: React.CSSProperties = {
   width: "100%",
   padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px solid #222636",
-  background: "#0f1118",
-  color: "white"
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--bg-2)",
+  color: "var(--text)"
 };
 
 const btn: React.CSSProperties = {
   width: 90,
-  borderRadius: 10,
-  border: "1px solid #2a2f45",
-  background: "#151827",
-  color: "white"
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--panel-2)",
+  color: "var(--text)"
 };
 
 const btnPrimary: React.CSSProperties = {
   width: "100%",
   marginTop: 8,
   padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px solid #4456ff",
-  background: "#1a2255",
-  color: "white",
+  borderRadius: 12,
+  border: "1px solid var(--primary)",
+  background: "var(--primary)",
+  color: "#0b0e14",
   fontWeight: 700
 };
 
 const btnSmall: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: 10,
-  border: "1px solid #2a2f45",
-  background: "#151827",
-  color: "white"
+  padding: "7px 11px",
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--panel-2)",
+  color: "var(--text)"
 };

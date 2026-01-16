@@ -83,34 +83,34 @@ const inp: React.CSSProperties = {
   width: "100%",
   margin: "6px 0 10px",
   padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px solid #222636",
-  background: "#0f1118",
-  color: "white"
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--bg-2)",
+  color: "var(--text)"
 };
 
 const btnSmall: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: 10,
-  border: "1px solid #2a2f45",
-  background: "#151827",
-  color: "white"
+  padding: "7px 11px",
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--panel-2)",
+  color: "var(--text)"
 };
 
 const btnPrimary: React.CSSProperties = {
   padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px solid #4456ff",
-  background: "#1a2255",
-  color: "white",
+  borderRadius: 12,
+  border: "1px solid var(--primary)",
+  background: "var(--primary)",
+  color: "#0b0e14",
   width: "100%"
 };
 
 const btnDanger: React.CSSProperties = {
   padding: "8px 10px",
-  borderRadius: 10,
-  border: "1px solid #3a1f24",
-  background: "#1a0f12",
+  borderRadius: 12,
+  border: "1px solid #4a2026",
+  background: "#1d1014",
   color: "white",
   width: "100%"
 };

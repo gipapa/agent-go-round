@@ -29,6 +29,8 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 - **Orchestration modes**
   - `normal talking`
   - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
+- **Polished dark UI**
+  - Consistent card, button, and input styling with subtle gradients and shadows
 
 - **Chat controls**
   - `Alt+Enter` sends the message
