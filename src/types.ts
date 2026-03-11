@@ -7,6 +7,8 @@ export type ChatMessage = {
   role: Role;
   content: string;
   name?: string; // agent name / tool name
+  displayName?: string;
+  avatarUrl?: string;
   ts: number;
 };
 
@@ -19,6 +21,7 @@ export type ChatThread = {
 export type AgentConfig = {
   id: string;
   name: string;
+  avatarUrl?: string;
   type: AgentType;
   description?: string;
 

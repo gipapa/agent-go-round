@@ -91,8 +91,7 @@ function getSendButton() {
 
 function getMessageContents() {
   if (!container) throw new Error("Missing test container");
-  return Array.from(container.querySelectorAll("div"))
-    .filter((el) => (el as HTMLElement).style.whiteSpace === "pre-wrap")
+  return Array.from(container.querySelectorAll(".chat-message-text"))
     .map((el) => el.textContent ?? "");
 }
 

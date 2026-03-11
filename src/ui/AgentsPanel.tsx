@@ -1,6 +1,12 @@
 import React, { useState } from "react";
 import { AgentConfig, DocItem, McpServerConfig } from "../types";
 
+const ENDPOINT_PRESETS = [
+  { label: "OpenAI", value: "https://api.openai.com/v1" },
+  { label: "Groq", value: "https://api.groq.com/openai/v1" },
+  { label: "Custom", value: "__custom__" }
+];
+
 const emptyAgent = (): AgentConfig => ({
   id: crypto.randomUUID(),
   name: "New Agent",
@@ -39,6 +45,9 @@ export default function AgentsPanel(props: {
               key={a.id}
               onClick={() => props.onSelect(a.id)}
               style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
                 textAlign: "left",
                 padding: 12,
                 borderRadius: 14,
@@ -47,10 +56,13 @@ export default function AgentsPanel(props: {
                 color: "white"
               }}
             >
-              <div style={{ fontWeight: 700 }}>{a.name}</div>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>
-                {a.type}
-                {a.model ? ` · ${a.model}` : ""}
+              <AvatarPreview name={a.name} avatarUrl={a.avatarUrl} size={42} radius={14} />
+              <div>
+                <div style={{ fontWeight: 700 }}>{a.name}</div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>
+                  {a.type}
+                  {a.model ? ` · ${a.model}` : ""}
+                </div>
               </div>
             </button>
           ))}
@@ -63,11 +75,14 @@ export default function AgentsPanel(props: {
         ) : (
           <>
             <div className="agent-header">
-              <div>
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <AvatarPreview name={active.name} avatarUrl={active.avatarUrl} size={56} radius={16} />
+                <div>
                 <div style={{ fontWeight: 800, fontSize: 16 }}>{active.name}</div>
                 <div style={{ fontSize: 12, opacity: 0.7 }}>
                   {active.type}
                   {active.model ? ` · ${active.model}` : ""}
+                </div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -134,12 +149,39 @@ function Editor(props: {
     setA({ ...a, allowedMcpServerIds: Array.from(allowed) });
   }
 
+  function onAvatarPicked(file: File | undefined) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setA((prev) => ({ ...prev, avatarUrl: reader.result as string }));
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  const endpointPreset =
+    a.endpoint === "https://api.openai.com/v1" || a.endpoint === "https://api.groq.com/openai/v1" ? a.endpoint : "__custom__";
+
   return (
     <div className="card" style={{ padding: 14, marginTop: 12 }}>
       <div style={{ fontWeight: 800, marginBottom: 10 }}>Edit Agent</div>
 
       <label style={label}>Name</label>
       <input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} style={inp} />
+
+      <label style={label}>Thumbnail</label>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "6px 0 14px" }}>
+        <AvatarPreview name={a.name} avatarUrl={a.avatarUrl} />
+        <div style={{ display: "grid", gap: 8 }}>
+          <input type="file" accept="image/*" onChange={(e) => onAvatarPicked(e.target.files?.[0])} />
+          {a.avatarUrl ? (
+            <button type="button" onClick={() => setA({ ...a, avatarUrl: undefined })} style={btnSmall}>
+              Remove thumbnail
+            </button>
+          ) : null}
+        </div>
+      </div>
 
       <label style={label}>Agent Description</label>
       <textarea
@@ -158,6 +200,23 @@ function Editor(props: {
 
       {a.type === "openai_compat" && (
         <>
+          <label style={label}>API Endpoint Preset</label>
+          <select
+            value={endpointPreset}
+            onChange={(e) =>
+              setA({
+                ...a,
+                endpoint: e.target.value === "__custom__" ? a.endpoint ?? "" : e.target.value
+              })
+            }
+            style={inp as any}
+          >
+            {ENDPOINT_PRESETS.map((preset) => (
+              <option key={preset.value} value={preset.value}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
           <label style={label}>Endpoint</label>
           <input value={a.endpoint ?? ""} onChange={(e) => setA({ ...a, endpoint: e.target.value })} style={inp} />
           <label style={label}>Model</label>
@@ -288,6 +347,38 @@ function Editor(props: {
           Save
         </button>
       </div>
+    </div>
+  );
+}
+
+function AvatarPreview(props: { name: string; avatarUrl?: string; size?: number; radius?: number }) {
+  const size = props.size ?? 60;
+  const radius = props.radius ?? 18;
+  if (props.avatarUrl) {
+    return (
+      <img
+        src={props.avatarUrl}
+        alt={props.name}
+        style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", border: "1px solid #2b3348" }}
+      />
+    );
+  }
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: radius,
+        border: "1px solid #2b3348",
+        display: "grid",
+        placeItems: "center",
+        background: "linear-gradient(135deg, rgba(91, 123, 255, 0.22), rgba(77, 208, 225, 0.15))",
+        fontWeight: 800,
+        fontSize: Math.max(14, Math.round(size * 0.4))
+      }}
+    >
+      {(props.name || "?").trim().charAt(0).toUpperCase()}
     </div>
   );
 }

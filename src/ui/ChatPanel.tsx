@@ -1,11 +1,35 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ChatMessage } from "../types";
+
+function initials(name: string) {
+  return (name || "?")
+    .trim()
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function formatTime(ts: number) {
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function Avatar(props: { name: string; avatarUrl?: string; tone?: "user" | "assistant" | "system" }) {
+  if (props.avatarUrl) {
+    return <img className="chat-avatar" src={props.avatarUrl} alt={props.name} />;
+  }
+
+  return (
+    <div className={`chat-avatar chat-avatar-fallback ${props.tone ?? "assistant"}`}>
+      {initials(props.name)}
+    </div>
+  );
+}
 
 export default function ChatPanel(props: {
   history: ChatMessage[];
   onSend: (input: string) => Promise<void>;
   onClear: () => void;
   leaderName?: string | null;
+  userName: string;
 }) {
   const [text, setText] = useState("");
 
@@ -16,61 +40,60 @@ export default function ChatPanel(props: {
     await props.onSend(t);
   };
 
+  const emptyLabel = useMemo(
+    () => (props.leaderName ? `Send a goal to ${props.leaderName} and the team will coordinate here.` : "Start the conversation."),
+    [props.leaderName]
+  );
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>Conversation</div>
-        <button
-          onClick={props.onClear}
-          style={{
-            borderRadius: 12,
-            border: "1px solid var(--border)",
-            background: "var(--panel-2)",
-            color: "var(--text)",
-            padding: "7px 11px",
-            fontSize: 12
-          }}
-        >
+    <div className="chat-shell">
+      <div className="chat-header">
+        <div>
+          <div className="chat-title">Conversation</div>
+          <div className="chat-subtitle">Multi-agent timeline with visible speaker identity.</div>
+        </div>
+        <button onClick={props.onClear} className="chat-clear-btn">
           Clear chat
         </button>
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: 6 }}>
+      <div className="chat-thread">
+        {props.history.length === 0 ? <div className="chat-empty">{emptyLabel}</div> : null}
         {props.history.map((m) => {
           const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;
           const isPhase = m.role === "system" && m.name === "phase";
+          const tone = m.role === "user" ? "user" : m.role === "tool" || m.role === "system" ? "system" : "assistant";
+          const displayName =
+            m.displayName ?? (m.role === "user" ? props.userName : m.role === "tool" ? "Tool" : m.role === "system" ? "System" : m.name || "Agent");
+
           if (isPhase) {
             return (
-              <div
-                key={m.id}
-                style={{
-                  margin: "14px 0",
-                  padding: "6px 10px",
-                  borderRadius: 12,
-                  border: "1px solid var(--primary)",
-                  background: "rgba(91, 123, 255, 0.12)",
-                  fontWeight: 800,
-                  letterSpacing: "0.04em",
-                  textTransform: "uppercase"
-                }}
-              >
+              <div key={m.id} className="chat-phase-pill">
                 {m.content}
               </div>
             );
           }
+
           return (
-            <div key={m.id} style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: isLeader ? 14 : 12, fontWeight: isLeader ? 800 : 400, opacity: isLeader ? 1 : 0.7 }}>
-                {m.role}
-                {m.name ? ` · ${isLeader ? `[planner] ${m.name}` : m.name}` : ""}
+            <div key={m.id} className={`chat-row ${m.role === "user" ? "from-user" : "from-agent"}`}>
+              {m.role !== "user" ? <Avatar name={displayName} avatarUrl={m.avatarUrl} tone={tone} /> : null}
+              <div className={`chat-bubble-wrap ${m.role === "user" ? "from-user" : "from-agent"}`}>
+                <div className="chat-meta">
+                  <span className={`chat-name ${isLeader ? "leader" : ""}`}>{displayName}</span>
+                  <span className="chat-role-tag">{m.role}</span>
+                  <span className="chat-time">{formatTime(m.ts)}</span>
+                </div>
+                <div className={`chat-bubble ${m.role} ${isLeader ? "leader" : ""}`}>
+                  <div className="chat-message-text">{m.content}</div>
+                </div>
               </div>
-              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5, fontSize: isLeader ? 14 : 13 }}>{m.content}</div>
+              {m.role === "user" ? <Avatar name={displayName} avatarUrl={m.avatarUrl} tone="user" /> : null}
             </div>
           );
         })}
       </div>
 
-      <div style={{ display: "flex", gap: 10 }}>
+      <div className="chat-composer">
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -82,26 +105,9 @@ export default function ChatPanel(props: {
           }}
           rows={3}
           placeholder="Type message..."
-          style={{
-            flex: 1,
-            padding: "10px 12px",
-            borderRadius: 12,
-            border: "1px solid var(--border)",
-            background: "var(--bg-2)",
-            color: "var(--text)"
-          }}
+          className="chat-input"
         />
-        <button
-          onClick={send}
-          style={{
-            width: 120,
-            borderRadius: 12,
-            border: "1px solid var(--primary)",
-            background: "var(--primary)",
-            color: "#0b0e14",
-            fontWeight: 700
-          }}
-        >
+        <button onClick={send} className="chat-send-btn">
           Send
         </button>
       </div>

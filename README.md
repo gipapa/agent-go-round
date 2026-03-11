@@ -8,10 +8,12 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 
 - **Agent management**
   - Add / edit / delete agents
+  - Upload agent thumbnails for lists, settings, and chat messages
   - Built-in adapters:
     - `chrome_prompt` (Chrome built-in AI / Prompt API)
     - `openai_compat` (OpenAI-compatible `/v1/chat/completions` streaming)
     - `custom` (manual mapping: body template + response JSONPath)
+  - OpenAI-compatible endpoint presets for OpenAI and Groq
   - **Auto-detect** for OpenAI-compatible endpoints via `GET /v1/models`
 
 - **Chat with history**
@@ -31,7 +33,11 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
 - **Polished dark UI**
   - Consistent card, button, and input styling with subtle gradients and shadows
-  - Tabs (Chat / Resources / Agents) now in a framed bar with clearer active state
+  - Tabs (Chat / Resources / Agents / Profile) in a framed bar with clearer active state
+  - Social-style chat bubbles with speaker names, timestamps, and avatars for multi-agent conversations
+
+- **Profile settings**
+  - Set your own character name and thumbnail from the dedicated `Profile` tab
 
 - **Chat controls**
   - `Alt+Enter` sends the message

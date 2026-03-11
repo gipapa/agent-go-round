@@ -24,8 +24,13 @@ function pickAdapter(a: AgentConfig) {
   return OpenAICompatAdapter;
 }
 
-function msg(role: ChatMessage["role"], content: string, name?: string): ChatMessage {
-  return { id: crypto.randomUUID(), role, content, name, ts: Date.now() };
+function msg(
+  role: ChatMessage["role"],
+  content: string,
+  name?: string,
+  meta?: { displayName?: string; avatarUrl?: string }
+): ChatMessage {
+  return { id: crypto.randomUUID(), role, content, name, displayName: meta?.displayName, avatarUrl: meta?.avatarUrl, ts: Date.now() };
 }
 
 type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
@@ -64,8 +69,9 @@ function stringifyAny(v: any): string {
   }
 }
 
-type ActiveTab = "chat" | "resources" | "agents";
+type ActiveTab = "chat" | "resources" | "agents" | "profile";
 type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
+type UserProfile = { name: string; avatarUrl?: string };
 
 export default function App() {
   const initialUi = loadUiState();
@@ -107,6 +113,8 @@ export default function App() {
   const [reactMax, setReactMax] = useState<number>(() => (typeof initialUi.reactMax === "number" ? initialUi.reactMax : 2));
   const [retryDelaySec, setRetryDelaySec] = useState<number>(() => (typeof initialUi.retryDelaySec === "number" ? initialUi.retryDelaySec : 2));
   const [retryMax, setRetryMax] = useState<number>(() => (typeof initialUi.retryMax === "number" ? initialUi.retryMax : 3));
+  const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
@@ -188,9 +196,11 @@ export default function App() {
       memberAgentIds,
       reactMax,
       retryDelaySec,
-      retryMax
+      retryMax,
+      userName,
+      userAvatarUrl
     });
-  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax]);
+  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, userName, userAvatarUrl]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -316,6 +326,26 @@ export default function App() {
     setHistory((h) => [...h, m]);
   }
 
+  function readUserAvatar(file: File | undefined) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        setUserAvatarUrl(reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  }
+
+  const userProfile = React.useMemo<UserProfile>(() => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl }), [userName, userAvatarUrl]);
+  const agentDirectory = React.useMemo(() => {
+    const map = new Map<string, { displayName: string; avatarUrl?: string }>();
+    agents.forEach((agent) => {
+      map.set(agent.name, { displayName: agent.name, avatarUrl: agent.avatarUrl });
+    });
+    return map;
+  }, [agents]);
+
   const leaderPhaseRef = React.useRef<"planning" | "verification" | "summary" | "act" | "assign" | "react" | null>(null);
   const leaderLastEventRef = React.useRef<"member_reply" | "leader_action" | null>(null);
 
@@ -361,7 +391,7 @@ export default function App() {
     });
 
     // User message
-    const userMsg = msg("user", input, "user");
+    const userMsg = msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl });
     append(userMsg);
     const baseHistory = [...history, userMsg];
 
@@ -370,7 +400,10 @@ export default function App() {
         logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
         // streaming into a reserved assistant message
         const assistantId = crypto.randomUUID();
-        setHistory((h) => [...h, { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name }]);
+        setHistory((h) => [
+          ...h,
+          { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name, displayName: activeAgent.name, avatarUrl: activeAgent.avatarUrl }
+        ]);
 
         let sawDelta = false;
         const onDelta = (t: string) => {
@@ -410,7 +443,7 @@ export default function App() {
           (action.serverId && activeMcpServer && activeMcpServer.id === action.serverId ? activeMcpServer : activeMcpServer) ?? null;
 
         if (!targetServer) {
-          append(msg("tool", "MCP call skipped: no active MCP server selected.", "mcp"));
+          append(msg("tool", "MCP call skipped: no active MCP server selected.", "mcp", { displayName: "MCP Tool" }));
           logNow({ category: "mcp", agent: activeAgent.name, ok: false, message: "MCP call skipped: no active server" });
           return;
         }
@@ -430,7 +463,7 @@ export default function App() {
             details: stringifyAny(toolOutput)
           });
         } catch (e: any) {
-          append(msg("tool", `MCP error for ${action.tool}: ${e?.message ?? String(e)}`, "mcp"));
+          append(msg("tool", `MCP error for ${action.tool}: ${e?.message ?? String(e)}`, "mcp", { displayName: "MCP Tool" }));
           pushLog({ category: "mcp", agent: targetServer.name, ok: false, message: `Tool call failed: ${action.tool}`, details: String(e?.message ?? e) });
           return;
         }
@@ -438,12 +471,16 @@ export default function App() {
         const toolMsg = msg(
           "tool",
           `MCP ${targetServer.name} -> ${action.tool}\ninput:\n${stringifyAny(action.input ?? {})}\noutput:\n${stringifyAny(toolOutput)}`,
-          "mcp"
+          "mcp",
+          { displayName: "MCP Tool" }
         );
         append(toolMsg);
 
         const followupId = crypto.randomUUID();
-        setHistory((h) => [...h, { id: followupId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name }]);
+        setHistory((h) => [
+          ...h,
+          { id: followupId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name, displayName: activeAgent.name, avatarUrl: activeAgent.avatarUrl }
+        ]);
         const onDeltaFollowup = (t: string) => {
           setHistory((h) => h.map((m) => (m.id === followupId ? { ...m, content: m.content + t } : m)));
         };
@@ -473,7 +510,7 @@ export default function App() {
       const memberAgents = agents.filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id);
 
       if (memberAgents.length === 0) {
-        append(msg("assistant", "No member agents selected. Please select at least one member.", "system"));
+        append(msg("assistant", "No member agents selected. Please select at least one member.", "system", { displayName: "System" }));
         return;
       }
 
@@ -488,7 +525,7 @@ export default function App() {
 
       emitLeaderPhase("planning");
       // Show a visible kickoff message from the leader
-      append(msg("assistant", `Goal received. I'll coordinate the team to achieve it.`, leaderAgent.name));
+      append(msg("assistant", `Goal received. I'll coordinate the team to achieve it.`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
 
       const onEvent = (ev: LeaderTeamEvent) => {
         if (ev.type === "leader_plan") {
@@ -502,7 +539,8 @@ export default function App() {
             msg(
               "assistant",
               `Plan:\n${planLines.join("\n")}${ev.notes ? `\n\nNotes:\n${ev.notes}` : ""}`,
-              leaderAgent.name
+              leaderAgent.name,
+              { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }
             )
           );
           logNow({
@@ -519,7 +557,8 @@ export default function App() {
             msg(
               "assistant",
               `RETRY (${ev.attempt}/${ev.max}): invalid action, resending`,
-              leaderAgent.name
+              leaderAgent.name,
+              { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }
             )
           );
           logNow({
@@ -534,7 +573,7 @@ export default function App() {
         if (ev.type === "leader_ask_member") {
           emitLeaderPhase("assign");
           leaderLastEventRef.current = "leader_action";
-          append(msg("assistant", `@${ev.memberName} — ${ev.message}`, leaderAgent.name));
+          append(msg("assistant", `@${ev.memberName} — ${ev.message}`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
           logNow({
             category: "leader_team",
             agent: leaderAgent.name,
@@ -547,7 +586,7 @@ export default function App() {
           emitLeaderPhase("act");
           leaderLastEventRef.current = "member_reply";
           // Show the member's answer
-          append(msg("assistant", ev.reply, ev.memberName));
+          append(msg("assistant", ev.reply, ev.memberName, agentDirectory.get(ev.memberName)));
           logNow({ category: "leader_team", agent: ev.memberName, message: "Member replied", details: ev.reply });
           return;
         }
@@ -557,7 +596,8 @@ export default function App() {
             msg(
               "assistant",
               `Verification ${ev.ok ? "OK" : "FAIL"}${ev.notes ? `:\n${ev.notes}` : ""}`,
-              leaderAgent.name
+              leaderAgent.name,
+              { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }
             )
           );
           logNow({
@@ -571,7 +611,7 @@ export default function App() {
         }
         if (ev.type === "leader_react") {
           emitLeaderPhase("react");
-          append(msg("assistant", `REACT -> @${ev.memberName}\n${ev.message}`, leaderAgent.name));
+          append(msg("assistant", `REACT -> @${ev.memberName}\n${ev.message}`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
           logNow({
             category: "leader_team",
             agent: leaderAgent.name,
@@ -582,7 +622,7 @@ export default function App() {
           return;
         }
         if (ev.type === "leader_invalid_json") {
-          append(msg("assistant", `Leader produced an invalid action. Raw output:\n\n${ev.text}`, leaderAgent.name));
+          append(msg("assistant", `Leader produced an invalid action. Raw output:\n\n${ev.text}`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
           logNow({
             category: "leader_team",
             agent: leaderAgent.name,
@@ -594,7 +634,7 @@ export default function App() {
         }
         if (ev.type === "leader_finish") {
           emitLeaderPhase("summary");
-          append(msg("assistant", ev.answer, leaderAgent.name));
+          append(msg("assistant", ev.answer, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
           logNow({ category: "leader_team", agent: leaderAgent.name, ok: true, message: "Leader finished", details: ev.answer });
           return;
         }
@@ -627,7 +667,7 @@ export default function App() {
         details: `elapsed_ms=${Date.now() - startedAt}`
       });
     } catch (e: any) {
-      append(msg("assistant", `[ERROR]\n${e?.message ?? String(e)}`, "system"));
+      append(msg("assistant", `[ERROR]\n${e?.message ?? String(e)}`, "system", { displayName: "System" }));
       logNow({ category: "chat", agent: activeAgent?.name, ok: false, message: "Send failed", details: String(e?.message ?? e) });
     }
   }
@@ -709,7 +749,8 @@ export default function App() {
           {[
             { id: "chat", label: "Chat" },
             { id: "resources", label: "Resources" },
-            { id: "agents", label: "Agents" }
+            { id: "agents", label: "Agents" },
+            { id: "profile", label: "Profile" }
           ].map((t) => (
             <button
               key={t.id}
@@ -734,6 +775,7 @@ export default function App() {
                   logNow({ category: "chat", message: "Chat cleared" });
                 }}
                 leaderName={mode === "leader_team" ? activeAgent?.name : null}
+                userName={userProfile.name}
               />
             </div>
 
@@ -909,6 +951,60 @@ export default function App() {
                 docs={docs}
                 mcpServers={mcpServers}
               />
+            </div>
+          </div>
+        )}
+
+        {activeTab === "profile" && (
+          <div className="content-grid">
+            <div className="card panel" style={{ maxWidth: 760 }}>
+              <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>Your Profile</div>
+              <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 16 }}>
+                Set the name and thumbnail shown for your side of the conversation.
+              </div>
+
+              <label style={label}>Character name</label>
+              <input
+                value={userName}
+                onChange={(e) => setUserName(e.target.value)}
+                style={{ width: "100%", marginBottom: 14, ...selectStyle }}
+              />
+
+              <label style={label}>Thumbnail</label>
+              <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 6 }}>
+                {userAvatarUrl ? (
+                  <img
+                    src={userAvatarUrl}
+                    alt={userName || "User avatar"}
+                    style={{ width: 72, height: 72, borderRadius: 20, objectFit: "cover", border: "1px solid var(--border)" }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 72,
+                      height: 72,
+                      borderRadius: 20,
+                      border: "1px solid var(--border)",
+                      display: "grid",
+                      placeItems: "center",
+                      background: "linear-gradient(135deg, #f472b6, #8b5cf6)",
+                      color: "white",
+                      fontWeight: 800,
+                      fontSize: 24
+                    }}
+                  >
+                    {(userName.trim() || "Y").slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div style={{ display: "grid", gap: 8 }}>
+                  <input type="file" accept="image/*" onChange={(e) => readUserAvatar(e.target.files?.[0])} />
+                  {userAvatarUrl ? (
+                    <button onClick={() => setUserAvatarUrl(undefined)} style={{ ...selectStyle, cursor: "pointer" }}>
+                      Remove your thumbnail
+                    </button>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
         )}
