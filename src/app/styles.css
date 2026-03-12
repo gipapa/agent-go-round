@@ -881,6 +881,43 @@ hr {
 }
 
 @media (max-width: 640px) {
+  body {
+    overflow-x: hidden;
+  }
+
+  .app-shell {
+    padding: 8px;
+    gap: 8px;
+    overflow-x: hidden;
+  }
+
+  .topbar {
+    padding: 12px;
+  }
+
+  .tabs {
+    width: 100%;
+    box-sizing: border-box;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .tab-btn {
+    white-space: nowrap;
+    flex: 0 0 auto;
+  }
+
+  .content,
+  .content-grid,
+  .panel,
+  .chat-panel,
+  .chat-shell,
+  .chat-thread {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
   .chat-panel {
     padding: 10px;
   }
@@ -925,6 +962,8 @@ hr {
   .chat-row {
     gap: 8px;
     max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .chat-avatar {
@@ -959,6 +998,7 @@ hr {
     font-size: 13px;
     line-height: 1.55;
     word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   .chat-tool-details summary,
