@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { McpSseClient } from "../mcp/sseClient";
 import { listTools, callTool } from "../mcp/toolRegistry";
+import { generateId } from "../utils/id";
 
 export default function McpPanel(props: {
   servers: McpServerConfig[];
@@ -15,6 +16,7 @@ export default function McpPanel(props: {
   const [draftUrl, setDraftUrl] = useState("");
   const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? null, [props.servers, props.activeId]);
   const [collapsed, setCollapsed] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const tools = useMemo(() => (active ? props.toolsByServer[active.id] ?? [] : []), [props.toolsByServer, active]);
   const [toolName, setToolName] = useState("");
@@ -45,7 +47,7 @@ export default function McpPanel(props: {
   function addServer() {
     const url = draftUrl.trim();
     if (!url) return;
-    const s: McpServerConfig = { id: crypto.randomUUID(), name: `MCP ${props.servers.length + 1}`, sseUrl: url };
+    const s: McpServerConfig = { id: generateId(), name: `MCP ${props.servers.length + 1}`, sseUrl: url };
     props.onChangeServers([s, ...props.servers]);
     props.onSelectActive(s.id);
     setDraftUrl("");
@@ -115,10 +117,47 @@ export default function McpPanel(props: {
     <div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <div style={{ fontWeight: 800 }}>MCP (SSE)</div>
+        <button
+          type="button"
+          onClick={() => setShowHelp(true)}
+          title="MCP help"
+          aria-label="MCP help"
+          style={helpBtn}
+        >
+          ?
+        </button>
         <button onClick={() => setCollapsed((c) => !c)} style={{ ...btnSmall, marginLeft: "auto" }}>
           {collapsed ? "Expand" : "Collapse"}
         </button>
       </div>
+
+      {showHelp && (
+        <div className="help-modal-backdrop" onClick={() => setShowHelp(false)}>
+          <div className="help-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="help-modal-title">MCP usage and testing</div>
+            <div style={helpText}>
+              MCP tools are connected from the `MCP (SSE)` panel. The app opens an EventSource connection to `/mcp/sse` and
+              derives the RPC endpoint by replacing `/sse` with `/rpc`.
+            </div>
+            <div style={{ ...helpText, marginTop: 8 }}>
+              Quick test:
+              <br />
+              1. Run the local sample server from `mcp-test/server.js`
+              <br />
+              2. Add an SSE URL like `http://127.0.0.1:3333/mcp/sse` or the WSL IP equivalent
+              <br />
+              3. Click `Connect & List Tools`
+              <br />
+              4. Pick `time` and click `Call` to verify tool execution
+            </div>
+            <div className="help-modal-actions">
+              <button type="button" onClick={() => setShowHelp(false)} style={btnSmall}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {!collapsed && (
         <>
@@ -258,4 +297,22 @@ const btnSmall: React.CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--panel-2)",
   color: "var(--text)"
+};
+
+const helpBtn: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  border: "1px solid var(--border)",
+  background: "rgba(91, 123, 255, 0.12)",
+  color: "var(--text)",
+  fontWeight: 800,
+  lineHeight: 1,
+  padding: 0
+};
+
+const helpText: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.6,
+  opacity: 0.82
 };

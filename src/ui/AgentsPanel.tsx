@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { AgentConfig, DocItem, McpServerConfig } from "../types";
+import { generateId } from "../utils/id";
 
 const ENDPOINT_PRESETS = [
   { label: "OpenAI", value: "https://api.openai.com/v1" },
@@ -8,7 +9,7 @@ const ENDPOINT_PRESETS = [
 ];
 
 const emptyAgent = (): AgentConfig => ({
-  id: crypto.randomUUID(),
+  id: generateId(),
   name: "New Agent",
   type: "openai_compat",
   endpoint: "https://api.openai.com/v1",
@@ -314,14 +315,26 @@ function Editor(props: {
         )}
 
         <div style={{ fontSize: 12, opacity: 0.7, marginTop: 12, marginBottom: 6 }}>MCP Servers</div>
-        <label style={checkRow}>
-          <input
-            type="checkbox"
-            checked={allowAllMcps}
-            onChange={(e) => setA({ ...a, allowedMcpServerIds: e.target.checked ? undefined : [] })}
-          />
-          <span>Allow all MCP servers</span>
-        </label>
+        <div style={{ display: "grid", gap: 6 }}>
+          <label style={checkRow}>
+            <input
+              type="radio"
+              name={`mcp-mode-${a.id}`}
+              checked={allowAllMcps}
+              onChange={() => setA({ ...a, allowedMcpServerIds: undefined })}
+            />
+            <span>All MCP servers</span>
+          </label>
+          <label style={checkRow}>
+            <input
+              type="radio"
+              name={`mcp-mode-${a.id}`}
+              checked={!allowAllMcps}
+              onChange={() => setA({ ...a, allowedMcpServerIds: a.allowedMcpServerIds ?? [] })}
+            />
+            <span>Custom selection</span>
+          </label>
+        </div>
         {!allowAllMcps && (
           <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
             {props.mcpServers.length === 0 && <div style={{ fontSize: 12, opacity: 0.7 }}>No MCP servers yet.</div>}

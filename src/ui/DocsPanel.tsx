@@ -12,6 +12,7 @@ export default function DocsPanel(props: {
   const selected = useMemo(() => props.docs.find((d) => d.id === props.selectedId) ?? null, [props.docs, props.selectedId]);
   const [edit, setEdit] = useState<DocItem | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   React.useEffect(() => setEdit(selected ? { ...selected } : null), [selected?.id]);
 
@@ -19,6 +20,15 @@ export default function DocsPanel(props: {
     <div>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <div style={{ fontWeight: 800 }}>Docs</div>
+        <button
+          type="button"
+          onClick={() => setShowHelp((v) => !v)}
+          title="Docs usage help"
+          aria-label="Docs usage help"
+          style={helpBtn}
+        >
+          ?
+        </button>
         <button onClick={() => setCollapsed((c) => !c)} style={{ ...btnSmall, marginLeft: "auto" }}>
           {collapsed ? "Expand" : "Collapse"}
         </button>
@@ -26,6 +36,34 @@ export default function DocsPanel(props: {
           + New
         </button>
       </div>
+
+      {showHelp && (
+        <div className="help-modal-backdrop" onClick={() => setShowHelp(false)}>
+          <div className="help-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="help-modal-title">Docs usage and testing</div>
+            <div style={helpText}>
+              In normal talking, allowed docs are injected into the active agent's system context before the model request is
+              sent.
+            </div>
+            <div style={{ ...helpText, marginTop: 8 }}>
+              Quick test:
+              <br />
+              1. Create a doc with obvious text like `彩蛋碼是 42`
+              <br />
+              2. Allow the active agent to access that doc
+              <br />
+              3. Go back to Chat and ask `根據文件，彩蛋碼是多少？`
+              <br />
+              4. If docs are working, the model should answer with the doc content
+            </div>
+            <div className="help-modal-actions">
+              <button type="button" onClick={() => setShowHelp(false)} style={btnSmall}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {!collapsed && (
         <>
@@ -113,4 +151,22 @@ const btnDanger: React.CSSProperties = {
   background: "#1d1014",
   color: "white",
   width: "100%"
+};
+
+const helpBtn: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  border: "1px solid var(--border)",
+  background: "rgba(91, 123, 255, 0.12)",
+  color: "var(--text)",
+  fontWeight: 800,
+  lineHeight: 1,
+  padding: 0
+};
+
+const helpText: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.6,
+  opacity: 0.82
 };

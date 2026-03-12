@@ -17,6 +17,7 @@ import AgentsPanel from "../ui/AgentsPanel";
 import ChatPanel from "../ui/ChatPanel";
 import DocsPanel from "../ui/DocsPanel";
 import McpPanel from "../ui/McpPanel";
+import { generateId } from "../utils/id";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -30,10 +31,11 @@ function msg(
   name?: string,
   meta?: { displayName?: string; avatarUrl?: string }
 ): ChatMessage {
-  return { id: crypto.randomUUID(), role, content, name, displayName: meta?.displayName, avatarUrl: meta?.avatarUrl, ts: Date.now() };
+  return { id: generateId(), role, content, name, displayName: meta?.displayName, avatarUrl: meta?.avatarUrl, ts: Date.now() };
 }
 
 type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
+type ToolDecision = { type: "no_tool" } | McpAction;
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
   | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
@@ -62,6 +64,14 @@ function normalizeMcpAction(obj: any): McpAction | null {
   return null;
 }
 
+function normalizeToolDecision(obj: any): ToolDecision | null {
+  if (!obj || typeof obj !== "object") return null;
+  if (obj.type === "no_tool") return { type: "no_tool" };
+  const action = normalizeMcpAction(obj);
+  if (!action?.serverId) return null;
+  return action;
+}
+
 function stringifyAny(v: any): string {
   if (v === null || v === undefined) return String(v);
   if (typeof v === "string") return v;
@@ -86,7 +96,7 @@ function normalizeImportedMessage(input: any): ChatMessage | null {
   if (typeof input.role !== "string" || typeof input.content !== "string") return null;
   if (!["system", "user", "assistant", "tool"].includes(input.role)) return null;
   return {
-    id: typeof input.id === "string" ? input.id : crypto.randomUUID(),
+    id: typeof input.id === "string" ? input.id : generateId(),
     role: input.role,
     content: input.content,
     name: typeof input.name === "string" ? input.name : undefined,
@@ -108,6 +118,10 @@ function downloadBlob(filename: string, content: string, type: string) {
   URL.revokeObjectURL(href);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default function App() {
   const initialUi = loadUiState();
   const [agents, setAgents] = useState<AgentConfig[]>(() => {
@@ -116,13 +130,13 @@ export default function App() {
 
     const seed: AgentConfig[] = [
       {
-        id: crypto.randomUUID(),
+        id: generateId(),
         name: "Local Chrome LLM",
         type: "chrome_prompt",
         capabilities: { streaming: true }
       },
       {
-        id: crypto.randomUUID(),
+        id: generateId(),
         name: "OpenAI-compatible",
         type: "openai_compat",
         endpoint: "https://api.openai.com/v1",
@@ -168,7 +182,7 @@ export default function App() {
   const [logSort, setLogSort] = useState<{ key: LogSortKey; dir: "asc" | "desc" }>({ key: "ts", dir: "desc" });
   const pushLog = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => {
     const normalized: LogEntry = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       ts: entry.ts ?? Date.now(),
       category: entry.category || "general",
       agent: entry.agent,
@@ -319,12 +333,21 @@ export default function App() {
     return docs.filter((d) => allowed.has(d.id));
   }, [activeAgent, docs]);
 
-  const activeMcpServer = useMemo(() => {
-    if (!activeAgent) return null;
-    if (!activeAgent.allowedMcpServerIds) return mcpServers[0] ?? null;
+  const availableMcpServersForAgent = useMemo(() => {
+    if (!activeAgent) return [];
+    if (!activeAgent.allowedMcpServerIds) return mcpServers;
     const allowed = new Set(activeAgent.allowedMcpServerIds);
-    return mcpServers.find((s) => allowed.has(s.id)) ?? null;
+    return mcpServers.filter((s) => allowed.has(s.id));
   }, [activeAgent, mcpServers]);
+
+  const availableMcpToolsForAgent = useMemo(() => {
+    return availableMcpServersForAgent
+      .map((server) => ({
+        server,
+        tools: mcpToolsByServer[server.id] ?? []
+      }))
+      .filter((entry) => entry.tools.length > 0);
+  }, [availableMcpServersForAgent, mcpToolsByServer]);
 
   async function onSaveAgent(a: AgentConfig) {
     try {
@@ -364,6 +387,75 @@ export default function App() {
 
   function append(m: ChatMessage) {
     setHistory((h) => [...h, m]);
+  }
+
+  async function runToolDecision(args: {
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    userInput: string;
+    retry: { delaySec: number; max: number };
+    toolEntries: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+  }): Promise<ToolDecision | null> {
+    const toolList = args.toolEntries.flatMap(({ server, tools }) =>
+      tools.map((tool) => ({
+        serverId: server.id,
+        serverName: server.name,
+        name: tool.name,
+        description: tool.description ?? "",
+        inputSchema: tool.inputSchema ?? {}
+      }))
+    );
+
+    const decisionPrompt = [
+      "請只回傳 JSON，不要加任何其他文字。",
+      "",
+      "請判斷這次是否需要使用工具。",
+      "",
+      `使用者提問如下:\n${args.userInput}`,
+      "",
+      `工具清單如下:\n${JSON.stringify(toolList, null, 2)}`,
+      "",
+      '如果不需要工具，回傳：{"type":"no_tool"}',
+      '如果需要工具，回傳：{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
+    ].join("\n");
+
+    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
+      const raw = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.agent,
+        input: decisionPrompt,
+        history: [],
+        onDelta: () => {},
+        retry: args.retry,
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      });
+
+      const decision = normalizeToolDecision(extractJsonObject(raw));
+      if (decision) {
+        logNow({
+          category: "mcp",
+          agent: args.agent.name,
+          ok: true,
+          message: `Tool decision: ${decision.type}`,
+          details: raw
+        });
+        return decision;
+      }
+
+      logNow({
+        category: "mcp",
+        agent: args.agent.name,
+        ok: false,
+        message: `Tool decision invalid schema (${attempt + 1}/${args.retry.max + 1})`,
+        details: raw
+      });
+
+      if (attempt < args.retry.max) {
+        await sleep(args.retry.delaySec * 1000);
+      }
+    }
+
+    return null;
   }
 
   function readUserAvatar(file: File | undefined) {
@@ -444,8 +536,94 @@ export default function App() {
     try {
       if (mode === "one_to_one") {
         logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
-        // streaming into a reserved assistant message
-        const assistantId = crypto.randomUUID();
+        const adapter = pickAdapter(activeAgent);
+        let finalInput = input;
+
+        if (availableMcpServersForAgent.length === 0) {
+          logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP server available" });
+        } else if (availableMcpToolsForAgent.length === 0) {
+          logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
+        } else {
+          const decision = await runToolDecision({
+            agent: activeAgent,
+            adapter,
+            userInput: input,
+            retry: { delaySec: retryDelaySec, max: retryMax },
+            toolEntries: availableMcpToolsForAgent
+          });
+
+          if (!decision) {
+            logNow({ category: "mcp", agent: activeAgent.name, ok: false, message: "Tool decision failed after retries; continue without MCP" });
+          } else if (decision.type === "no_tool") {
+            logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision resolved: no_tool" });
+          } else {
+            const targetServer = availableMcpServersForAgent.find((server) => server.id === decision.serverId) ?? null;
+            const targetTool = availableMcpToolsForAgent.find((entry) => entry.server.id === decision.serverId)?.tools.find((tool) => tool.name === decision.tool) ?? null;
+            let toolSummaryForQuestion = "";
+
+            if (!targetServer) {
+              toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${decision.serverId} 的可用 MCP server。`;
+              logNow({
+                category: "mcp",
+                agent: activeAgent.name,
+                ok: false,
+                message: `Tool decision selected unavailable server: ${decision.serverId}`,
+                details: JSON.stringify(decision)
+              });
+              append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+            } else if (!targetTool) {
+              toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${decision.tool} 這個工具。`;
+              logNow({
+                category: "mcp",
+                agent: activeAgent.name,
+                ok: false,
+                message: `Tool decision selected unavailable tool: ${decision.tool}`,
+                details: JSON.stringify(decision)
+              });
+              append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+            } else {
+              try {
+                const client = new McpSseClient(targetServer);
+                client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
+                const toolOutput = await callTool(client, decision.tool, decision.input ?? {});
+                const toolOutputText = stringifyAny(toolOutput);
+                toolSummaryForQuestion = `工具執行結果：server=${targetServer.name}, tool=${decision.tool}, result=${toolOutputText}`;
+                logNow({
+                  category: "mcp",
+                  agent: targetServer.name,
+                  ok: true,
+                  message: `MCP tool call OK: ${decision.tool}`,
+                  details: toolOutputText
+                });
+                append(
+                  msg(
+                    "tool",
+                    `MCP ${targetServer.name} -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
+                    "mcp",
+                    { displayName: "MCP Tool" }
+                  )
+                );
+              } catch (e: any) {
+                const briefError = String(e?.message ?? e);
+                toolSummaryForQuestion = `工具執行失敗：${decision.tool} 呼叫失敗（${briefError}）。`;
+                append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+                logNow({
+                  category: "mcp",
+                  agent: targetServer.name,
+                  ok: false,
+                  message: `Tool call failed: ${decision.tool}`,
+                  details: briefError
+                });
+              }
+            }
+
+            if (toolSummaryForQuestion) {
+              finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+            }
+          }
+        }
+
+        const assistantId = generateId();
         setHistory((h) => [
           ...h,
           { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name, displayName: activeAgent.name, avatarUrl: activeAgent.avatarUrl }
@@ -460,12 +638,11 @@ export default function App() {
           }
         };
 
-        const adapter = pickAdapter(activeAgent);
         const full = await runOneToOne({
           adapter,
           agent: activeAgent,
-          input,
-          history: modelHistory,
+          input: finalInput,
+          history: limitHistory(history),
           system: userSystem,
           onDelta,
           retry: { delaySec: retryDelaySec, max: retryMax },
@@ -477,76 +654,6 @@ export default function App() {
           ok: true,
           message: "normal talking completed",
           details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${full.length}\n\n${full}`
-        });
-        const action = normalizeMcpAction(extractJsonObject(full));
-        if (!action) {
-          logNow({ category: "mcp", agent: activeAgent.name, message: "No MCP action detected" });
-          return;
-        }
-        logNow({ category: "mcp", agent: activeAgent.name, message: `MCP action detected: ${action.tool}` });
-
-        const targetServer =
-          (action.serverId && activeMcpServer && activeMcpServer.id === action.serverId ? activeMcpServer : activeMcpServer) ?? null;
-
-        if (!targetServer) {
-          append(msg("tool", "MCP call skipped: no active MCP server selected.", "mcp", { displayName: "MCP Tool" }));
-          logNow({ category: "mcp", agent: activeAgent.name, ok: false, message: "MCP call skipped: no active server" });
-          return;
-        }
-
-        setHistory((h) => h.map((m) => (m.id === assistantId ? { ...m, content: `Calling MCP tool: ${action.tool}` } : m)));
-
-        let toolOutput: any;
-        try {
-          const client = new McpSseClient(targetServer);
-          client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
-          toolOutput = await callTool(client, action.tool, action.input ?? {});
-          logNow({
-            category: "mcp",
-            agent: targetServer.name,
-            ok: true,
-            message: `MCP tool call OK: ${action.tool}`,
-            details: stringifyAny(toolOutput)
-          });
-        } catch (e: any) {
-          append(msg("tool", `MCP error for ${action.tool}: ${e?.message ?? String(e)}`, "mcp", { displayName: "MCP Tool" }));
-          pushLog({ category: "mcp", agent: targetServer.name, ok: false, message: `Tool call failed: ${action.tool}`, details: String(e?.message ?? e) });
-          return;
-        }
-
-        const toolMsg = msg(
-          "tool",
-          `MCP ${targetServer.name} -> ${action.tool}\ninput:\n${stringifyAny(action.input ?? {})}\noutput:\n${stringifyAny(toolOutput)}`,
-          "mcp",
-          { displayName: "MCP Tool" }
-        );
-        append(toolMsg);
-
-        const followupId = crypto.randomUUID();
-        setHistory((h) => [
-          ...h,
-          { id: followupId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name, displayName: activeAgent.name, avatarUrl: activeAgent.avatarUrl }
-        ]);
-        const onDeltaFollowup = (t: string) => {
-          setHistory((h) => h.map((m) => (m.id === followupId ? { ...m, content: m.content + t } : m)));
-        };
-
-        await runOneToOne({
-          adapter,
-          agent: activeAgent,
-          input: "Tool result received. Provide the final answer to the user.",
-          history: limitHistory([...baseHistory, msg("assistant", full, activeAgent.name), toolMsg]),
-          system: userSystem,
-          onDelta: onDeltaFollowup,
-          retry: { delaySec: retryDelaySec, max: retryMax },
-          onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
-        });
-        logNow({
-          category: "chat",
-          agent: activeAgent.name,
-          ok: true,
-          message: "normal talking followup completed",
-          details: `elapsed_ms=${Date.now() - startedAt}`
         });
         return;
       }
@@ -719,7 +826,7 @@ export default function App() {
   }
 
   async function onCreateDoc() {
-    const d: DocItem = { id: crypto.randomUUID(), title: "New Doc", content: "", updatedAt: Date.now() };
+    const d: DocItem = { id: generateId(), title: "New Doc", content: "", updatedAt: Date.now() };
     try {
       await upsertDoc(d);
       setDocs(await listDocs());

@@ -1,4 +1,5 @@
 import { McpServerConfig } from "../types";
+import { generateId } from "../utils/id";
 
 type RpcReq = { id: string; method: string; params?: any };
 type RpcRes = { id: string; result?: any; error?: any };
@@ -67,7 +68,7 @@ export class McpSseClient {
   }
 
   async request(method: string, params?: any): Promise<RpcRes> {
-    const id = crypto.randomUUID();
+    const id = generateId();
     const req: RpcReq = { id, method, params };
 
     const httpRes = await this.postRpc(req);

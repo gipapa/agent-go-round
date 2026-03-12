@@ -26,6 +26,20 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - Simple plaintext document vault backed by **IndexedDB**
   - Allowed docs for the active agent are injected into the system context (MVP)
 
+### Docs usage and testing
+
+- In `normal talking`, allowed docs are assembled in `src/app/App.tsx` and injected as extra system context before the model request is sent through `src/orchestrators/oneToOne.ts` and the active adapter such as `src/adapters/openaiCompat.ts`.
+- This means docs are not retrieved by a separate vector search step. They are appended directly into the prompt for the currently active agent.
+
+How to test docs locally:
+
+1. Start the app with `bash run.sh -dev`.
+2. Open `Chat Config` and create a doc in the `Docs` panel.
+3. Put obvious test content in the doc, for example `彩蛋碼是 42`.
+4. In `Agents`, make sure the current agent is allowed to access that doc.
+5. Go back to `Chat`, keep mode on `normal talking`, and ask something like `根據文件，彩蛋碼是多少？`
+6. If docs are working, the model should answer using the doc content.
+
 - **MCP (SSE)**
   - Connect to MCP servers via **SSE**
   - Rename MCP servers for easier identification
@@ -38,10 +52,12 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - Consistent card, button, and input styling with subtle gradients and shadows
   - Tabs (Chat / Chat Config / Agents / Profile) in a framed bar with clearer active state
   - Social-style chat bubbles with speaker names, timestamps, and avatars for multi-agent conversations
+  - MCP tool results in normal talking can be expanded under the final assistant reply instead of occupying a separate bubble
 
 - **Resource and settings hub**
   - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, and future skills
   - Includes a reserved `Skills` section for upcoming skill configuration work
+  - Docs and MCP panels include built-in help popups for local testing guidance
 
 - **Profile settings**
   - Set your own character name and thumbnail from the dedicated `Profile` tab

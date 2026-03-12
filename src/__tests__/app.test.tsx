@@ -38,6 +38,26 @@ vi.mock("../mcp/sseClient", () => ({
   McpSseClient: class {
     constructor(_cfg: unknown) {}
     connect() {}
+    async request(method: string, params?: any) {
+      if (method === "tools/list") {
+        return {
+          id: "tools-list",
+          result: {
+            tools: [
+              { name: "time", description: "Get current server time" },
+              { name: "echo", description: "Echo input text" }
+            ]
+          }
+        };
+      }
+      if (method === "tools/call") {
+        return {
+          id: "tools-call",
+          result: params?.name === "time" ? { now: "2026-01-01 00:00:00" } : { text: "echo" }
+        };
+      }
+      return { id: "unknown", error: "unknown" };
+    }
   }
 }));
 
@@ -89,6 +109,13 @@ function getSendButton() {
   return btn;
 }
 
+function getButtonByText(text: string) {
+  if (!container) throw new Error("Missing test container");
+  const btn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === text);
+  if (!btn) throw new Error(`Button not found: ${text}`);
+  return btn as HTMLButtonElement;
+}
+
 function getMessageContents() {
   if (!container) throw new Error("Missing test container");
   return Array.from(container.querySelectorAll(".chat-message-text"))
@@ -106,6 +133,13 @@ async function sendMessage(text: string) {
   });
   await act(async () => {
     getSendButton().click();
+  });
+  await flushPromises();
+}
+
+async function clickButton(text: string) {
+  await act(async () => {
+    getButtonByText(text).click();
   });
   await flushPromises();
 }
@@ -227,16 +261,14 @@ describe("App chat flows (mocked)", () => {
       sseUrl: "http://mock-mcp.test/mcp/sse"
     };
 
-    let step = 0;
     responderRef.current = (req) => {
-      if (req.input === "use time tool, tell me what time it is") {
-        step += 1;
-        return '{"type":"mcp_call","tool":"time","input":{}}';
+      if (req.input.includes("請判斷這次是否需要使用工具")) {
+        return `{"type":"mcp_call","serverId":"${server.id}","tool":"time","input":{}}`;
       }
-      if (req.input.startsWith("Tool result received")) {
+      if (req.input.includes("工具執行結果")) {
         return "now: 2026-01-01 00:00:00";
       }
-      return step > 0 ? "now: 2026-01-01 00:00:00" : "";
+      return "";
     };
 
     seedAgents([{ ...agent, allowedMcpServerIds: [server.id] }]);
@@ -244,6 +276,9 @@ describe("App chat flows (mocked)", () => {
     seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: agent.id, memberAgentIds: [] });
 
     await renderApp();
+    await clickButton("Chat Config");
+    await clickButton("Connect & List Tools");
+    await clickButton("Chat");
     await sendMessage("use time tool, tell me what time it is");
     await waitForText("now: 2026-01-01 00:00:00");
     expect(callTool).toHaveBeenCalledWith(expect.anything(), "time", {});

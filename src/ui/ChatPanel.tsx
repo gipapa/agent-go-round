@@ -94,12 +94,18 @@ export default function ChatPanel(props: {
 
       <div ref={threadRef} className="chat-thread">
         {props.history.length === 0 ? <div className="chat-empty">{emptyLabel}</div> : null}
-        {props.history.map((m) => {
+        {props.history.map((m, index) => {
+          const prev = props.history[index - 1];
+          const next = props.history[index + 1];
           const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;
           const isPhase = m.role === "system" && m.name === "phase";
           const tone = m.role === "user" ? "user" : m.role === "tool" || m.role === "system" ? "system" : "assistant";
           const displayName =
             m.displayName ?? (m.role === "user" ? props.userName : m.role === "tool" ? "Tool" : m.role === "system" ? "System" : m.name || "Agent");
+
+          if (m.role === "tool" && next?.role === "assistant") {
+            return null;
+          }
 
           if (isPhase) {
             return (
@@ -121,6 +127,12 @@ export default function ChatPanel(props: {
                 <div className={`chat-bubble ${m.role} ${isLeader ? "leader" : ""}`}>
                   <div className="chat-message-text">{m.content}</div>
                 </div>
+                {m.role === "assistant" && prev?.role === "tool" ? (
+                  <details className="chat-tool-details">
+                    <summary>查看 tool result</summary>
+                    <pre className="chat-tool-pre">{prev.content}</pre>
+                  </details>
+                ) : null}
               </div>
               {m.role === "user" ? <Avatar name={displayName} avatarUrl={m.avatarUrl} tone="user" /> : null}
             </div>
