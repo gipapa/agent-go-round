@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { DocItem } from "../types";
+import HelpModal from "./HelpModal";
 
 export default function DocsPanel(props: {
   docs: DocItem[];
@@ -38,31 +39,23 @@ export default function DocsPanel(props: {
       </div>
 
       {showHelp && (
-        <div className="help-modal-backdrop" onClick={() => setShowHelp(false)}>
-          <div className="help-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="help-modal-title">Docs usage and testing</div>
-            <div style={helpText}>
-              In normal talking, allowed docs are injected into the active agent's system context before the model request is
-              sent.
-            </div>
-            <div style={{ ...helpText, marginTop: 8 }}>
-              Quick test:
-              <br />
-              1. Create a doc with obvious text like `彩蛋碼是 42`
-              <br />
-              2. Allow the active agent to access that doc
-              <br />
-              3. Go back to Chat and ask `根據文件，彩蛋碼是多少？`
-              <br />
-              4. If docs are working, the model should answer with the doc content
-            </div>
-            <div className="help-modal-actions">
-              <button type="button" onClick={() => setShowHelp(false)} style={btnSmall}>
-                Close
-              </button>
-            </div>
+        <HelpModal title="Docs usage and testing" onClose={() => setShowHelp(false)}>
+          <div style={helpText}>
+            In normal talking, allowed docs are injected into the active agent's system context before the model request is
+            sent.
           </div>
-        </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            Quick test:
+            <br />
+            1. Create a doc with obvious text like `彩蛋碼是 42`
+            <br />
+            2. Allow the active agent to access that doc
+            <br />
+            3. Go back to Chat and ask `根據文件，彩蛋碼是多少？`
+            <br />
+            4. If docs are working, the model should answer with the doc content
+          </div>
+        </HelpModal>
       )}
 
       {!collapsed && (

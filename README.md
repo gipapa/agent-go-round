@@ -57,7 +57,7 @@ How to test docs locally:
 - **Resource and settings hub**
   - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, and future skills
   - Includes a reserved `Skills` section for upcoming skill configuration work
-  - Docs and MCP panels include built-in help popups for local testing guidance
+  - Docs and MCP panels include centered help modals that dim the rest of the page while open
 
 - **Profile settings**
   - Set your own character name and thumbnail from the dedicated `Profile` tab

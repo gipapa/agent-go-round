@@ -3,6 +3,7 @@ import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { McpSseClient } from "../mcp/sseClient";
 import { listTools, callTool } from "../mcp/toolRegistry";
 import { generateId } from "../utils/id";
+import HelpModal from "./HelpModal";
 
 export default function McpPanel(props: {
   servers: McpServerConfig[];
@@ -132,31 +133,23 @@ export default function McpPanel(props: {
       </div>
 
       {showHelp && (
-        <div className="help-modal-backdrop" onClick={() => setShowHelp(false)}>
-          <div className="help-modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="help-modal-title">MCP usage and testing</div>
-            <div style={helpText}>
-              MCP tools are connected from the `MCP (SSE)` panel. The app opens an EventSource connection to `/mcp/sse` and
-              derives the RPC endpoint by replacing `/sse` with `/rpc`.
-            </div>
-            <div style={{ ...helpText, marginTop: 8 }}>
-              Quick test:
-              <br />
-              1. Run the local sample server from `mcp-test/server.js`
-              <br />
-              2. Add an SSE URL like `http://127.0.0.1:3333/mcp/sse` or the WSL IP equivalent
-              <br />
-              3. Click `Connect & List Tools`
-              <br />
-              4. Pick `time` and click `Call` to verify tool execution
-            </div>
-            <div className="help-modal-actions">
-              <button type="button" onClick={() => setShowHelp(false)} style={btnSmall}>
-                Close
-              </button>
-            </div>
+        <HelpModal title="MCP usage and testing" onClose={() => setShowHelp(false)}>
+          <div style={helpText}>
+            MCP tools are connected from the `MCP (SSE)` panel. The app opens an EventSource connection to `/mcp/sse` and
+            derives the RPC endpoint by replacing `/sse` with `/rpc`.
           </div>
-        </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            Quick test:
+            <br />
+            1. Run the local sample server from `mcp-test/server.js`
+            <br />
+            2. Add an SSE URL like `http://127.0.0.1:3333/mcp/sse` or the WSL IP equivalent
+            <br />
+            3. Click `Connect & List Tools`
+            <br />
+            4. Pick `time` and click `Call` to verify tool execution
+          </div>
+        </HelpModal>
       )}
 
       {!collapsed && (
