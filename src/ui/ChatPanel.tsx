@@ -33,6 +33,7 @@ export default function ChatPanel(props: {
   onImportHistory: (file: File) => Promise<void>;
   leaderName?: string | null;
   userName: string;
+  modeLabel: string;
   isSummaryExporting?: boolean;
 }) {
   const [text, setText] = useState("");
@@ -53,7 +54,7 @@ export default function ChatPanel(props: {
   }, [props.history, text]);
 
   const emptyLabel = useMemo(
-    () => (props.leaderName ? `Send a goal to ${props.leaderName} and the team will coordinate here.` : "Start the conversation."),
+    () => (props.leaderName ? `Send a goal to ${props.leaderName} and the team will coordinate here.` : "Just type to start the conversation."),
     [props.leaderName]
   );
 
@@ -62,7 +63,7 @@ export default function ChatPanel(props: {
       <div className="chat-header">
         <div>
           <div className="chat-title">Conversation</div>
-          <div className="chat-subtitle">Multi-agent timeline with visible speaker identity.</div>
+          <div className="chat-subtitle">{props.modeLabel}</div>
         </div>
         <div className="chat-header-actions">
           <button onClick={props.onExportRaw} className="chat-clear-btn">

@@ -5,6 +5,7 @@ export default function HelpModal(props: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
+  width?: string;
 }) {
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -22,7 +23,13 @@ export default function HelpModal(props: {
 
   return createPortal(
     <div className="help-modal-backdrop" role="presentation" style={backdropStyle}>
-      <div className="help-modal-shell" role="dialog" aria-modal="true" aria-label={props.title} style={shellStyle}>
+      <div
+        className="help-modal-shell"
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
+        style={{ ...shellStyle, width: props.width ?? shellStyle.width }}
+      >
         <div className="help-modal-card" style={cardStyle}>
           <div className="help-modal-title" style={titleStyle}>
             {props.title}
@@ -61,12 +68,15 @@ const shellStyle: React.CSSProperties = {
 
 const cardStyle: React.CSSProperties = {
   width: "100%",
+  maxHeight: "calc(100vh - 48px)",
   padding: "18px 18px 16px",
   borderRadius: 18,
   border: "1px solid rgba(91, 123, 255, 0.22)",
   background: "linear-gradient(145deg, rgba(15, 19, 32, 0.98), rgba(17, 22, 36, 0.96))",
   boxShadow: "0 22px 60px rgba(0, 0, 0, 0.44), 0 0 0 1px rgba(255, 255, 255, 0.04) inset",
-  color: "var(--text)"
+  color: "var(--text)",
+  display: "flex",
+  flexDirection: "column"
 };
 
 const titleStyle: React.CSSProperties = {
@@ -77,7 +87,10 @@ const titleStyle: React.CSSProperties = {
 
 const bodyStyle: React.CSSProperties = {
   fontSize: 12,
-  lineHeight: 1.6
+  lineHeight: 1.6,
+  overflowY: "auto",
+  minHeight: 0,
+  paddingRight: 6
 };
 
 const actionsStyle: React.CSSProperties = {

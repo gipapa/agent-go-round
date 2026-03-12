@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { AgentConfig, DocItem, McpServerConfig } from "../types";
+import { AgentConfig, DetectResult, DocItem, McpServerConfig } from "../types";
 import { generateId } from "../utils/id";
+import HelpModal from "./HelpModal";
 
 const ENDPOINT_PRESETS = [
   { label: "OpenAI", value: "https://api.openai.com/v1" },
@@ -23,16 +24,16 @@ export default function AgentsPanel(props: {
   onSelect: (id: string) => void;
   onSave: (a: AgentConfig) => void;
   onDelete: (id: string) => void;
-  onDetect: (a: AgentConfig) => void;
+  onDetect: (a: AgentConfig) => Promise<DetectResult>;
   docs: DocItem[];
   mcpServers: McpServerConfig[];
 }) {
   const [draft, setDraft] = useState<AgentConfig | null>(null);
-  const active = props.agents.find((a) => a.id === props.activeAgentId) ?? null;
+  const [detectResult, setDetectResult] = useState<{ agentName: string; result: DetectResult } | null>(null);
+  const [detectingAgentId, setDetectingAgentId] = useState<string | null>(null);
 
   return (
-    <div className="agents-shell">
-      <div className="agents-list">
+    <div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontWeight: 800 }}>Agents</div>
         <button onClick={() => setDraft(emptyAgent())} style={{ ...btnSmall, marginLeft: "auto" }}>
@@ -41,22 +42,38 @@ export default function AgentsPanel(props: {
         </div>
 
         <div style={{ display: "grid", gap: 8 }}>
-          {props.agents.map((a) => (
-            <button
-              key={a.id}
-              onClick={() => props.onSelect(a.id)}
-              style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                textAlign: "left",
-                padding: 12,
-                borderRadius: 14,
-                border: a.id === props.activeAgentId ? "1px solid #5b6bff" : "1px solid #222636",
-                background: a.id === props.activeAgentId ? "#13162a" : "#0f1118",
-                color: "white"
-              }}
-            >
+          {props.agents.map((a) => {
+            const isActive = a.id === props.activeAgentId;
+            return (
+              <div
+                key={a.id}
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "center",
+                  padding: 12,
+                  borderRadius: 14,
+                  border: isActive ? "1px solid #5b6bff" : "1px solid #222636",
+                  background: isActive ? "#13162a" : "#0f1118",
+                  color: "white"
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => props.onSelect(a.id)}
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    textAlign: "left",
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    padding: 0,
+                    flex: 1,
+                    cursor: "pointer"
+                  }}
+                >
               <AvatarPreview name={a.name} avatarUrl={a.avatarUrl} size={42} radius={14} />
               <div>
                 <div style={{ fontWeight: 700 }}>{a.name}</div>
@@ -65,49 +82,51 @@ export default function AgentsPanel(props: {
                   {a.model ? ` · ${a.model}` : ""}
                 </div>
               </div>
-            </button>
-          ))}
+                </button>
+                {isActive ? (
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                    <button type="button" onClick={() => setDraft(a)} style={btnSmall}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setDetectingAgentId(a.id);
+                        const result = await props.onDetect(a);
+                        setDetectResult({ agentName: a.name, result });
+                        setDetectingAgentId(null);
+                      }}
+                      style={btnSmall}
+                      disabled={detectingAgentId === a.id}
+                    >
+                      {detectingAgentId === a.id ? "Detecting..." : "Detect"}
+                    </button>
+                    <button type="button" onClick={() => props.onDelete(a.id)} style={btnDangerSmall}>
+                      Delete
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
-      </div>
 
-      <div className="agents-detail">
-        {!active ? (
-          <div style={{ opacity: 0.7 }}>Select an agent to edit its settings.</div>
-        ) : (
-          <>
-            <div className="agent-header">
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <AvatarPreview name={active.name} avatarUrl={active.avatarUrl} size={56} radius={16} />
-                <div>
-                <div style={{ fontWeight: 800, fontSize: 16 }}>{active.name}</div>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>
-                  {active.type}
-                  {active.model ? ` · ${active.model}` : ""}
-                </div>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => setDraft(active)} style={btnSmall}>
-                  Edit
-                </button>
-                <button onClick={() => props.onDetect(active)} style={btnSmall}>
-                  Detect
-                </button>
-                <button onClick={() => props.onDelete(active.id)} style={btnDangerSmall}>
-                  Delete
-                </button>
-              </div>
-            </div>
+      {detectResult && (
+        <HelpModal title={`Detect Result: ${detectResult.agentName}`} onClose={() => setDetectResult(null)}>
+          <div style={helpText}>
+            Result: <strong>{detectResult.result.ok ? "Detected successfully" : "Detect failed"}</strong>
+          </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            Type: <code>{detectResult.result.detectedType ?? "unknown"}</code>
+          </div>
+          {detectResult.result.notes ? (
+            <div style={{ ...helpText, marginTop: 8, whiteSpace: "pre-wrap" }}>{detectResult.result.notes}</div>
+          ) : null}
+        </HelpModal>
+      )}
 
-            {!draft && (
-              <div style={{ fontSize: 13, opacity: 0.8 }}>
-                Use Edit to change endpoints, models, and access rules for this agent.
-              </div>
-            )}
-          </>
-        )}
-
-        {draft && (
+      {draft && (
+        <HelpModal title={`Edit Agent: ${draft.name}`} onClose={() => setDraft(null)} width="min(860px, calc(100vw - 48px))">
           <Editor
             draft={draft}
             docs={props.docs}
@@ -118,8 +137,8 @@ export default function AgentsPanel(props: {
               setDraft(null);
             }}
           />
-        )}
-      </div>
+        </HelpModal>
+      )}
     </div>
   );
 }
@@ -132,6 +151,7 @@ function Editor(props: {
   onSave: (a: AgentConfig) => void;
 }) {
   const [a, setA] = useState<AgentConfig>({ ...props.draft });
+  const [showUserInfoHelp, setShowUserInfoHelp] = useState(false);
 
   const allowAllDocs = a.allowedDocIds === undefined;
   const allowAllMcps = a.allowedMcpServerIds === undefined;
@@ -165,20 +185,19 @@ function Editor(props: {
     a.endpoint === "https://api.openai.com/v1" || a.endpoint === "https://api.groq.com/openai/v1" ? a.endpoint : "__custom__";
 
   return (
-    <div className="card" style={{ padding: 14, marginTop: 12 }}>
-      <div style={{ fontWeight: 800, marginBottom: 10 }}>Edit Agent</div>
+    <div style={{ marginTop: 4 }}>
 
       <label style={label}>Name</label>
       <input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} style={inp} />
 
-      <label style={label}>Thumbnail</label>
+      <label style={label}>大頭照</label>
       <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "6px 0 14px" }}>
         <AvatarPreview name={a.name} avatarUrl={a.avatarUrl} />
         <div style={{ display: "grid", gap: 8 }}>
           <input type="file" accept="image/*" onChange={(e) => onAvatarPicked(e.target.files?.[0])} />
           {a.avatarUrl ? (
             <button type="button" onClick={() => setA({ ...a, avatarUrl: undefined })} style={btnSmall}>
-              Remove thumbnail
+              移除大頭照
             </button>
           ) : null}
         </div>
@@ -350,6 +369,47 @@ function Editor(props: {
             ))}
           </div>
         )}
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, marginBottom: 6 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Built-in Tools</div>
+          <button
+            type="button"
+            onClick={() => setShowUserInfoHelp(true)}
+            title="User info tool help"
+            aria-label="User info tool help"
+            style={helpBtn}
+          >
+            ?
+          </button>
+        </div>
+        <label style={checkRow}>
+          <input
+            type="checkbox"
+            checked={!!a.allowUserProfileTool}
+            onChange={(e) => setA({ ...a, allowUserProfileTool: e.target.checked })}
+          />
+          <span>Allow user info tool</span>
+        </label>
+
+        {showUserInfoHelp && (
+          <HelpModal title="User info tool usage and testing" onClose={() => setShowUserInfoHelp(false)}>
+            <div style={helpText}>
+              This built-in tool lets an agent read the current user's profile information from the <strong>Profile</strong> tab.
+              It returns the user's name, self-description, and whether a profile photo is configured.
+            </div>
+            <div style={{ ...helpText, marginTop: 8 }}>
+              Quick test:
+              <br />
+              1. Go to <strong>Profile</strong> and fill in your name and self-description
+              <br />
+              2. In <strong>Agents</strong>, enable <strong>Allow user info tool</strong> for the agent
+              <br />
+              3. Return to <strong>Chat</strong> and ask something like <code>我是誰？</code> or <code>你知道我的偏好嗎？</code>
+              <br />
+              4. If the tool is used, the final answer can describe your saved profile and the reply will include a collapsible tool result section
+            </div>
+          </HelpModal>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -420,6 +480,24 @@ const btnDangerSmall: React.CSSProperties = {
   ...btnSmall,
   border: "1px solid #4a2026",
   background: "#1d1014"
+};
+
+const helpBtn: React.CSSProperties = {
+  width: 24,
+  height: 24,
+  borderRadius: 999,
+  border: "1px solid var(--border)",
+  background: "rgba(91, 123, 255, 0.12)",
+  color: "var(--text)",
+  fontWeight: 800,
+  lineHeight: 1,
+  padding: 0
+};
+
+const helpText: React.CSSProperties = {
+  fontSize: 12,
+  lineHeight: 1.6,
+  opacity: 0.82
 };
 
 const btn: React.CSSProperties = {

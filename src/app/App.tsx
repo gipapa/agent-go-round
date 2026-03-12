@@ -35,7 +35,21 @@ function msg(
 }
 
 type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
-type ToolDecision = { type: "no_tool" } | McpAction;
+type UserProfileAction = { type: "user_profile_call"; tool: "get_user_profile" };
+type ToolDecision = { type: "no_tool" } | McpAction | UserProfileAction;
+type ToolEntry =
+  | {
+      kind: "mcp";
+      server: McpServerConfig;
+      tool: McpTool;
+    }
+  | {
+      kind: "builtin";
+      tool: {
+        name: "get_user_profile";
+        description: string;
+      };
+    };
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
   | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
@@ -67,6 +81,9 @@ function normalizeMcpAction(obj: any): McpAction | null {
 function normalizeToolDecision(obj: any): ToolDecision | null {
   if (!obj || typeof obj !== "object") return null;
   if (obj.type === "no_tool") return { type: "no_tool" };
+  if (obj.type === "user_profile_call" && obj.tool === "get_user_profile") {
+    return { type: "user_profile_call", tool: "get_user_profile" };
+  }
   const action = normalizeMcpAction(obj);
   if (!action?.serverId) return null;
   return action;
@@ -84,7 +101,15 @@ function stringifyAny(v: any): string {
 
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
-type UserProfile = { name: string; avatarUrl?: string };
+type UserProfile = { name: string; avatarUrl?: string; description?: string };
+
+function formatUserProfileToolOutput(profile: UserProfile) {
+  return stringifyAny({
+    name: profile.name,
+    description: profile.description?.trim() || "",
+    hasAvatar: !!profile.avatarUrl
+  });
+}
 
 function clampHistoryLimit(value: number) {
   if (!Number.isFinite(value)) return 10;
@@ -167,6 +192,7 @@ export default function App() {
   const [historyMessageLimit, setHistoryMessageLimit] = useState<number>(() => clampHistoryLimit(initialUi.historyMessageLimit ?? 10));
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
+  const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
@@ -252,9 +278,10 @@ export default function App() {
       retryMax,
       historyMessageLimit,
       userName,
-      userAvatarUrl
+      userAvatarUrl,
+      userDescription
     });
-  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl]);
+  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -349,6 +376,27 @@ export default function App() {
       .filter((entry) => entry.tools.length > 0);
   }, [availableMcpServersForAgent, mcpToolsByServer]);
 
+  const availableBuiltinToolsForAgent = useMemo(
+    () =>
+      activeAgent?.allowUserProfileTool
+        ? [
+            {
+              name: "get_user_profile" as const,
+              description: "Get the current user's name, self-description, and whether an avatar is configured."
+            }
+          ]
+        : [],
+    [activeAgent]
+  );
+
+  const availableToolsForAgent = useMemo<ToolEntry[]>(
+    () => [
+      ...availableMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
+      ...availableBuiltinToolsForAgent.map((tool) => ({ kind: "builtin" as const, tool }))
+    ],
+    [availableMcpToolsForAgent, availableBuiltinToolsForAgent]
+  );
+
   async function onSaveAgent(a: AgentConfig) {
     try {
       upsertAgent(a);
@@ -394,16 +442,23 @@ export default function App() {
     adapter: ReturnType<typeof pickAdapter>;
     userInput: string;
     retry: { delaySec: number; max: number };
-    toolEntries: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+    toolEntries: ToolEntry[];
   }): Promise<ToolDecision | null> {
-    const toolList = args.toolEntries.flatMap(({ server, tools }) =>
-      tools.map((tool) => ({
-        serverId: server.id,
-        serverName: server.name,
-        name: tool.name,
-        description: tool.description ?? "",
-        inputSchema: tool.inputSchema ?? {}
-      }))
+    const toolList = args.toolEntries.map((entry) =>
+      entry.kind === "mcp"
+        ? {
+            kind: "mcp",
+            serverId: entry.server.id,
+            serverName: entry.server.name,
+            name: entry.tool.name,
+            description: entry.tool.description ?? "",
+            inputSchema: entry.tool.inputSchema ?? {}
+          }
+        : {
+            kind: "builtin",
+            name: entry.tool.name,
+            description: entry.tool.description
+          }
     );
 
     const decisionPrompt = [
@@ -416,6 +471,7 @@ export default function App() {
       `工具清單如下:\n${JSON.stringify(toolList, null, 2)}`,
       "",
       '如果不需要工具，回傳：{"type":"no_tool"}',
+      '如果需要使用使用者資訊工具，回傳：{"type":"user_profile_call","tool":"get_user_profile"}',
       '如果需要工具，回傳：{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
     ].join("\n");
 
@@ -469,7 +525,10 @@ export default function App() {
     reader.readAsDataURL(file);
   }
 
-  const userProfile = React.useMemo<UserProfile>(() => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl }), [userName, userAvatarUrl]);
+  const userProfile = React.useMemo<UserProfile>(
+    () => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl, description: userDescription.trim() }),
+    [userName, userAvatarUrl, userDescription]
+  );
   const agentDirectory = React.useMemo(() => {
     const map = new Map<string, { displayName: string; avatarUrl?: string }>();
     agents.forEach((agent) => {
@@ -539,23 +598,43 @@ export default function App() {
         const adapter = pickAdapter(activeAgent);
         let finalInput = input;
 
-        if (availableMcpServersForAgent.length === 0) {
-          logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP server available" });
-        } else if (availableMcpToolsForAgent.length === 0) {
-          logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
+        if (availableToolsForAgent.length === 0) {
+          if (activeAgent.allowUserProfileTool) {
+            logNow({ category: "tool", agent: activeAgent.name, message: "Tool decision skipped: no available tool entries" });
+          } else if (availableMcpServersForAgent.length === 0) {
+            logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP server available" });
+          } else if (availableMcpToolsForAgent.length === 0) {
+            logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
+          }
         } else {
           const decision = await runToolDecision({
             agent: activeAgent,
             adapter,
             userInput: input,
             retry: { delaySec: retryDelaySec, max: retryMax },
-            toolEntries: availableMcpToolsForAgent
+            toolEntries: availableToolsForAgent
           });
 
           if (!decision) {
-            logNow({ category: "mcp", agent: activeAgent.name, ok: false, message: "Tool decision failed after retries; continue without MCP" });
+            logNow({ category: "tool", agent: activeAgent.name, ok: false, message: "Tool decision failed after retries; continue without tools" });
           } else if (decision.type === "no_tool") {
-            logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision resolved: no_tool" });
+            logNow({ category: "tool", agent: activeAgent.name, message: "Tool decision resolved: no_tool" });
+          } else if (decision.type === "user_profile_call") {
+            const toolOutputText = formatUserProfileToolOutput(userProfile);
+            const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
+            append(
+              msg("tool", `Built-in tool -> ${decision.tool}\noutput:\n${toolOutputText}`, "user_profile_tool", {
+                displayName: "User Info Tool"
+              })
+            );
+            logNow({
+              category: "tool",
+              agent: activeAgent.name,
+              ok: true,
+              message: `Built-in tool call OK: ${decision.tool}`,
+              details: toolOutputText
+            });
+            finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
           } else {
             const targetServer = availableMcpServersForAgent.find((server) => server.id === decision.serverId) ?? null;
             const targetTool = availableMcpToolsForAgent.find((entry) => entry.server.id === decision.serverId)?.tools.find((tool) => tool.name === decision.tool) ?? null;
@@ -1010,6 +1089,7 @@ export default function App() {
                 }}
                 leaderName={mode === "leader_team" ? activeAgent?.name : null}
                 userName={userProfile.name}
+                modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal talking"}
                 onExportRaw={exportRawHistory}
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
@@ -1177,10 +1257,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-
-              <div className="card panel chat-config-note-card">
-                Security note: This MVP stores API keys in the browser. For production, use a small server-side proxy to protect keys.
-              </div>
             </div>
 
             <div className="chat-config-resources">
@@ -1233,6 +1309,16 @@ export default function App() {
                     <div>未來這裡會放 skill 啟用、權限、來源與載入策略設定。</div>
                   </div>
                 </div>
+
+                <div className="card panel chat-config-card">
+                  <div className="chat-config-card-title">Built-in Tools</div>
+                  <div className="chat-config-card-note">集中管理內建工具，包含 user info tool 等前端提供的能力。</div>
+
+                  <div className="chat-config-skill-placeholder">
+                    <div className="chat-config-skill-badge">Coming Soon</div>
+                    <div>之後這裡會統一管理 built-in tool 的啟用、權限與使用說明。</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1249,7 +1335,7 @@ export default function App() {
                 onDelete={onDeleteAgent}
                 onDetect={async (a) => {
                   const adapter = pickAdapter(a);
-                  const r = adapter.detect ? await adapter.detect(a) : { ok: false, detectedType: "unknown", notes: "No detect()" };
+                  const r = adapter.detect ? await adapter.detect(a) : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
                   pushLog({
                     category: "detect",
                     agent: a.name,
@@ -1257,6 +1343,7 @@ export default function App() {
                     message: `${r.detectedType ?? ""} ${r.notes ?? ""}`.trim() || "detect()",
                     details: r.notes ?? undefined
                   });
+                  return r;
                 }}
                 docs={docs}
                 mcpServers={mcpServers}
@@ -1267,10 +1354,10 @@ export default function App() {
 
         {activeTab === "profile" && (
           <div className="content-grid">
-            <div className="card panel" style={{ maxWidth: 760 }}>
+            <div className="card panel" style={{ width: "100%" }}>
               <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>Your Profile</div>
               <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 16 }}>
-                Set the name and thumbnail shown for your side of the conversation.
+                Set the name, 自我描述, and 大頭照 shown for your side of the conversation. Agents with permission can also call the user info tool to read this profile.
               </div>
 
               <label style={label}>Character name</label>
@@ -1280,8 +1367,17 @@ export default function App() {
                 style={{ width: "100%", marginBottom: 14, ...selectStyle }}
               />
 
-              <label style={label}>Thumbnail</label>
-              <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 6 }}>
+              <label style={label}>自我描述</label>
+              <textarea
+                value={userDescription}
+                onChange={(e) => setUserDescription(e.target.value)}
+                rows={4}
+                style={{ width: "100%", marginBottom: 14, ...selectStyle, resize: "vertical" }}
+                placeholder="例如：你是團隊 PM，偏好繁體中文、重視可執行的結論。"
+              />
+
+              <label style={label}>大頭照</label>
+              <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
                 {userAvatarUrl ? (
                   <img
                     src={userAvatarUrl}
@@ -1310,7 +1406,7 @@ export default function App() {
                   <input type="file" accept="image/*" onChange={(e) => readUserAvatar(e.target.files?.[0])} />
                   {userAvatarUrl ? (
                     <button onClick={() => setUserAvatarUrl(undefined)} style={{ ...selectStyle, cursor: "pointer" }}>
-                      Remove your thumbnail
+                      移除你的大頭照
                     </button>
                   ) : null}
                 </div>

@@ -283,4 +283,42 @@ describe("App chat flows (mocked)", () => {
     await waitForText("now: 2026-01-01 00:00:00");
     expect(callTool).toHaveBeenCalledWith(expect.anything(), "time", {});
   });
+
+  it("supports built-in user info tool use", async () => {
+    const agent: AgentConfig = {
+      id: "agent-5",
+      name: "Mock LLM",
+      type: "openai_compat",
+      endpoint: "http://mock-llm.test/v1",
+      model: "mock",
+      allowUserProfileTool: true
+    };
+
+    responderRef.current = (req) => {
+      if (req.input.includes("請判斷這次是否需要使用工具")) {
+        return '{"type":"user_profile_call","tool":"get_user_profile"}';
+      }
+      if (req.input.includes('"name": "Alice"') && req.input.includes('"description": "PM who prefers Traditional Chinese."')) {
+        return "你是 Alice，一位偏好繁體中文的 PM。";
+      }
+      return "";
+    };
+
+    seedAgents([agent]);
+    seedUi({
+      activeTab: "chat",
+      mode: "one_to_one",
+      activeAgentId: agent.id,
+      memberAgentIds: [],
+      userName: "Alice",
+      userDescription: "PM who prefers Traditional Chinese."
+    });
+
+    await renderApp();
+    await sendMessage("我是誰？");
+    await waitForText("你是 Alice，一位偏好繁體中文的 PM。");
+    const reply = getMessageContents().slice(-1)[0];
+    expect(reply).toBe("你是 Alice，一位偏好繁體中文的 PM。");
+    expect(container?.textContent).toContain("查看 tool result");
+  });
 });

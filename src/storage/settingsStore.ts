@@ -11,6 +11,7 @@ export type UiState = {
   historyMessageLimit?: number;
   userName?: string;
   userAvatarUrl?: string;
+  userDescription?: string;
 };
 
 const UI_KEY = "agr_ui_v1";

@@ -138,7 +138,11 @@ hr {
 }
 
 .resources-grid {
-  grid-template-columns: 1fr 1fr;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(320px, 1fr);
+  gap: 12px;
+  width: max-content;
 }
 
 .chat-config-grid {
@@ -155,6 +159,13 @@ hr {
   min-height: 0;
   display: grid;
   gap: 12px;
+}
+
+.chat-config-resources {
+  grid-column: 1 / -1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
 }
 
 .chat-config-title-row {
@@ -544,6 +555,8 @@ hr {
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   padding: 8px 12px;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .chat-clear-btn:disabled,
@@ -822,8 +835,7 @@ hr {
     align-items: flex-start;
   }
 
-  .chat-grid,
-  .resources-grid {
+  .chat-grid {
     grid-template-columns: 1fr;
   }
 
@@ -836,6 +848,10 @@ hr {
 
   .chat-config-title-row {
     flex-direction: column;
+  }
+
+  .resources-grid {
+    grid-auto-columns: minmax(280px, 1fr);
   }
 
   .chat-config-pill-row {
@@ -861,5 +877,108 @@ hr {
 
   .chat-composer {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-panel {
+    padding: 10px;
+  }
+
+  .chat-shell {
+    gap: 10px;
+  }
+
+  .chat-header {
+    gap: 10px;
+    padding-bottom: 8px;
+  }
+
+  .chat-header-actions {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+
+  .chat-thread {
+    gap: 10px;
+    padding: 4px 0;
+  }
+
+  .chat-empty {
+    max-width: none;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 16px 14px;
+    border-radius: 18px;
+    font-size: 13px;
+  }
+
+  .chat-phase-pill {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  .chat-row {
+    gap: 8px;
+    max-width: 100%;
+  }
+
+  .chat-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 12px;
+  }
+
+  .chat-bubble-wrap {
+    max-width: calc(100% - 42px);
+    min-width: 0;
+  }
+
+  .chat-meta {
+    gap: 6px;
+    flex-wrap: wrap;
+    line-height: 1.4;
+  }
+
+  .chat-role-tag {
+    font-size: 10px;
+    padding: 2px 5px;
+  }
+
+  .chat-bubble {
+    max-width: 100%;
+    padding: 12px 13px;
+    border-radius: 20px;
+  }
+
+  .chat-message-text {
+    font-size: 13px;
+    line-height: 1.55;
+    word-break: break-word;
+  }
+
+  .chat-tool-details summary,
+  .chat-tool-pre {
+    font-size: 11px;
+  }
+
+  .chat-composer {
+    gap: 8px;
+    padding-top: 10px;
+  }
+
+  .chat-input {
+    min-height: 92px;
+    padding: 11px 12px;
+    border-radius: 16px;
+  }
+
+  .chat-send-btn {
+    min-height: 44px;
+    width: 100%;
   }
 }

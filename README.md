@@ -8,7 +8,8 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 
 - **Agent management**
   - Add / edit / delete agents
-  - Upload agent thumbnails for lists, settings, and chat messages
+  - Upload agent profile photos for lists, settings, and chat messages
+  - Edit agent settings inside a modal, with detect results shown in a separate modal
   - Built-in adapters:
     - `chrome_prompt` (Chrome built-in AI / Prompt API)
     - `openai_compat` (OpenAI-compatible `/v1/chat/completions` streaming)
@@ -45,6 +46,10 @@ How to test docs locally:
   - Rename MCP servers for easier identification
   - List tools and call tools (client expects an accompanying POST RPC endpoint — see below)
 
+- **Built-in tools**
+  - Agents can optionally use a local `user info` tool to read the current profile name, self-description, and whether a profile photo is configured
+  - The tool is enabled per-agent from the `Agents` tab and documented with its own help modal
+
 - **Orchestration modes**
   - `normal talking`
   - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
@@ -53,14 +58,15 @@ How to test docs locally:
   - Tabs (Chat / Chat Config / Agents / Profile) in a framed bar with clearer active state
   - Social-style chat bubbles with speaker names, timestamps, and avatars for multi-agent conversations
   - MCP tool results in normal talking can be expanded under the final assistant reply instead of occupying a separate bubble
+  - Mobile chat layout keeps desktop styling intact while improving small-screen controls, spacing, and horizontal action scrolling
 
 - **Resource and settings hub**
-  - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, and future skills
-  - Includes a reserved `Skills` section for upcoming skill configuration work
+  - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, built-in tools, and future skills
+  - Includes reserved `Skills` and `Built-in Tools` sections for upcoming configuration work
   - Docs and MCP panels include centered help modals mounted above the page, dim the rest of the layout, and close with `Close` or `Esc`
 
 - **Profile settings**
-  - Set your own character name and thumbnail from the dedicated `Profile` tab
+  - Set your own character name, self-description, and profile photo from the dedicated `Profile` tab
 
 - **Chat controls**
   - `Alt+Enter` sends the message

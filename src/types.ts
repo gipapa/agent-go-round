@@ -47,6 +47,7 @@ export type AgentConfig = {
 
   allowedDocIds?: string[];
   allowedMcpServerIds?: string[];
+  allowUserProfileTool?: boolean;
 };
 
 export type DetectResult = {
