@@ -25,6 +25,10 @@ body {
   min-height: 100vh;
 }
 
+body.help-modal-open {
+  overflow: hidden;
+}
+
 button,
 input,
 textarea,
@@ -769,7 +773,7 @@ hr {
   background: rgba(4, 8, 16, 0.72);
   backdrop-filter: blur(8px) saturate(0.8);
   -webkit-backdrop-filter: blur(8px) saturate(0.8);
-  z-index: 1000;
+  z-index: 9999;
 }
 
 .help-modal-shell {
