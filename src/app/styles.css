@@ -137,6 +137,179 @@ hr {
   grid-template-columns: 1fr 1fr;
 }
 
+.chat-config-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.25fr);
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+  align-content: start;
+}
+
+.chat-config-main,
+.chat-config-resources {
+  min-height: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.chat-config-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.chat-config-hero {
+  grid-column: 1 / -1;
+}
+
+.chat-config-title {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.chat-config-subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-config-pill-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chat-config-pill {
+  min-width: 96px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(91, 123, 255, 0.18);
+  background: linear-gradient(145deg, rgba(91, 123, 255, 0.12), rgba(255, 255, 255, 0.03));
+}
+
+.chat-config-pill span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.chat-config-pill strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+}
+
+.chat-config-section-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chat-config-card,
+.chat-config-note-card,
+.chat-config-hero {
+  overflow: hidden;
+}
+
+.chat-config-card-title {
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.chat-config-card-note {
+  margin-top: 4px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chat-config-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chat-config-help,
+.chat-config-note-card {
+  font-size: 12px;
+  color: rgba(232, 236, 243, 0.72);
+  line-height: 1.6;
+}
+
+.chat-config-help {
+  margin-top: 10px;
+}
+
+.chat-config-member-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.chat-config-member {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.chat-config-member.checked {
+  border-color: rgba(91, 123, 255, 0.45);
+  background: rgba(91, 123, 255, 0.08);
+}
+
+.chat-config-member input {
+  grid-row: span 2;
+}
+
+.chat-config-member span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.chat-config-member small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-config-resource-head {
+  padding: 4px 2px 0;
+}
+
+.chat-config-skill-placeholder {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px dashed rgba(91, 123, 255, 0.35);
+  background: linear-gradient(145deg, rgba(91, 123, 255, 0.08), rgba(255, 255, 255, 0.02));
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(232, 236, 243, 0.78);
+}
+
+.chat-config-skill-badge {
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(91, 123, 255, 0.14);
+  border: 1px solid rgba(91, 123, 255, 0.25);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .panel {
   padding: 14px;
   overflow: auto;
@@ -344,6 +517,13 @@ hr {
   font-size: 15px;
 }
 
+.chat-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .chat-subtitle {
   font-size: 12px;
   color: var(--muted);
@@ -360,6 +540,12 @@ hr {
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
   padding: 8px 12px;
+}
+
+.chat-clear-btn:disabled,
+.chat-send-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 
 .chat-thread {
@@ -550,6 +736,30 @@ hr {
   .chat-grid,
   .resources-grid {
     grid-template-columns: 1fr;
+  }
+
+  .chat-config-grid,
+  .chat-config-section-grid,
+  .chat-config-form-grid,
+  .chat-config-member-list {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-config-title-row {
+    flex-direction: column;
+  }
+
+  .chat-config-pill-row {
+    justify-content: flex-start;
+  }
+
+  .chat-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chat-header-actions {
+    justify-content: flex-start;
   }
 
   .chat-bubble {

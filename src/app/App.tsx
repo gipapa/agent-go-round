@@ -34,6 +34,9 @@ function msg(
 }
 
 type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
+type ExportPayload =
+  | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
+  | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
 
 function extractJsonObject(text: string): any | null {
   const m = text.match(/\{[\s\S]*\}/);
@@ -69,9 +72,41 @@ function stringifyAny(v: any): string {
   }
 }
 
-type ActiveTab = "chat" | "resources" | "agents" | "profile";
+type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
 type UserProfile = { name: string; avatarUrl?: string };
+
+function clampHistoryLimit(value: number) {
+  if (!Number.isFinite(value)) return 10;
+  return Math.max(1, Math.min(200, Math.round(value)));
+}
+
+function normalizeImportedMessage(input: any): ChatMessage | null {
+  if (!input || typeof input !== "object") return null;
+  if (typeof input.role !== "string" || typeof input.content !== "string") return null;
+  if (!["system", "user", "assistant", "tool"].includes(input.role)) return null;
+  return {
+    id: typeof input.id === "string" ? input.id : crypto.randomUUID(),
+    role: input.role,
+    content: input.content,
+    name: typeof input.name === "string" ? input.name : undefined,
+    displayName: typeof input.displayName === "string" ? input.displayName : undefined,
+    avatarUrl: typeof input.avatarUrl === "string" ? input.avatarUrl : undefined,
+    ts: typeof input.ts === "number" ? input.ts : Date.now()
+  };
+}
+
+function downloadBlob(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(href);
+}
 
 export default function App() {
   const initialUi = loadUiState();
@@ -99,7 +134,9 @@ export default function App() {
     return seed;
   });
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>(() => initialUi.activeTab ?? "chat");
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    initialUi.activeTab === "resources" ? "chat_config" : (initialUi.activeTab ?? "chat")
+  );
   const [activeAgentId, setActiveAgentId] = useState<string>(() => initialUi.activeAgentId ?? agents[0]?.id ?? "");
   const activeAgent = useMemo(() => agents.find((a) => a.id === activeAgentId) ?? null, [agents, activeAgentId]);
 
@@ -113,8 +150,10 @@ export default function App() {
   const [reactMax, setReactMax] = useState<number>(() => (typeof initialUi.reactMax === "number" ? initialUi.reactMax : 2));
   const [retryDelaySec, setRetryDelaySec] = useState<number>(() => (typeof initialUi.retryDelaySec === "number" ? initialUi.retryDelaySec : 2));
   const [retryMax, setRetryMax] = useState<number>(() => (typeof initialUi.retryMax === "number" ? initialUi.retryMax : 3));
+  const [historyMessageLimit, setHistoryMessageLimit] = useState<number>(() => clampHistoryLimit(initialUi.historyMessageLimit ?? 10));
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
+  const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
@@ -197,10 +236,11 @@ export default function App() {
       reactMax,
       retryDelaySec,
       retryMax,
+      historyMessageLimit,
       userName,
       userAvatarUrl
     });
-  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, userName, userAvatarUrl]);
+  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -346,6 +386,11 @@ export default function App() {
     return map;
   }, [agents]);
 
+  function limitHistory(messages: ChatMessage[]) {
+    const limit = clampHistoryLimit(historyMessageLimit);
+    return messages.slice(-limit);
+  }
+
   const leaderPhaseRef = React.useRef<"planning" | "verification" | "summary" | "act" | "assign" | "react" | null>(null);
   const leaderLastEventRef = React.useRef<"member_reply" | "leader_action" | null>(null);
 
@@ -394,6 +439,7 @@ export default function App() {
     const userMsg = msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl });
     append(userMsg);
     const baseHistory = [...history, userMsg];
+    const modelHistory = limitHistory(baseHistory);
 
     try {
       if (mode === "one_to_one") {
@@ -419,7 +465,7 @@ export default function App() {
           adapter,
           agent: activeAgent,
           input,
-          history: baseHistory,
+          history: modelHistory,
           system: userSystem,
           onDelta,
           retry: { delaySec: retryDelaySec, max: retryMax },
@@ -489,7 +535,7 @@ export default function App() {
           adapter,
           agent: activeAgent,
           input: "Tool result received. Provide the final answer to the user.",
-          history: [...baseHistory, msg("assistant", full, activeAgent.name), toolMsg],
+          history: limitHistory([...baseHistory, msg("assistant", full, activeAgent.name), toolMsg]),
           system: userSystem,
           onDelta: onDeltaFollowup,
           retry: { delaySec: retryDelaySec, max: retryMax },
@@ -645,7 +691,7 @@ export default function App() {
         leader: { agent: leaderAgent, adapter: pickAdapter(leaderAgent) },
         members: memberAgents.map((m) => ({ agent: m, adapter: pickAdapter(m) })),
         goal: input,
-        userHistory: baseHistory,
+        userHistory: modelHistory,
         userSystem,
         maxRounds: 8,
         reactMax,
@@ -738,6 +784,87 @@ export default function App() {
     }
   }
 
+  function exportRawHistory() {
+    const payload: ExportPayload = {
+      kind: "raw_history",
+      exportedAt: Date.now(),
+      history
+    };
+    downloadBlob(`agent-go-round-history-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    logNow({ category: "chat", ok: true, message: `Raw history exported (${history.length})` });
+  }
+
+  async function exportSummaryHistory() {
+    if (!activeAgent) {
+      logNow({ category: "chat", ok: false, message: "Summary export skipped: no active agent" });
+      return;
+    }
+    if (history.length === 0) {
+      logNow({ category: "chat", ok: false, message: "Summary export skipped: empty history" });
+      return;
+    }
+
+    setIsSummaryExporting(true);
+    try {
+      const adapter = pickAdapter(activeAgent);
+      const summary = await runOneToOne({
+        adapter,
+        agent: activeAgent,
+        input:
+          "Please compress this conversation into a concise reusable summary for future continuation. Keep key facts, decisions, unresolved items, user preferences, and open tasks. Output plain text only.",
+        history,
+        system:
+          "You are preparing a conversation carry-over note. Write in Traditional Chinese when possible. Do not include markdown code fences.",
+        retry: { delaySec: retryDelaySec, max: retryMax },
+        onDelta: () => {},
+        onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
+      });
+
+      const payload: ExportPayload = {
+        kind: "summary_history",
+        exportedAt: Date.now(),
+        summary,
+        agent: { id: activeAgent.id, name: activeAgent.name, model: activeAgent.model }
+      };
+      downloadBlob(`agent-go-round-summary-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+      logNow({ category: "chat", agent: activeAgent.name, ok: true, message: "Summary history exported", details: summary });
+    } catch (e: any) {
+      logNow({ category: "chat", agent: activeAgent.name, ok: false, message: "Summary export failed", details: String(e?.message ?? e) });
+    } finally {
+      setIsSummaryExporting(false);
+    }
+  }
+
+  async function importHistoryFile(file: File) {
+    try {
+      const text = await file.text();
+      let imported: any = null;
+      try {
+        imported = JSON.parse(text);
+      } catch {
+        imported = null;
+      }
+
+      if (imported?.kind === "raw_history" && Array.isArray(imported.history)) {
+        const nextHistory = imported.history.map(normalizeImportedMessage).filter(Boolean) as ChatMessage[];
+        setHistory(nextHistory);
+        logNow({ category: "chat", ok: true, message: `Raw history imported (${nextHistory.length})` });
+        return;
+      }
+
+      const summaryText =
+        imported?.kind === "summary_history" && typeof imported.summary === "string"
+          ? imported.summary
+          : text.trim();
+
+      const summaryMessage = msg("user", summaryText, "summary_import", { displayName: "上次對話總結" });
+      setHistory([summaryMessage]);
+      logNow({ category: "chat", ok: true, message: "Summary history imported", details: summaryText });
+    } catch (e: any) {
+      logNow({ category: "chat", ok: false, message: "Import history failed", details: String(e?.message ?? e) });
+    }
+  }
+
   return (
     <div className="app-shell">
       <div className="card topbar">
@@ -748,7 +875,7 @@ export default function App() {
         <div className="tabs">
           {[
             { id: "chat", label: "Chat" },
-            { id: "resources", label: "Resources" },
+            { id: "chat_config", label: "Chat Config" },
             { id: "agents", label: "Agents" },
             { id: "profile", label: "Profile" }
           ].map((t) => (
@@ -765,7 +892,7 @@ export default function App() {
 
       <div className="content">
         {activeTab === "chat" && (
-          <div className="content-grid chat-grid">
+          <div className="content-grid">
             <div className="card panel chat-panel">
               <ChatPanel
                 history={history}
@@ -776,118 +903,182 @@ export default function App() {
                 }}
                 leaderName={mode === "leader_team" ? activeAgent?.name : null}
                 userName={userProfile.name}
+                onExportRaw={exportRawHistory}
+                onExportSummary={exportSummaryHistory}
+                onImportHistory={importHistoryFile}
+                isSummaryExporting={isSummaryExporting}
               />
-            </div>
-
-            <div className="card panel side-panel">
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>Chat Settings</div>
-
-              <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>Active Agent</div>
-              <select
-                value={activeAgentId}
-                onChange={(e) => setActiveAgentId(e.target.value)}
-                style={{ width: "100%", marginBottom: 12, ...selectStyle }}
-              >
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.type}{a.model ? ` · ${a.model}` : ""})
-                  </option>
-                ))}
-              </select>
-
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <label style={{ opacity: 0.8 }}>Mode</label>
-                <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ width: "100%", ...selectStyle }}>
-                  <option value="one_to_one">normal talking</option>
-                  <option value="leader_team">goal-driven talking</option>
-                </select>
-              </div>
-
-              <div style={{ marginTop: 10 }}>
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>Retry</div>
-                <div style={{ display: "grid", gap: 8 }}>
-                  <label style={label}>Delay (sec)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={10}
-                    value={retryDelaySec}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      setRetryDelaySec(Number.isFinite(next) ? Math.max(0, Math.min(10, next)) : 0);
-                    }}
-                    style={{ width: "100%", ...selectStyle }}
-                  />
-                  <label style={label}>Max retries</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={10}
-                    value={retryMax}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      setRetryMax(Number.isFinite(next) ? Math.max(0, Math.min(10, next)) : 0);
-                    }}
-                    style={{ width: "100%", ...selectStyle }}
-                  />
-                  {mode === "leader_team" && (
-                    <>
-                      <label style={label}>REACT max</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={5}
-                        value={reactMax}
-                        onChange={(e) => {
-                          const next = Number(e.target.value);
-                          setReactMax(Number.isFinite(next) ? Math.max(0, Math.min(5, next)) : 0);
-                        }}
-                        style={{ width: "100%", ...selectStyle }}
-                      />
-                      <div style={{ fontSize: 12, opacity: 0.7 }}>Limits REACT loops to avoid endless retries.</div>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {mode === "leader_team" && (
-                <div style={{ marginTop: 10 }}>
-                  <div style={{ fontWeight: 800, marginBottom: 6 }}>goal-driven talking setup</div>
-                  <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>Leader is the active agent.</div>
-
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ ...label, marginBottom: 6 }}>Member agents</div>
-                    <div style={{ display: "grid", gap: 6 }}>
-                      {agents.filter((a) => a.id !== activeAgentId).map((a) => {
-                        const checked = memberAgentIds.includes(a.id);
-                        return (
-                          <label key={a.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-                            <input type="checkbox" checked={checked} onChange={() => toggleMember(a.id)} />
-                            <span>
-                              {a.name} <span style={{ opacity: 0.7 }}>({a.type}{a.model ? ` · ${a.model}` : ""})</span>
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-
-                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-                      In chat, send a <b>goal</b>. The leader will ask members one-by-one and you will see the conversation here.
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div style={{ marginTop: 12, fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-                Security note: This MVP stores API keys in the browser. For production, use a small server-side proxy to protect keys.
-              </div>
             </div>
           </div>
         )}
 
-        {activeTab === "resources" && (
-          <div className="content-grid resources-grid">
-            <div className="card panel">
+        {activeTab === "chat_config" && (
+          <div className="chat-config-grid">
+            <div className="card panel chat-config-hero">
+              <div className="chat-config-title-row">
+                <div>
+                  <div className="chat-config-title">Resource And Settings</div>
+                  <div className="chat-config-subtitle">集中管理資源、模型設定、歷史記憶、重試策略與多人對話配置。</div>
+                </div>
+                <div className="chat-config-pill-row">
+                  <div className="chat-config-pill">
+                    <span>Agent</span>
+                    <strong>{activeAgent?.name ?? "None"}</strong>
+                  </div>
+                  <div className="chat-config-pill">
+                    <span>Mode</span>
+                    <strong>{mode === "leader_team" ? "goal-driven" : "normal"}</strong>
+                  </div>
+                  <div className="chat-config-pill">
+                    <span>History</span>
+                    <strong>{historyMessageLimit} msgs</strong>
+                  </div>
+                  <div className="chat-config-pill">
+                    <span>Docs</span>
+                    <strong>{docs.length}</strong>
+                  </div>
+                  <div className="chat-config-pill">
+                    <span>MCP</span>
+                    <strong>{mcpServers.length}</strong>
+                  </div>
+                  <div className="chat-config-pill">
+                    <span>Skills</span>
+                    <strong>Reserved</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="chat-config-main">
+
+              <div className="chat-config-section-grid">
+                <div className="card panel chat-config-card">
+                  <div className="chat-config-card-title">Session Basics</div>
+                  <div className="chat-config-card-note">先決定目前由哪個 agent 對話，以及對話模式。</div>
+
+                  <label style={{ ...label, marginBottom: 6 }}>Active Agent</label>
+                  <select
+                    value={activeAgentId}
+                    onChange={(e) => setActiveAgentId(e.target.value)}
+                    style={{ width: "100%", marginBottom: 14, ...selectStyle }}
+                  >
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} ({a.type}{a.model ? ` · ${a.model}` : ""})
+                      </option>
+                    ))}
+                  </select>
+
+                  <label style={{ ...label, marginBottom: 6 }}>Mode</label>
+                  <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ width: "100%", ...selectStyle }}>
+                    <option value="one_to_one">normal talking</option>
+                    <option value="leader_team">goal-driven talking</option>
+                  </select>
+                </div>
+
+                <div className="card panel chat-config-card">
+                  <div className="chat-config-card-title">History And Retry</div>
+                  <div className="chat-config-card-note">控制模型能看到的上下文範圍，以及失敗時的重試行為。</div>
+
+                  <div className="chat-config-form-grid">
+                    <div>
+                      <label style={{ ...label, marginBottom: 6 }}>Messages sent to model</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={historyMessageLimit}
+                        onChange={(e) => setHistoryMessageLimit(clampHistoryLimit(Number(e.target.value)))}
+                        style={{ width: "100%", ...selectStyle }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ ...label, marginBottom: 6 }}>Delay (sec)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={retryDelaySec}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          setRetryDelaySec(Number.isFinite(next) ? Math.max(0, Math.min(10, next)) : 0);
+                        }}
+                        style={{ width: "100%", ...selectStyle }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ ...label, marginBottom: 6 }}>Max retries</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={retryMax}
+                        onChange={(e) => {
+                          const next = Number(e.target.value);
+                          setRetryMax(Number.isFinite(next) ? Math.max(0, Math.min(10, next)) : 0);
+                        }}
+                        style={{ width: "100%", ...selectStyle }}
+                      />
+                    </div>
+                    {mode === "leader_team" && (
+                      <div>
+                        <label style={{ ...label, marginBottom: 6 }}>REACT max</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={5}
+                          value={reactMax}
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            setReactMax(Number.isFinite(next) ? Math.max(0, Math.min(5, next)) : 0);
+                          }}
+                          style={{ width: "100%", ...selectStyle }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="chat-config-help">
+                    Default history is 10. The UI keeps full chat history, but only the latest N messages are sent to the model.
+                  </div>
+                </div>
+              </div>
+
+              {mode === "leader_team" && (
+                <div className="card panel chat-config-card">
+                  <div className="chat-config-card-title">Leader Team Setup</div>
+                  <div className="chat-config-card-note">Leader is the active agent. Pick which member agents can be coordinated in goal-driven mode.</div>
+
+                  <div className="chat-config-member-list">
+                    {agents.filter((a) => a.id !== activeAgentId).map((a) => {
+                      const checked = memberAgentIds.includes(a.id);
+                      return (
+                        <label key={a.id} className={`chat-config-member ${checked ? "checked" : ""}`}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleMember(a.id)} />
+                          <span>{a.name}</span>
+                          <small>
+                            {a.type}
+                            {a.model ? ` · ${a.model}` : ""}
+                          </small>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  <div className="chat-config-help">
+                    In chat, send a goal. The leader will ask members one-by-one and synthesize the result in the same timeline.
+                  </div>
+                </div>
+              )}
+
+              <div className="card panel chat-config-note-card">
+                Security note: This MVP stores API keys in the browser. For production, use a small server-side proxy to protect keys.
+              </div>
+            </div>
+
+            <div className="chat-config-resources">
+              <div className="content-grid resources-grid">
+                <div className="card panel">
                 <DocsPanel
                   docs={docs}
                   selectedId={docEditorId}
@@ -902,28 +1093,40 @@ export default function App() {
                   onSave={onSaveDoc}
                   onDelete={onDeleteDoc}
                 />
-            </div>
+              </div>
 
-            <div className="card panel">
-              <McpPanel
-                servers={mcpServers}
-                activeId={mcpPanelActiveId}
-                toolsByServer={mcpToolsByServer}
-                onChangeServers={onChangeMcpServers}
-                onSelectActive={(id) => {
-                  setMcpPanelActiveId(id);
-                  if (id) {
-                    const server = mcpServers.find((s) => s.id === id);
-                    logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
-                  }
-                }}
-                onUpdateTools={(id, tools) => {
-                  setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
-                  const server = mcpServers.find((s) => s.id === id);
-                  logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
-                }}
-                pushLog={pushLog}
-              />
+                <div className="card panel">
+                  <McpPanel
+                    servers={mcpServers}
+                    activeId={mcpPanelActiveId}
+                    toolsByServer={mcpToolsByServer}
+                    onChangeServers={onChangeMcpServers}
+                    onSelectActive={(id) => {
+                      setMcpPanelActiveId(id);
+                      if (id) {
+                        const server = mcpServers.find((s) => s.id === id);
+                        logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
+                      }
+                    }}
+                    onUpdateTools={(id, tools) => {
+                      setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
+                      const server = mcpServers.find((s) => s.id === id);
+                      logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
+                    }}
+                    pushLog={pushLog}
+                  />
+                </div>
+
+                <div className="card panel chat-config-card">
+                  <div className="chat-config-card-title">Skills</div>
+                  <div className="chat-config-card-note">預留未來 skill 設定入口，會和 Docs、MCP 並列管理。</div>
+
+                  <div className="chat-config-skill-placeholder">
+                    <div className="chat-config-skill-badge">Coming Soon</div>
+                    <div>未來這裡會放 skill 啟用、權限、來源與載入策略設定。</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatMessage } from "../types";
 
 function initials(name: string) {
@@ -28,10 +28,16 @@ export default function ChatPanel(props: {
   history: ChatMessage[];
   onSend: (input: string) => Promise<void>;
   onClear: () => void;
+  onExportRaw: () => void;
+  onExportSummary: () => Promise<void>;
+  onImportHistory: (file: File) => Promise<void>;
   leaderName?: string | null;
   userName: string;
+  isSummaryExporting?: boolean;
 }) {
   const [text, setText] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
 
   const send = async () => {
     const t = text.trim();
@@ -39,6 +45,12 @@ export default function ChatPanel(props: {
     setText("");
     await props.onSend(t);
   };
+
+  useEffect(() => {
+    const node = threadRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [props.history, text]);
 
   const emptyLabel = useMemo(
     () => (props.leaderName ? `Send a goal to ${props.leaderName} and the team will coordinate here.` : "Start the conversation."),
@@ -52,12 +64,35 @@ export default function ChatPanel(props: {
           <div className="chat-title">Conversation</div>
           <div className="chat-subtitle">Multi-agent timeline with visible speaker identity.</div>
         </div>
-        <button onClick={props.onClear} className="chat-clear-btn">
-          Clear chat
-        </button>
+        <div className="chat-header-actions">
+          <button onClick={props.onExportRaw} className="chat-clear-btn">
+            匯出對話歷史(原始檔)
+          </button>
+          <button onClick={() => void props.onExportSummary()} className="chat-clear-btn" disabled={props.isSummaryExporting}>
+            {props.isSummaryExporting ? "濃縮中..." : "匯出對話歷史(濃縮)"}
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} className="chat-clear-btn">
+            匯入對話歷史
+          </button>
+          <button onClick={props.onClear} className="chat-clear-btn">
+            Clear chat
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,.txt"
+            style={{ display: "none" }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              await props.onImportHistory(file);
+              e.target.value = "";
+            }}
+          />
+        </div>
       </div>
 
-      <div className="chat-thread">
+      <div ref={threadRef} className="chat-thread">
         {props.history.length === 0 ? <div className="chat-empty">{emptyLabel}</div> : null}
         {props.history.map((m) => {
           const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;

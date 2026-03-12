@@ -1,13 +1,14 @@
 import { McpServerConfig, OrchestratorMode } from "../types";
 
 export type UiState = {
-  activeTab?: "chat" | "resources" | "agents" | "profile";
+  activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
   mode?: OrchestratorMode;
   activeAgentId?: string;
   memberAgentIds?: string[];
   reactMax?: number;
   retryDelaySec?: number;
   retryMax?: number;
+  historyMessageLimit?: number;
   userName?: string;
   userAvatarUrl?: string;
 };

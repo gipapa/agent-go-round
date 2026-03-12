@@ -18,6 +18,9 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 
 - **Chat with history**
   - Frontend stores and injects history; adapters translate it into provider-specific formats.
+  - Control how many recent messages are sent back to the model (default: 10)
+  - Import raw history or compressed carry-over summaries to continue a previous conversation
+  - Export raw history or ask the active model to generate a compressed summary export
 
 - **Docs (local)**
   - Simple plaintext document vault backed by **IndexedDB**
@@ -33,8 +36,12 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
   - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
 - **Polished dark UI**
   - Consistent card, button, and input styling with subtle gradients and shadows
-  - Tabs (Chat / Resources / Agents / Profile) in a framed bar with clearer active state
+  - Tabs (Chat / Chat Config / Agents / Profile) in a framed bar with clearer active state
   - Social-style chat bubbles with speaker names, timestamps, and avatars for multi-agent conversations
+
+- **Resource and settings hub**
+  - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, and future skills
+  - Includes a reserved `Skills` section for upcoming skill configuration work
 
 - **Profile settings**
   - Set your own character name and thumbnail from the dedicated `Profile` tab
@@ -42,6 +49,7 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 - **Chat controls**
   - `Alt+Enter` sends the message
   - Clear chat button resets the current conversation
+  - New messages and local typing keep the chat view pinned to the latest entry
 
 ## goal-driven talking (agent-to-agent coordination)
 
