@@ -133,6 +133,15 @@ hr {
   min-height: 0;
 }
 
+.card,
+.panel,
+.content,
+.content-grid,
+.log-shell,
+.log-body {
+  min-width: 0;
+}
+
 .chat-grid {
   grid-template-columns: 1fr 340px;
 }
@@ -913,9 +922,39 @@ hr {
   .panel,
   .chat-panel,
   .chat-shell,
-  .chat-thread {
+  .chat-thread,
+  .log-shell,
+  .log-body {
     min-width: 0;
     overflow-x: hidden;
+  }
+
+  .log-shell {
+    overflow: hidden;
+  }
+
+  .log-body {
+    overflow: auto;
+  }
+
+  .chat-config-title-row {
+    gap: 12px;
+  }
+
+  .chat-config-pill-row {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 2px;
+  }
+
+  .chat-config-pill {
+    flex: 0 0 108px;
+  }
+
+  .resources-grid {
+    grid-auto-columns: minmax(260px, 86vw);
   }
 
   .chat-panel {
@@ -1019,6 +1058,37 @@ hr {
 
   .chat-send-btn {
     min-height: 44px;
+    width: 100%;
+  }
+
+  .agents-toolbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .agents-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .agents-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .agents-actions {
+    width: 100%;
+    margin-left: 0 !important;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .agents-avatar-row,
+  .agents-editor-actions {
+    flex-wrap: wrap;
+  }
+
+  .agents-editor-actions button {
     width: 100%;
   }
 }

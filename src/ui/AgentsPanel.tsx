@@ -34,7 +34,7 @@ export default function AgentsPanel(props: {
 
   return (
     <div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <div className="agents-toolbar" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontWeight: 800 }}>Agents</div>
         <button onClick={() => setDraft(emptyAgent())} style={{ ...btnSmall, marginLeft: "auto" }}>
           + Add
@@ -47,6 +47,7 @@ export default function AgentsPanel(props: {
             return (
               <div
                 key={a.id}
+                className="agents-row"
                 style={{
                   display: "flex",
                   gap: 10,
@@ -61,6 +62,7 @@ export default function AgentsPanel(props: {
                 <button
                   type="button"
                   onClick={() => props.onSelect(a.id)}
+                  className="agents-select"
                   style={{
                     display: "flex",
                     gap: 10,
@@ -84,7 +86,7 @@ export default function AgentsPanel(props: {
               </div>
                 </button>
                 {isActive ? (
-                  <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                  <div className="agents-actions" style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
                     <button type="button" onClick={() => setDraft(a)} style={btnSmall}>
                       Edit
                     </button>
@@ -191,7 +193,7 @@ function Editor(props: {
       <input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} style={inp} />
 
       <label style={label}>大頭照</label>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", margin: "6px 0 14px" }}>
+      <div className="agents-avatar-row" style={{ display: "flex", gap: 12, alignItems: "center", margin: "6px 0 14px" }}>
         <AvatarPreview name={a.name} avatarUrl={a.avatarUrl} />
         <div style={{ display: "grid", gap: 8 }}>
           <input type="file" accept="image/*" onChange={(e) => onAvatarPicked(e.target.files?.[0])} />
@@ -412,7 +414,7 @@ function Editor(props: {
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+      <div className="agents-editor-actions" style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button onClick={props.onCancel} style={btn}>
           Cancel
         </button>
