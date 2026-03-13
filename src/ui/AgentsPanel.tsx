@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { AgentConfig, DetectResult, DocItem, McpServerConfig } from "../types";
+import { AgentConfig, BuiltInToolConfig, DetectResult, DocItem, McpServerConfig } from "../types";
 import { generateId } from "../utils/id";
 import HelpModal from "./HelpModal";
 
@@ -18,6 +18,60 @@ const emptyAgent = (): AgentConfig => ({
   capabilities: { streaming: true }
 });
 
+type RemoteModelOption = {
+  id: string;
+  created?: number;
+  ownedBy?: string;
+  contextWindow?: number;
+  active?: boolean;
+};
+
+async function fetchOpenAICompatModels(agent: AgentConfig): Promise<RemoteModelOption[]> {
+  const endpoint = (agent.endpoint ?? "").trim().replace(/\/$/, "");
+  if (!endpoint) throw new Error("Please enter an endpoint first.");
+
+  const res = await fetch(`${endpoint}/models`, {
+    headers: {
+      ...(agent.apiKey ? { Authorization: `Bearer ${agent.apiKey}` } : {}),
+      ...(agent.headers ?? {})
+    }
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
+  }
+
+  const json = await res.json();
+  const data = Array.isArray(json?.data) ? json.data : [];
+
+  return data
+    .filter((item: any) => typeof item?.id === "string" && item.active !== false)
+    .map(
+      (item: any): RemoteModelOption => ({
+        id: item.id,
+        created: typeof item.created === "number" ? item.created : undefined,
+        ownedBy: typeof item.owned_by === "string" ? item.owned_by : undefined,
+        contextWindow: typeof item.context_window === "number" ? item.context_window : undefined,
+        active: typeof item.active === "boolean" ? item.active : undefined
+      })
+    )
+    .sort((a: RemoteModelOption, b: RemoteModelOption) => a.id.localeCompare(b.id));
+}
+
+function formatModelCreated(ts?: number) {
+  if (!ts) return "—";
+  try {
+    return new Date(ts * 1000).toLocaleDateString();
+  } catch {
+    return "—";
+  }
+}
+
+function formatModelOption(option: RemoteModelOption) {
+  return `${option.id} · ${formatModelCreated(option.created)} · ${option.ownedBy ?? "—"} · ctx ${option.contextWindow ?? "—"}`;
+}
+
 export default function AgentsPanel(props: {
   agents: AgentConfig[];
   activeAgentId: string;
@@ -27,6 +81,7 @@ export default function AgentsPanel(props: {
   onDetect: (a: AgentConfig) => Promise<DetectResult>;
   docs: DocItem[];
   mcpServers: McpServerConfig[];
+  builtInTools: BuiltInToolConfig[];
 }) {
   const [draft, setDraft] = useState<AgentConfig | null>(null);
   const [detectResult, setDetectResult] = useState<{ agentName: string; result: DetectResult } | null>(null);
@@ -133,6 +188,7 @@ export default function AgentsPanel(props: {
             draft={draft}
             docs={props.docs}
             mcpServers={props.mcpServers}
+            builtInTools={props.builtInTools}
             onCancel={() => setDraft(null)}
             onSave={(a) => {
               props.onSave(a);
@@ -149,14 +205,20 @@ function Editor(props: {
   draft: AgentConfig;
   docs: DocItem[];
   mcpServers: McpServerConfig[];
+  builtInTools: BuiltInToolConfig[];
   onCancel: () => void;
   onSave: (a: AgentConfig) => void;
 }) {
   const [a, setA] = useState<AgentConfig>({ ...props.draft });
   const [showUserInfoHelp, setShowUserInfoHelp] = useState(false);
+  const [remoteModels, setRemoteModels] = useState<RemoteModelOption[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelLoadError, setModelLoadError] = useState<string | null>(null);
+  const [useCustomModel, setUseCustomModel] = useState<boolean>(() => !(props.draft.model ?? "").trim());
 
   const allowAllDocs = a.allowedDocIds === undefined;
   const allowAllMcps = a.allowedMcpServerIds === undefined;
+  const allowAllBuiltIns = a.allowedBuiltInToolIds === undefined;
 
   function toggleDoc(id: string) {
     const allowed = new Set(a.allowedDocIds ?? []);
@@ -172,6 +234,13 @@ function Editor(props: {
     setA({ ...a, allowedMcpServerIds: Array.from(allowed) });
   }
 
+  function toggleBuiltInTool(id: string) {
+    const allowed = new Set(a.allowedBuiltInToolIds ?? []);
+    if (allowed.has(id)) allowed.delete(id);
+    else allowed.add(id);
+    setA({ ...a, allowedBuiltInToolIds: Array.from(allowed) });
+  }
+
   function onAvatarPicked(file: File | undefined) {
     if (!file) return;
     const reader = new FileReader();
@@ -185,6 +254,42 @@ function Editor(props: {
 
   const endpointPreset =
     a.endpoint === "https://api.openai.com/v1" || a.endpoint === "https://api.groq.com/openai/v1" ? a.endpoint : "__custom__";
+  const hasListedModel = !!a.model && remoteModels.some((model) => model.id === a.model);
+
+  React.useEffect(() => {
+    if (!a.model?.trim()) {
+      setUseCustomModel(true);
+      return;
+    }
+    if (!hasListedModel) {
+      setUseCustomModel(true);
+    }
+  }, [a.model, hasListedModel]);
+
+  React.useEffect(() => {
+    setRemoteModels([]);
+    setModelLoadError(null);
+  }, [a.endpoint, a.apiKey]);
+
+  async function loadModels() {
+    setIsLoadingModels(true);
+    setModelLoadError(null);
+    try {
+      const models = await fetchOpenAICompatModels(a);
+      setRemoteModels(models);
+      if (a.model && models.some((model) => model.id === a.model)) {
+        setUseCustomModel(false);
+      }
+      if (models.length === 0) {
+        setModelLoadError("No active models returned.");
+      }
+    } catch (e: any) {
+      setRemoteModels([]);
+      setModelLoadError(String(e?.message ?? e));
+    } finally {
+      setIsLoadingModels(false);
+    }
+  }
 
   return (
     <div style={{ marginTop: 4 }}>
@@ -241,8 +346,43 @@ function Editor(props: {
           </select>
           <label style={label}>Endpoint</label>
           <input value={a.endpoint ?? ""} onChange={(e) => setA({ ...a, endpoint: e.target.value })} style={inp} />
-          <label style={label}>Model</label>
-          <input value={a.model ?? ""} onChange={(e) => setA({ ...a, model: e.target.value })} style={inp} />
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+            <label style={label}>Model</label>
+            <button type="button" onClick={() => void loadModels()} style={btnSmall} disabled={isLoadingModels}>
+              {isLoadingModels ? "Loading..." : "Load Models"}
+            </button>
+          </div>
+          <select
+            value={useCustomModel ? "__custom__" : a.model ?? ""}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === "__custom__") {
+                setUseCustomModel(true);
+                return;
+              }
+              setUseCustomModel(false);
+              setA({ ...a, model: value });
+            }}
+            style={inp as any}
+          >
+            <option value="__custom__">Custom model input</option>
+            {remoteModels.map((model) => (
+              <option key={model.id} value={model.id}>
+                {formatModelOption(model)}
+              </option>
+            ))}
+          </select>
+          {useCustomModel && <input value={a.model ?? ""} onChange={(e) => setA({ ...a, model: e.target.value })} style={inp} placeholder="Enter model id" />}
+          {!useCustomModel && a.model ? (
+            <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.6, marginTop: -4, marginBottom: 10 }}>
+              {formatModelOption(remoteModels.find((model) => model.id === a.model) ?? { id: a.model })}
+            </div>
+          ) : null}
+          {modelLoadError ? (
+            <div style={{ fontSize: 12, opacity: 0.8, color: "#ffb3b3", lineHeight: 1.5, marginTop: -4, marginBottom: 10 }}>
+              {modelLoadError}
+            </div>
+          ) : null}
           <label style={label}>API Key</label>
           <input value={a.apiKey ?? ""} onChange={(e) => setA({ ...a, apiKey: e.target.value })} style={inp} />
           <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
@@ -377,8 +517,8 @@ function Editor(props: {
           <button
             type="button"
             onClick={() => setShowUserInfoHelp(true)}
-            title="User info tool help"
-            aria-label="User info tool help"
+            title="使用者資訊工具說明"
+            aria-label="使用者資訊工具說明"
             style={helpBtn}
           >
             ?
@@ -393,22 +533,59 @@ function Editor(props: {
           <span>Allow user info tool</span>
         </label>
 
+        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 12, marginBottom: 6 }}>Custom JS Tools</div>
+        <div style={{ display: "grid", gap: 6 }}>
+          <label style={checkRow}>
+            <input
+              type="radio"
+              name={`builtin-mode-${a.id}`}
+              checked={allowAllBuiltIns}
+              onChange={() => setA({ ...a, allowedBuiltInToolIds: undefined })}
+            />
+            <span>All custom JS tools</span>
+          </label>
+          <label style={checkRow}>
+            <input
+              type="radio"
+              name={`builtin-mode-${a.id}`}
+              checked={!allowAllBuiltIns}
+              onChange={() => setA({ ...a, allowedBuiltInToolIds: a.allowedBuiltInToolIds ?? [] })}
+            />
+            <span>Custom selection</span>
+          </label>
+        </div>
+        {!allowAllBuiltIns && (
+          <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+            {props.builtInTools.length === 0 && <div style={{ fontSize: 12, opacity: 0.7 }}>No custom JS tools yet.</div>}
+            {props.builtInTools.map((tool) => (
+              <label key={tool.id} style={checkRow}>
+                <input
+                  type="checkbox"
+                  checked={a.allowedBuiltInToolIds?.includes(tool.id) ?? false}
+                  onChange={() => toggleBuiltInTool(tool.id)}
+                />
+                <span>{tool.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+
         {showUserInfoHelp && (
-          <HelpModal title="User info tool usage and testing" onClose={() => setShowUserInfoHelp(false)}>
+          <HelpModal title="使用者資訊工具說明與測試方式" onClose={() => setShowUserInfoHelp(false)}>
             <div style={helpText}>
-              This built-in tool lets an agent read the current user's profile information from the <strong>Profile</strong> tab.
-              It returns the user's name, self-description, and whether a profile photo is configured.
+              這個 built-in tool 會讓 agent 讀取目前使用者在 <strong>Profile</strong> 頁填寫的資訊。
+              目前會回傳使用者名稱、自我描述，以及是否有設定大頭照。
             </div>
             <div style={{ ...helpText, marginTop: 8 }}>
-              Quick test:
+              使用方式：
               <br />
-              1. Go to <strong>Profile</strong> and fill in your name and self-description
+              1. 到 <strong>Profile</strong> 填入名稱、自我描述，必要時也可設定大頭照
               <br />
-              2. In <strong>Agents</strong>, enable <strong>Allow user info tool</strong> for the agent
+              2. 在 <strong>Agents</strong> 頁面替目標 agent 勾選 <strong>Allow user info tool</strong>
               <br />
-              3. Return to <strong>Chat</strong> and ask something like <code>我是誰？</code> or <code>你知道我的偏好嗎？</code>
+              3. 回到 <strong>Chat</strong>，詢問像是 <code>我是誰？</code>、<code>你知道我的偏好嗎？</code> 這類問題
               <br />
-              4. If the tool is used, the final answer can describe your saved profile and the reply will include a collapsible tool result section
+              4. 如果 agent 決定呼叫這個工具，最後回覆就能根據你已儲存的個人資料回答，並附上可展開的 tool result 區塊
             </div>
           </HelpModal>
         )}

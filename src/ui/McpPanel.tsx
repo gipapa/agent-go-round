@@ -3,12 +3,15 @@ import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { McpSseClient } from "../mcp/sseClient";
 import { listTools, callTool } from "../mcp/toolRegistry";
 import { generateId } from "../utils/id";
+import { McpPromptTemplateKey, McpPromptTemplates, getDefaultMcpPromptTemplates } from "../storage/settingsStore";
 import HelpModal from "./HelpModal";
 
 export default function McpPanel(props: {
   servers: McpServerConfig[];
   activeId: string | null;
   toolsByServer: Record<string, McpTool[]>;
+  promptTemplates: McpPromptTemplates;
+  onChangePromptTemplates: (next: McpPromptTemplates) => void;
   onChangeServers: (s: McpServerConfig[]) => void;
   onSelectActive: (id: string | null) => void;
   onUpdateTools: (id: string, tools: McpTool[]) => void;
@@ -17,11 +20,18 @@ export default function McpPanel(props: {
   const [draftUrl, setDraftUrl] = useState("");
   const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? null, [props.servers, props.activeId]);
   const [showHelp, setShowHelp] = useState(false);
+  const [showPromptConfig, setShowPromptConfig] = useState(false);
+  const [templateEditorId, setTemplateEditorId] = useState<McpPromptTemplateKey>(props.promptTemplates.activeId);
+  const defaultTemplates = useMemo(() => getDefaultMcpPromptTemplates(), []);
 
   const tools = useMemo(() => (active ? props.toolsByServer[active.id] ?? [] : []), [props.toolsByServer, active]);
   const [toolName, setToolName] = useState("");
   const [toolInput, setToolInput] = useState("{}");
   const [toolOutput, setToolOutput] = useState("");
+
+  React.useEffect(() => {
+    setTemplateEditorId(props.promptTemplates.activeId);
+  }, [props.promptTemplates.activeId]);
 
   function deriveRpcUrl(sseUrl: string) {
     try {
@@ -56,6 +66,18 @@ export default function McpPanel(props: {
   function removeServer(id: string) {
     props.onChangeServers(props.servers.filter((s) => s.id !== id));
     if (props.activeId === id) props.onSelectActive(null);
+  }
+
+  function updateTemplate(id: McpPromptTemplateKey, value: string) {
+    props.onChangePromptTemplates({ ...props.promptTemplates, [id]: value });
+  }
+
+  function setActiveTemplate(id: McpPromptTemplateKey) {
+    props.onChangePromptTemplates({ ...props.promptTemplates, activeId: id });
+  }
+
+  function resetTemplate(id: McpPromptTemplateKey) {
+    updateTemplate(id, defaultTemplates[id]);
   }
 
   async function connectAndList() {
@@ -115,13 +137,12 @@ export default function McpPanel(props: {
 
   return (
     <div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <div style={{ fontWeight: 800 }}>MCP (SSE)</div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
         <button
           type="button"
           onClick={() => setShowHelp(true)}
-          title="MCP help"
-          aria-label="MCP help"
+          title="MCP 使用說明"
+          aria-label="MCP 使用說明"
           style={helpBtn}
         >
           ?
@@ -129,24 +150,114 @@ export default function McpPanel(props: {
       </div>
 
       {showHelp && (
-        <HelpModal title="MCP usage and testing" onClose={() => setShowHelp(false)}>
+        <HelpModal title="MCP 使用說明與測試方式" onClose={() => setShowHelp(false)}>
           <div style={helpText}>
-            MCP tools are connected from the `MCP (SSE)` panel. The app opens an EventSource connection to `/mcp/sse` and
-            derives the RPC endpoint by replacing `/sse` with `/rpc`.
+            MCP 工具是從 `Active MCP servers` 這個區塊連進來的。系統會先連到 `/mcp/sse`，再把路徑中的 `/sse`
+            自動換成 `/rpc` 作為工具呼叫端點。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
-            Quick test:
+            `Tool Decision Prompt` 用來控制每次自動判斷是否要使用 MCP 工具時，前面那段 preflight prompt 的內容。
+            你可以同時保存中文模板與英文模板，再指定目前要使用哪一份。
+          </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            模板 placeholders：
             <br />
-            1. Run the local sample server from `mcp-test/server.js`
+            <code>{'{{userInput}}'}</code>, <code>{'{{toolListJson}}'}</code>, <code>{'{{noToolJson}}'}</code>,{" "}
+            <code>{'{{userProfileJson}}'}</code>, <code>{'{{builtinToolJson}}'}</code>, <code>{'{{mcpCallJson}}'}</code>
             <br />
-            2. Add an SSE URL like `http://127.0.0.1:3333/mcp/sse` or the WSL IP equivalent
+            這些 placeholders 會插入最後要給模型看的 JSON 範例，所以請保留原樣。JSON schema 與 key 會維持英文。
+          </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            補充：
             <br />
-            3. Click `Connect & List Tools`
+            1. 如果有 MCP server，但還沒先按 `Connect & List Tools` 取得工具清單，`normal talking` 會略過自動工具判斷
             <br />
-            4. Pick `time` and click `Call` to verify tool execution
+            2. 如果瀏覽器跑在 Windows、MCP server 跑在 WSL，請優先使用 WSL IP，不要直接用 `127.0.0.1`
+            <br />
+            3. 例如：`http://172.xx.xx.xx:3333/mcp/sse`
+            <br />
+          </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            測試方式：
+            <br />
+            1. 啟動本地測試 server，例如 `mcp-test/server.js`
+            <br />
+            2. 加入一個 SSE URL，例如 `http://127.0.0.1:3333/mcp/sse`，或對應的 WSL / 區網 IP
+            <br />
+            3. 按下 `Connect & List Tools`
+            <br />
+            4. 選擇 `time`，再按 `Call` 驗證工具是否真的能執行
           </div>
         </HelpModal>
       )}
+
+      <div className="card" style={{ padding: 12, marginTop: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>Tool Decision Prompt</div>
+        <button type="button" onClick={() => setShowPromptConfig(true)} style={btnPrimary}>
+          {props.promptTemplates.activeId === "zh" ? "中文模板" : "English Template"}
+        </button>
+      </div>
+
+      {showPromptConfig && (
+        <HelpModal title="Tool Decision Prompt 設定" onClose={() => setShowPromptConfig(false)} width="min(760px, 96vw)">
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
+              這裡設定的是「自動判斷要不要使用 MCP 工具」之前，送給模型的模板內容。透過 placeholders 插入的 JSON 範例會維持英文。
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {([
+                ["zh", "中文模板"],
+                ["en", "English Template"]
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setTemplateEditorId(id)}
+                  style={{
+                    ...btnSmall,
+                    border: templateEditorId === id ? "1px solid var(--primary)" : btnSmall.border,
+                    background: templateEditorId === id ? "rgba(91, 123, 255, 0.14)" : btnSmall.background
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => setActiveTemplate(templateEditorId)}
+                style={props.promptTemplates.activeId === templateEditorId ? btnActiveSmall : btnPrimarySmall}
+              >
+                {props.promptTemplates.activeId === templateEditorId ? "目前啟用中" : "設為啟用模板"}
+              </button>
+              <button type="button" onClick={() => resetTemplate(templateEditorId)} style={btnSmall}>
+                重設目前模板
+              </button>
+            </div>
+
+            <textarea
+              value={props.promptTemplates[templateEditorId]}
+              onChange={(e) => updateTemplate(templateEditorId, e.target.value)}
+              rows={14}
+              style={{ ...inp, minHeight: 240, fontFamily: 'Consolas, "SFMono-Regular", monospace', lineHeight: 1.55 }}
+            />
+
+            <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
+              Placeholders：
+              <br />
+              <code>{'{{userInput}}'}</code>, <code>{'{{toolListJson}}'}</code>, <code>{'{{noToolJson}}'}</code>,{" "}
+              <code>{'{{userProfileJson}}'}</code>, <code>{'{{builtinToolJson}}'}</code>, <code>{'{{mcpCallJson}}'}</code>
+              <br />
+              請盡量保留這些 placeholders。就算模板周圍文字改成中文，插入進去的 JSON schema 與 key 也會維持英文。
+            </div>
+          </div>
+        </HelpModal>
+      )}
+
+      <div style={{ fontWeight: 800, marginTop: 14 }}>Active MCP servers</div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <input
@@ -274,6 +385,20 @@ const btnPrimary: React.CSSProperties = {
   background: "var(--primary)",
   color: "#0b0e14",
   fontWeight: 700
+};
+
+const btnPrimarySmall: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 12,
+  border: "1px solid var(--primary)",
+  background: "var(--primary)",
+  color: "#0b0e14",
+  fontWeight: 700
+};
+
+const btnActiveSmall: React.CSSProperties = {
+  ...btnPrimarySmall,
+  opacity: 0.82
 };
 
 const btnSmall: React.CSSProperties = {

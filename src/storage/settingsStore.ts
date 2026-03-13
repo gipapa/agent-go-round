@@ -17,8 +17,67 @@ export type UiState = {
 const UI_KEY = "agr_ui_v1";
 const MCP_KEY = "agr_mcp_v1";
 const MCP_ALIAS_KEY = "agr_mcp_aliases_v1";
+const MCP_PROMPT_KEY = "agr_mcp_prompt_templates_v1";
 
 export type McpToolAliases = Record<string, Record<string, string>>;
+export type McpPromptTemplateKey = "zh" | "en";
+export type McpPromptTemplates = {
+  activeId: McpPromptTemplateKey;
+  zh: string;
+  en: string;
+};
+
+export function getDefaultMcpPromptTemplates(): McpPromptTemplates {
+  return {
+    activeId: "zh",
+    zh: [
+      "請只回傳 JSON，不要加任何其他文字。",
+      "",
+      "請判斷這次是否需要使用工具。",
+      "",
+      "使用者提問如下:",
+      "{{userInput}}",
+      "",
+      "工具清單如下:",
+      "{{toolListJson}}",
+      "",
+      "如果不需要工具，回傳：",
+      "{{noToolJson}}",
+      "",
+      "如果需要使用使用者資訊工具，回傳：",
+      "{{userProfileJson}}",
+      "",
+      "如果需要使用 browser 內建 JS 工具，回傳：",
+      "{{builtinToolJson}}",
+      "",
+      "如果需要使用 MCP 工具，回傳：",
+      "{{mcpCallJson}}"
+    ].join("\n"),
+    en: [
+      "Return JSON only. Do not add any other text.",
+      "",
+      "Decide whether this turn needs a tool.",
+      "",
+      "User request:",
+      "{{userInput}}",
+      "",
+      "Available tools:",
+      "{{toolListJson}}",
+      "",
+      "If no tool is needed, return:",
+      "{{noToolJson}}",
+      "",
+      "If the user profile tool is needed, return:",
+      "{{userProfileJson}}",
+      "",
+      "If a browser-side built-in JS tool is needed, return:",
+      "{{builtinToolJson}}",
+      "",
+      "If an MCP tool is needed, return:",
+      "{{mcpCallJson}}"
+    ].join("\n")
+  };
+}
 
 export function loadUiState(): UiState {
   try {
@@ -60,4 +119,24 @@ export function loadMcpAliases(): McpToolAliases {
 
 export function saveMcpAliases(aliases: McpToolAliases) {
   localStorage.setItem(MCP_ALIAS_KEY, JSON.stringify(aliases));
+}
+
+export function loadMcpPromptTemplates(): McpPromptTemplates {
+  const defaults = getDefaultMcpPromptTemplates();
+  try {
+    const raw = localStorage.getItem(MCP_PROMPT_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<McpPromptTemplates>;
+    return {
+      activeId: parsed.activeId === "en" ? "en" : "zh",
+      zh: typeof parsed.zh === "string" && parsed.zh.trim() ? parsed.zh : defaults.zh,
+      en: typeof parsed.en === "string" && parsed.en.trim() ? parsed.en : defaults.en
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+export function saveMcpPromptTemplates(templates: McpPromptTemplates) {
+  localStorage.setItem(MCP_PROMPT_KEY, JSON.stringify(templates));
 }

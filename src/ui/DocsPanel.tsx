@@ -23,8 +23,8 @@ export default function DocsPanel(props: {
         <button
           type="button"
           onClick={() => setShowHelp((v) => !v)}
-          title="Docs usage help"
-          aria-label="Docs usage help"
+          title="Docs 使用說明"
+          aria-label="Docs 使用說明"
           style={helpBtn}
         >
           ?
@@ -35,21 +35,23 @@ export default function DocsPanel(props: {
       </div>
 
       {showHelp && (
-        <HelpModal title="Docs usage and testing" onClose={() => setShowHelp(false)}>
+        <HelpModal title="Docs 使用說明與測試方式" onClose={() => setShowHelp(false)}>
           <div style={helpText}>
-            In normal talking, allowed docs are injected into the active agent's system context before the model request is
-            sent.
+            在 `normal talking` 模式中，該 agent 被允許使用的文件內容會先被整理後注入 system context，再送給模型。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
-            Quick test:
+            這代表 Docs 目前的用途比較接近「把文件當成額外上下文提示」；它不是向量檢索，也不是 tool calling。
+          </div>
+          <div style={{ ...helpText, marginTop: 8 }}>
+            測試方式：
             <br />
-            1. Create a doc with obvious text like `彩蛋碼是 42`
+            1. 建立一份內容明確的文件，例如 `彩蛋碼是 42`
             <br />
-            2. Allow the active agent to access that doc
+            2. 到 `Agents` 頁讓目標 agent 取得這份文件的使用權限
             <br />
-            3. Go back to Chat and ask `根據文件，彩蛋碼是多少？`
+            3. 回到 `Chat`，用 `normal talking` 詢問 `根據文件，彩蛋碼是多少？`
             <br />
-            4. If docs are working, the model should answer with the doc content
+            4. 如果設定正確，模型就應該能根據文件內容回答
           </div>
         </HelpModal>
       )}
@@ -78,7 +80,7 @@ export default function DocsPanel(props: {
 
       {!edit ? (
         <div style={{ opacity: 0.7, fontSize: 12 }}>
-          Select a doc to edit. The active chat doc is chosen in the Chat tab.
+          選擇一份文件後即可編輯；要讓 agent 使用哪些文件，請到 `Agents` 頁設定權限。
         </div>
       ) : (
         <div className="card" style={{ padding: 10 }}>

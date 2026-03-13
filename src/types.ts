@@ -47,6 +47,7 @@ export type AgentConfig = {
 
   allowedDocIds?: string[];
   allowedMcpServerIds?: string[];
+  allowedBuiltInToolIds?: string[];
   allowUserProfileTool?: boolean;
 };
 
@@ -76,6 +77,15 @@ export type McpTool = {
   name: string;
   description?: string;
   inputSchema?: any;
+};
+
+export type BuiltInToolConfig = {
+  id: string;
+  name: string;
+  description: string;
+  code: string;
+  inputSchema?: any;
+  updatedAt: number;
 };
 
 export type LogLevel = "info" | "warn" | "error" | "debug";

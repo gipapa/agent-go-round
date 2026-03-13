@@ -12,6 +12,23 @@ function formatTime(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function splitThinkContent(content: string) {
+  const thoughts: string[] = [];
+  const visible = content
+    .replace(/<think>([\s\S]*?)<\/think>/gi, (_, body: string) => {
+      const trimmed = body.trim();
+      if (trimmed) thoughts.push(trimmed);
+      return "";
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return {
+    visibleContent: visible,
+    thoughts
+  };
+}
+
 function Avatar(props: { name: string; avatarUrl?: string; tone?: "user" | "assistant" | "system" }) {
   if (props.avatarUrl) {
     return <img className="chat-avatar" src={props.avatarUrl} alt={props.name} />;
@@ -153,6 +170,7 @@ export default function ChatPanel(props: ChatPanelProps) {
           const next = props.history[index + 1];
           const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;
           const isPhase = m.role === "system" && m.name === "phase";
+          const { visibleContent, thoughts } = m.role === "assistant" ? splitThinkContent(m.content) : { visibleContent: m.content, thoughts: [] };
           const tone = m.role === "user" ? "user" : m.role === "tool" || m.role === "system" ? "system" : "assistant";
           const displayName =
             m.displayName ?? (m.role === "user" ? props.userName : m.role === "tool" ? "Tool" : m.role === "system" ? "System" : m.name || "Agent");
@@ -179,8 +197,14 @@ export default function ChatPanel(props: ChatPanelProps) {
                   <span className="chat-time">{formatTime(m.ts)}</span>
                 </div>
                 <div className={`chat-bubble ${m.role} ${isLeader ? "leader" : ""}`}>
-                  <div className="chat-message-text">{m.content}</div>
+                  <div className="chat-message-text">{visibleContent}</div>
                 </div>
+                {m.role === "assistant" && thoughts.length > 0 ? (
+                  <details className="chat-tool-details">
+                    <summary>查看思考過程</summary>
+                    <pre className="chat-tool-pre">{thoughts.join("\n\n")}</pre>
+                  </details>
+                ) : null}
                 {m.role === "assistant" && prev?.role === "tool" ? (
                   <details className="chat-tool-details">
                     <summary>查看 tool result</summary>
@@ -221,7 +245,7 @@ export default function ChatPanel(props: ChatPanelProps) {
 function ExportRawIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M8 2v7m0 0 2.5-2.5M8 9 5.5 6.5M3 11.5v1h10v-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 12V5m0 0 2.5 2.5M8 5 5.5 7.5M3 3.5v-1h10v1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -229,7 +253,11 @@ function ExportRawIcon() {
 function ExportSummaryIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M4 3.5h8M4 6.5h8M4 9.5h5M10.5 11.5l1.25 1.25L14 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 8.1V3.2m0 0 2 2M8 3.2 6 5.2M4.25 2.1h7.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="2.2" y="10.2" width="11.6" height="3.2" rx="1.6" fill="currentColor" fillOpacity="0.14" stroke="currentColor" strokeWidth="0.8" />
+      <text x="8" y="12.55" textAnchor="middle" fontSize="3.55" fontWeight="700" fill="currentColor" fontFamily="Arial, sans-serif" letterSpacing="0.6">
+        ZIP
+      </text>
     </svg>
   );
 }
@@ -237,7 +265,7 @@ function ExportSummaryIcon() {
 function ImportIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M8 12V5m0 0 2.5 2.5M8 5 5.5 7.5M3 3.5v-1h10v1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 2v7m0 0 2.5-2.5M8 9 5.5 6.5M3 11.5v1h10v-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -245,7 +273,8 @@ function ImportIcon() {
 function ClearIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M4.5 4.5 11.5 11.5M11.5 4.5l-7 7M5.5 2.5h5m-7 2h9l-.6 8.2a1 1 0 0 1-1 .8H5a1 1 0 0 1-1-.8L3.5 4.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.5 2.5h5m-7 2h9l-.6 8.2a1 1 0 0 1-1 .8H5a1 1 0 0 1-1-.8L3.5 4.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 6.5v4.25M9.5 6.5v4.25" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
   );
 }
@@ -254,7 +283,7 @@ function FullscreenIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path
-        d="M5.5 2.5H2.5v3M10.5 2.5h3v3M13.5 10.5v3h-3M2.5 10.5v3h3M2.5 5.5l4-4M13.5 5.5l-4-4M2.5 10.5l4 4M13.5 10.5l-4 4"
+        d="M6.25 2.5h-3.75v3.75M9.75 2.5h3.75v3.75M13.5 9.75v3.75H9.75M2.5 9.75v3.75h3.75M6.5 6.5 2.5 2.5M9.5 6.5l4-4M6.5 9.5l-4 4M9.5 9.5l4 4"
         stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="round"
@@ -268,9 +297,9 @@ function ExitFullscreenIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path
-        d="M6.25 2.5h-3.75v3.75M9.75 2.5h3.75v3.75M13.5 9.75v3.75H9.75M2.5 9.75v3.75h3.75M6.5 6.5 2.5 2.5M9.5 6.5l4-4M6.5 9.5l-4 4M9.5 9.5l4 4"
+        d="M4.5 4.5 11.5 11.5M11.5 4.5l-7 7"
         stroke="currentColor"
-        strokeWidth="1.4"
+        strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
       />

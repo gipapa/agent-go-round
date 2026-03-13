@@ -1,9 +1,19 @@
 import React, { useMemo, useState } from "react";
-import { AgentConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool, LogEntry } from "../types";
+import { AgentConfig, BuiltInToolConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool, LogEntry } from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
 import { loadChatHistory, saveChatHistory } from "../storage/chatStore";
+import { loadBuiltInTools, saveBuiltInTools } from "../storage/builtInToolStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
-import { loadMcpServers, loadUiState, saveMcpServers, saveUiState } from "../storage/settingsStore";
+import {
+  McpPromptTemplates,
+  getDefaultMcpPromptTemplates,
+  loadMcpPromptTemplates,
+  loadMcpServers,
+  loadUiState,
+  saveMcpPromptTemplates,
+  saveMcpServers,
+  saveUiState
+} from "../storage/settingsStore";
 
 import { OpenAICompatAdapter } from "../adapters/openaiCompat";
 import { ChromePromptAdapter } from "../adapters/chromePrompt";
@@ -15,11 +25,13 @@ import { McpSseClient } from "../mcp/sseClient";
 import { callTool } from "../mcp/toolRegistry";
 
 import AgentsPanel from "../ui/AgentsPanel";
+import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
 import ChatPanel from "../ui/ChatPanel";
 import DocsPanel from "../ui/DocsPanel";
 import HelpModal from "../ui/HelpModal";
 import McpPanel from "../ui/McpPanel";
 import { generateId } from "../utils/id";
+import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -38,7 +50,8 @@ function msg(
 
 type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
 type UserProfileAction = { type: "user_profile_call"; tool: "get_user_profile" };
-type ToolDecision = { type: "no_tool" } | McpAction | UserProfileAction;
+type BuiltInToolAction = { type: "builtin_tool_call"; tool: string; input?: any };
+type ToolDecision = { type: "no_tool" } | McpAction | UserProfileAction | BuiltInToolAction;
 type ToolEntry =
   | {
       kind: "mcp";
@@ -47,10 +60,21 @@ type ToolEntry =
     }
   | {
       kind: "builtin";
-      tool: {
-        name: "get_user_profile";
-        description: string;
-      };
+      tool:
+        | {
+            name: "get_user_profile";
+            description: string;
+            inputSchema?: any;
+            handler: "user_profile";
+          }
+        | {
+            id: string;
+            name: string;
+            description: string;
+            inputSchema?: any;
+            code: string;
+            handler: "script";
+          };
     };
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
@@ -86,6 +110,9 @@ function normalizeToolDecision(obj: any): ToolDecision | null {
   if (obj.type === "user_profile_call" && obj.tool === "get_user_profile") {
     return { type: "user_profile_call", tool: "get_user_profile" };
   }
+  if (obj.type === "builtin_tool_call" && typeof obj.tool === "string") {
+    return { type: "builtin_tool_call", tool: obj.tool, input: obj.input };
+  }
   const action = normalizeMcpAction(obj);
   if (!action?.serverId) return null;
   return action;
@@ -104,6 +131,12 @@ function stringifyAny(v: any): string {
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
+const PROMPT_JSON_PLACEHOLDERS = {
+  noToolJson: '{"type":"no_tool"}',
+  userProfileJson: '{"type":"user_profile_call","tool":"get_user_profile"}',
+  builtinToolJson: '{"type":"builtin_tool_call","tool":"your_tool_name","input":{}}',
+  mcpCallJson: '{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
+} as const;
 
 function formatUserProfileToolOutput(profile: UserProfile) {
   return stringifyAny({
@@ -147,6 +180,44 @@ function downloadBlob(filename: string, content: string, type: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildToolDecisionPrompt(template: string, fallbackTemplate: string, userInput: string, toolListJson: string) {
+  const baseTemplate = template.trim() || fallbackTemplate;
+  const replacements: Record<string, string> = {
+    "{{userInput}}": userInput,
+    "{{toolListJson}}": toolListJson,
+    "{{noToolJson}}": PROMPT_JSON_PLACEHOLDERS.noToolJson,
+    "{{userProfileJson}}": PROMPT_JSON_PLACEHOLDERS.userProfileJson,
+    "{{builtinToolJson}}": PROMPT_JSON_PLACEHOLDERS.builtinToolJson,
+    "{{mcpCallJson}}": PROMPT_JSON_PLACEHOLDERS.mcpCallJson
+  };
+
+  let prompt = baseTemplate;
+  Object.entries(replacements).forEach(([placeholder, value]) => {
+    prompt = prompt.split(placeholder).join(value);
+  });
+
+  if (!baseTemplate.includes("{{userInput}}")) {
+    prompt += `\n\nUser request:\n${userInput}`;
+  }
+  if (!baseTemplate.includes("{{toolListJson}}")) {
+    prompt += `\n\nAvailable tools:\n${toolListJson}`;
+  }
+  if (!baseTemplate.includes("{{noToolJson}}")) {
+    prompt += `\n\nIf no tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.noToolJson}`;
+  }
+  if (!baseTemplate.includes("{{userProfileJson}}")) {
+    prompt += `\n\nIf the user profile tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.userProfileJson}`;
+  }
+  if (!baseTemplate.includes("{{builtinToolJson}}")) {
+    prompt += `\n\nIf a built-in browser tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.builtinToolJson}`;
+  }
+  if (!baseTemplate.includes("{{mcpCallJson}}")) {
+    prompt += `\n\nIf an MCP tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.mcpCallJson}`;
+  }
+
+  return prompt;
 }
 
 export default function App() {
@@ -205,8 +276,10 @@ export default function App() {
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
   const [docEditorId, setDocEditorId] = useState<string | null>(null);
+  const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => loadMcpServers());
+  const [mcpPromptTemplates, setMcpPromptTemplates] = useState<McpPromptTemplates>(() => loadMcpPromptTemplates());
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -315,6 +388,14 @@ export default function App() {
   }, [mcpServers]);
 
   React.useEffect(() => {
+    saveMcpPromptTemplates(mcpPromptTemplates);
+  }, [mcpPromptTemplates]);
+
+  React.useEffect(() => {
+    saveBuiltInTools(builtInTools);
+  }, [builtInTools]);
+
+  React.useEffect(() => {
     if (!historyLoaded) return;
     let cancelled = false;
     (async () => {
@@ -402,6 +483,22 @@ export default function App() {
     });
   }, [mcpServers]);
 
+  React.useEffect(() => {
+    const builtInIds = new Set(builtInTools.map((tool) => tool.id));
+    setAgents((prev) => {
+      let changed = false;
+      const next = prev.map((agent) => {
+        const nextBuiltIns = agent.allowedBuiltInToolIds ? agent.allowedBuiltInToolIds.filter((id) => builtInIds.has(id)) : undefined;
+        if (nextBuiltIns !== agent.allowedBuiltInToolIds) {
+          changed = true;
+          return { ...agent, allowedBuiltInToolIds: nextBuiltIns };
+        }
+        return agent;
+      });
+      return changed ? next : prev;
+    });
+  }, [builtInTools]);
+
   const docsForAgent = useMemo(() => {
     if (!activeAgent) return [];
     if (!activeAgent.allowedDocIds) return docs;
@@ -425,17 +522,35 @@ export default function App() {
       .filter((entry) => entry.tools.length > 0);
   }, [availableMcpServersForAgent, mcpToolsByServer]);
 
+  const availableCustomBuiltInToolsForAgent = useMemo(() => {
+    if (!activeAgent) return [];
+    if (!activeAgent.allowedBuiltInToolIds) return builtInTools;
+    const allowed = new Set(activeAgent.allowedBuiltInToolIds);
+    return builtInTools.filter((tool) => allowed.has(tool.id));
+  }, [activeAgent, builtInTools]);
+
   const availableBuiltinToolsForAgent = useMemo(
-    () =>
-      activeAgent?.allowUserProfileTool
+    () => [
+      ...(activeAgent?.allowUserProfileTool
         ? [
             {
               name: "get_user_profile" as const,
-              description: "Get the current user's name, self-description, and whether an avatar is configured."
+              description: "Get the current user's name, self-description, and whether an avatar is configured.",
+              inputSchema: {},
+              handler: "user_profile" as const
             }
           ]
-        : [],
-    [activeAgent]
+        : []),
+      ...availableCustomBuiltInToolsForAgent.map((tool) => ({
+        id: tool.id,
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema ?? {},
+        code: tool.code,
+        handler: "script" as const
+      }))
+    ],
+    [activeAgent, availableCustomBuiltInToolsForAgent]
   );
 
   const availableToolsForAgent = useMemo<ToolEntry[]>(
@@ -492,6 +607,8 @@ export default function App() {
     userInput: string;
     retry: { delaySec: number; max: number };
     toolEntries: ToolEntry[];
+    promptTemplate: string;
+    fallbackPromptTemplate: string;
   }): Promise<ToolDecision | null> {
     const toolList = args.toolEntries.map((entry) =>
       entry.kind === "mcp"
@@ -506,23 +623,17 @@ export default function App() {
         : {
             kind: "builtin",
             name: entry.tool.name,
-            description: entry.tool.description
-          }
+            description: entry.tool.description,
+            inputSchema: entry.tool.inputSchema ?? {}
+        }
     );
 
-    const decisionPrompt = [
-      "請只回傳 JSON，不要加任何其他文字。",
-      "",
-      "請判斷這次是否需要使用工具。",
-      "",
-      `使用者提問如下:\n${args.userInput}`,
-      "",
-      `工具清單如下:\n${JSON.stringify(toolList, null, 2)}`,
-      "",
-      '如果不需要工具，回傳：{"type":"no_tool"}',
-      '如果需要使用使用者資訊工具，回傳：{"type":"user_profile_call","tool":"get_user_profile"}',
-      '如果需要工具，回傳：{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
-    ].join("\n");
+    const decisionPrompt = buildToolDecisionPrompt(
+      args.promptTemplate,
+      args.fallbackPromptTemplate,
+      args.userInput,
+      JSON.stringify(toolList, null, 2)
+    );
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
       const raw = await runOneToOne({
@@ -661,7 +772,9 @@ export default function App() {
             adapter,
             userInput: input,
             retry: { delaySec: retryDelaySec, max: retryMax },
-            toolEntries: availableToolsForAgent
+            toolEntries: availableToolsForAgent,
+            promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
+            fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
           });
 
           if (!decision) {
@@ -684,6 +797,55 @@ export default function App() {
               details: toolOutputText
             });
             finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+          } else if (decision.type === "builtin_tool_call") {
+            const targetTool = availableBuiltinToolsForAgent.find((tool) => tool.handler === "script" && tool.name === decision.tool) ?? null;
+
+            if (!targetTool || targetTool.handler !== "script") {
+              const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${decision.tool} 的 built-in tool。`;
+              append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
+              logNow({
+                category: "tool",
+                agent: activeAgent.name,
+                ok: false,
+                message: `Built-in tool not found: ${decision.tool}`,
+                details: JSON.stringify(decision)
+              });
+              finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+            } else {
+              try {
+                const toolOutput = await runBuiltInScriptTool(targetTool, decision.input ?? {});
+                const toolOutputText = stringifyAny(toolOutput);
+                const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
+                append(
+                  msg(
+                    "tool",
+                    `Built-in tool -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
+                    "builtin_tool",
+                    { displayName: "Built-in Tool" }
+                  )
+                );
+                logNow({
+                  category: "tool",
+                  agent: activeAgent.name,
+                  ok: true,
+                  message: `Built-in tool call OK: ${decision.tool}`,
+                  details: toolOutputText
+                });
+                finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+              } catch (e: any) {
+                const briefError = String(e?.message ?? e);
+                const toolSummaryForQuestion = `工具執行失敗：${decision.tool} 執行失敗（${briefError}）。`;
+                append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
+                logNow({
+                  category: "tool",
+                  agent: activeAgent.name,
+                  ok: false,
+                  message: `Built-in tool call failed: ${decision.tool}`,
+                  details: briefError
+                });
+                finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+              }
+            }
           } else {
             const targetServer = availableMcpServersForAgent.find((server) => server.id === decision.serverId) ?? null;
             const targetTool = availableMcpToolsForAgent.find((entry) => entry.server.id === decision.serverId)?.tools.find((tool) => tool.name === decision.tool) ?? null;
@@ -1194,10 +1356,10 @@ export default function App() {
                 <strong className="cc-card-value">Reserved</strong>
                 <span className="cc-card-hint">Coming Soon</span>
               </button>
-              <button className="cc-card cc-card-disabled" onClick={() => setConfigModal("tools")}>
+              <button className="cc-card" onClick={() => setConfigModal("tools")}>
                 <span className="cc-card-label">Built-in Tools</span>
-                <strong className="cc-card-value">Reserved</strong>
-                <span className="cc-card-hint">Coming Soon</span>
+                <strong className="cc-card-value">{builtInTools.length}</strong>
+                <span className="cc-card-hint">Browser JS tools</span>
               </button>
             </div>
 
@@ -1339,6 +1501,8 @@ export default function App() {
                   servers={mcpServers}
                   activeId={mcpPanelActiveId}
                   toolsByServer={mcpToolsByServer}
+                  promptTemplates={mcpPromptTemplates}
+                  onChangePromptTemplates={setMcpPromptTemplates}
                   onChangeServers={onChangeMcpServers}
                   onSelectActive={(id) => {
                     setMcpPanelActiveId(id);
@@ -1367,11 +1531,8 @@ export default function App() {
             )}
 
             {configModal === "tools" && (
-              <HelpModal title="Built-in Tools" onClose={() => setConfigModal(null)}>
-                <div className="chat-config-skill-placeholder">
-                  <div className="chat-config-skill-badge">Coming Soon</div>
-                  <div>之後這裡會統一管理 built-in tool 的啟用、權限與使用說明。</div>
-                </div>
+              <HelpModal title="Built-in Tools" onClose={() => setConfigModal(null)} width="min(820px, 96vw)">
+                <BuiltInToolsPanel tools={builtInTools} onChange={setBuiltInTools} />
               </HelpModal>
             )}
           </div>
@@ -1400,6 +1561,7 @@ export default function App() {
                 }}
                 docs={docs}
                 mcpServers={mcpServers}
+                builtInTools={builtInTools}
               />
             </div>
           </div>

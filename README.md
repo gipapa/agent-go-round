@@ -16,6 +16,8 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
     - `custom` (manual mapping: body template + response JSONPath)
   - OpenAI-compatible endpoint presets for OpenAI and Groq
   - **Auto-detect** for OpenAI-compatible endpoints via `GET /v1/models`
+  - Load active OpenAI-compatible models from `GET /models`, then choose from a dropdown or switch to custom model input
+  - Per-agent access control for docs, MCP servers, the built-in `user info` tool, and custom browser-side JS tools
 
 - **Chat with history**
   - Frontend stores and injects history; adapters translate it into provider-specific formats.
@@ -42,14 +44,47 @@ How to test docs locally:
 5. Go back to `Chat`, keep mode on `normal talking`, and ask something like `根據文件，彩蛋碼是多少？`
 6. If docs are working, the model should answer using the doc content.
 
+### Built-in tools usage and testing
+
+- Custom built-in tools are defined in `Chat Config -> Built-in Tools` and stored locally in `src/storage/builtInToolStore.ts`.
+- Tool code runs in the browser through `src/utils/runBuiltInScriptTool.ts`, and both the editor test button and the actual agent flow use the same execution path.
+- During `normal talking`, the active tool-decision prompt can ask the model to return:
+
+```json
+{"type":"builtin_tool_call","tool":"your_tool_name","input":{}}
+```
+
+- The app executes the JavaScript, captures the returned value, and injects that result back into the user question before the final answer is generated.
+
+How to test built-in tools locally:
+
+1. Open `Chat Config -> Built-in Tools`.
+2. Create a tool with a unique name and a clear description.
+3. Write JavaScript that returns a value, for example:
+   ```js
+   const joke = "冷知識：CSS 最會的不是排版，是讓人懷疑人生。";
+   alert(joke);
+   return {
+     joke,
+     source: "built-in tool"
+   };
+   ```
+4. Click `Test Tool` to execute the current code directly in the browser.
+5. In `Agents`, allow the target agent to use that custom JS tool.
+6. Go back to `Chat` and ask something that should cause the model to choose the tool.
+
 - **MCP (SSE)**
   - Connect to MCP servers via **SSE**
   - Rename MCP servers for easier identification
   - List tools and call tools (client expects an accompanying POST RPC endpoint — see below)
+  - Configure a `Tool Decision Prompt` with Chinese and English templates while keeping JSON schema examples in English
 
 - **Built-in tools**
   - Agents can optionally use a local `user info` tool to read the current profile name, self-description, and whether a profile photo is configured
-  - The tool is enabled per-agent from the `Agents` tab and documented with its own help modal
+  - Create custom browser-side JavaScript tools in `Chat Config -> Built-in Tools`
+  - Each custom tool includes `name`, `description`, optional `input schema`, and JavaScript code
+  - Test custom tool code directly in the editor before letting agents use it
+  - Built-in tools are enabled per-agent from the `Agents` tab and documented with dedicated help modals
 
 - **Orchestration modes**
   - `normal talking`
@@ -59,11 +94,12 @@ How to test docs locally:
   - Tabs (Chat / Chat Config / Agents / Profile) in a framed bar with clearer active state
   - Social-style chat bubbles with speaker names, timestamps, and avatars for multi-agent conversations
   - MCP tool results in normal talking can be expanded under the final assistant reply instead of occupying a separate bubble
+  - Assistant replies that contain `<think>...</think>` render the visible answer normally and expose the thinking block through a collapsible section
   - Mobile chat layout keeps desktop styling intact while improving small-screen controls, spacing, and horizontal action scrolling
 
 - **Resource and settings hub**
   - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, built-in tools, and future skills
-  - Includes reserved `Skills` and `Built-in Tools` sections for upcoming configuration work
+  - Includes a reserved `Skills` section for upcoming configuration work
   - Docs and MCP panels include centered help modals mounted above the page, dim the rest of the layout, and close with `Close` or `Esc`
 
 - **Profile settings**
@@ -163,7 +199,7 @@ And expects either:
    - RPC: `http://localhost:3333/mcp/rpc` (POST) implementing `tools/list` and `tools/call`
 2) In the **MCP (SSE)** panel (right column), paste the SSE URL and click **Add**.
 3) Click **Connect & List Tools**. The returned tools are saved for that server and shown in the panel.
-4) You can manually call a tool in the panel; the active MCP server + its tool list are injected into the agent prompt so it can pick `mcp_call` actions.
+4) You can manually call a tool in the panel and configure the `Tool Decision Prompt` template used before automatic tool selection.
 5) You can edit the MCP server name in the MCP panel for easier identification.
 
 #### Example MCP server (repo: `./mcp-test`)
@@ -182,10 +218,11 @@ And expects either:
 This MVP stores API keys in the browser (localStorage). Users can inspect the page and extract the key.
 For production, use a small server-side proxy (or your own gateway) to protect secrets.
 
+Custom built-in tools execute user-provided JavaScript in the same browser context as the app. There is no sandbox yet, so only run code you trust.
+
 ## Known issues (current review)
 
 - MCP SSE clients are created per list/call and never closed (`src/ui/McpPanel.tsx`, `src/app/App.tsx`), so repeated tool use can leak browser EventSource connections.
-- MCP tool routing ignores `serverId` provided by the model and always uses the active server (`src/app/App.tsx`), so multi-server setups cannot target a specific MCP server.
 - The sample MCP server lacks request validation and will throw on malformed JSON or missing fields (`mcp-test/server.js`); add guards before reading `req.body.id/method`.
 
 ## Repo structure
