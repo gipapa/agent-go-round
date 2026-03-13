@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { AgentConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool, LogEntry } from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
+import { loadChatHistory, saveChatHistory } from "../storage/chatStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
 import { loadMcpServers, loadUiState, saveMcpServers, saveUiState } from "../storage/settingsStore";
 
@@ -184,6 +185,8 @@ export default function App() {
     initialUi.mode === "leader_team" || initialUi.mode === "one_to_one" ? initialUi.mode : "one_to_one"
   );
   const [history, setHistory] = useState<ChatMessage[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [isChatFullscreen, setIsChatFullscreen] = useState(false);
 
   // Leader+Team config (leader = active agent)
   const [memberAgentIds, setMemberAgentIds] = useState<string[]>(() => initialUi.memberAgentIds ?? agents.slice(1).map((a) => a.id));
@@ -262,6 +265,26 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const restored = (await loadChatHistory()).map(normalizeImportedMessage).filter(Boolean) as ChatMessage[];
+        if (cancelled) return;
+        setHistory((current) => (current.length === 0 ? restored : current));
+        logNow({ category: "chat", ok: true, message: `History restored (${restored.length})` });
+      } catch (e: any) {
+        if (cancelled) return;
+        logNow({ category: "chat", ok: false, message: "History restore failed", details: String(e?.message ?? e) });
+      } finally {
+        if (!cancelled) setHistoryLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
     saveAgents(agents);
 
     if (!agents.some((a) => a.id === activeAgentId)) {
@@ -290,6 +313,22 @@ export default function App() {
   React.useEffect(() => {
     saveMcpServers(mcpServers);
   }, [mcpServers]);
+
+  React.useEffect(() => {
+    if (!historyLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await saveChatHistory(history);
+      } catch (e: any) {
+        if (cancelled) return;
+        logNow({ category: "chat", ok: false, message: "History persist failed", details: String(e?.message ?? e) });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [history, historyLoaded]);
 
   React.useEffect(() => {
     logNow({ category: "ui", message: `Tab -> ${activeTab}` });
@@ -323,6 +362,12 @@ export default function App() {
       setMcpPanelActiveId(null);
     }
   }, [mcpPanelActiveId, mcpServers]);
+
+  React.useEffect(() => {
+    if (activeTab !== "chat" && isChatFullscreen) {
+      setIsChatFullscreen(false);
+    }
+  }, [activeTab, isChatFullscreen]);
 
   React.useEffect(() => {
     if (!docsLoaded) return;
@@ -1098,6 +1143,7 @@ export default function App() {
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
                 isSummaryExporting={isSummaryExporting}
+                onOpenFullscreen={() => setIsChatFullscreen(true)}
               />
             </div>
           </div>
@@ -1422,6 +1468,38 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {isChatFullscreen && (
+        <HelpModal
+          title="全頁模式"
+          onClose={() => setIsChatFullscreen(false)}
+          width="min(1180px, calc(100vw - 24px))"
+          height="calc(100dvh - 24px)"
+          hideTitle
+          footer={null}
+          padless
+        >
+          <div className="chat-fullscreen-host">
+            <ChatPanel
+              history={history}
+              onSend={onSend}
+              onClear={() => {
+                setHistory([]);
+                logNow({ category: "chat", message: "Chat cleared" });
+              }}
+              leaderName={mode === "leader_team" ? activeAgent?.name : null}
+              userName={userProfile.name}
+              modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal talking"}
+              onExportRaw={exportRawHistory}
+              onExportSummary={exportSummaryHistory}
+              onImportHistory={importHistoryFile}
+              isSummaryExporting={isSummaryExporting}
+              fullscreen
+              onCloseFullscreen={() => setIsChatFullscreen(false)}
+            />
+          </div>
+        </HelpModal>
+      )}
 
       <div className="log-shell card">
         <div className="log-header">

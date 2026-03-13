@@ -20,6 +20,7 @@ This repository contains a working MVP built with **Vite + React + TypeScript**,
 - **Chat with history**
   - Frontend stores and injects history; adapters translate it into provider-specific formats.
   - Control how many recent messages are sent back to the model (default: 10)
+  - Persist the current conversation in IndexedDB so reloading the page can continue the same chat
   - Import raw history or compressed carry-over summaries to continue a previous conversation
   - Export raw history or ask the active model to generate a compressed summary export
 
@@ -71,6 +72,7 @@ How to test docs locally:
 - **Chat controls**
   - `Alt+Enter` sends the message
   - Clear chat button resets the current conversation
+  - Full-page chat mode opens the conversation in a large modal focused on messages, input, send, and exit controls
   - New messages and local typing keep the chat view pinned to the latest entry
 
 ## goal-driven talking (agent-to-agent coordination)
@@ -193,7 +195,7 @@ src/
   adapters/        # Provider adapters (Chrome Prompt API, OpenAI-compatible, Custom)
   orchestrators/   # Collaboration patterns (normal talking, goal-driven talking)
   mcp/             # MCP SSE client + tool registry
-  storage/         # agentStore (localStorage) + docStore (IndexedDB)
+  storage/         # agent/settings (localStorage) + docs/chat history (IndexedDB)
   ui/              # React panels
 run.sh             # Install deps if needed and start the dev server
 mcp-test/          # Example MCP server for local testing

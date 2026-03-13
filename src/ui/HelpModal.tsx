@@ -2,10 +2,14 @@ import React from "react";
 import { createPortal } from "react-dom";
 
 export default function HelpModal(props: {
-  title: string;
+  title?: string;
   onClose: () => void;
   children: React.ReactNode;
   width?: string;
+  height?: string;
+  hideTitle?: boolean;
+  footer?: React.ReactNode | null;
+  padless?: boolean;
 }) {
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -27,21 +31,48 @@ export default function HelpModal(props: {
         className="help-modal-shell"
         role="dialog"
         aria-modal="true"
-        aria-label={props.title}
+        aria-label={props.title ?? "Modal"}
         style={{ ...shellStyle, width: props.width ?? shellStyle.width }}
       >
-        <div className="help-modal-card" style={cardStyle}>
-          <div className="help-modal-title" style={titleStyle}>
-            {props.title}
-          </div>
-          <div className="help-modal-body" style={bodyStyle}>
+        <div
+          className="help-modal-card"
+          style={{
+            ...cardStyle,
+            ...(props.height ? { height: props.height, maxHeight: props.height } : null),
+            ...(props.padless ? { padding: 0, overflow: "hidden" } : null)
+          }}
+        >
+          {!props.hideTitle && props.title ? (
+            <div className="help-modal-title" style={titleStyle}>
+              {props.title}
+            </div>
+          ) : null}
+          <div
+            className="help-modal-body"
+            style={{
+              ...bodyStyle,
+              ...(props.padless
+                ? {
+                    paddingRight: 0,
+                    fontSize: "inherit",
+                    lineHeight: "inherit",
+                    display: "flex",
+                    flex: 1
+                  }
+                : null)
+            }}
+          >
             {props.children}
           </div>
-          <div className="help-modal-actions" style={actionsStyle}>
-            <button type="button" onClick={props.onClose} className="help-modal-close-btn" style={closeBtnStyle}>
-              Close
-            </button>
-          </div>
+          {props.footer === null ? null : (
+            <div className="help-modal-actions" style={actionsStyle}>
+              {props.footer ?? (
+                <button type="button" onClick={props.onClose} className="help-modal-close-btn" style={closeBtnStyle}>
+                  Close
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>,
