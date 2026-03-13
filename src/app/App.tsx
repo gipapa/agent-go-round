@@ -16,6 +16,7 @@ import { callTool } from "../mcp/toolRegistry";
 import AgentsPanel from "../ui/AgentsPanel";
 import ChatPanel from "../ui/ChatPanel";
 import DocsPanel from "../ui/DocsPanel";
+import HelpModal from "../ui/HelpModal";
 import McpPanel from "../ui/McpPanel";
 import { generateId } from "../utils/id";
 
@@ -194,6 +195,9 @@ export default function App() {
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
+
+  type ConfigModalKey = "agent" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | null;
+  const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
@@ -1100,168 +1104,172 @@ export default function App() {
         )}
 
         {activeTab === "chat_config" && (
-          <div className="chat-config-grid">
-            <div className="card panel chat-config-hero">
-              <div className="chat-config-title-row">
-                <div>
-                  <div className="chat-config-title">Resource And Settings</div>
-                  <div className="chat-config-subtitle">集中管理資源、模型設定、歷史記憶、重試策略與多人對話配置。</div>
-                </div>
-                <div className="chat-config-pill-row">
-                  <div className="chat-config-pill">
-                    <span>Agent</span>
-                    <strong>{activeAgent?.name ?? "None"}</strong>
-                  </div>
-                  <div className="chat-config-pill">
-                    <span>Mode</span>
-                    <strong>{mode === "leader_team" ? "goal-driven" : "normal"}</strong>
-                  </div>
-                  <div className="chat-config-pill">
-                    <span>History</span>
-                    <strong>{historyMessageLimit} msgs</strong>
-                  </div>
-                  <div className="chat-config-pill">
-                    <span>Docs</span>
-                    <strong>{docs.length}</strong>
-                  </div>
-                  <div className="chat-config-pill">
-                    <span>MCP</span>
-                    <strong>{mcpServers.length}</strong>
-                  </div>
-                  <div className="chat-config-pill">
-                    <span>Skills</span>
-                    <strong>Reserved</strong>
-                  </div>
-                </div>
-              </div>
+          <div className="cc-dashboard">
+            <div className="cc-dashboard-header">
+              <div className="cc-dashboard-title">Resource And Settings</div>
+              <div className="cc-dashboard-subtitle">點選任一項目進行設定</div>
             </div>
 
-            <div className="chat-config-main">
-
-              <div className="chat-config-section-grid">
-                <div className="card panel chat-config-card">
-                  <div className="chat-config-card-title">Session Basics</div>
-                  <div className="chat-config-card-note">先決定目前由哪個 agent 對話，以及對話模式。</div>
-
-                  <label style={{ ...label, marginBottom: 6 }}>Active Agent</label>
-                  <select
-                    value={activeAgentId}
-                    onChange={(e) => setActiveAgentId(e.target.value)}
-                    style={{ width: "100%", marginBottom: 14, ...selectStyle }}
-                  >
-                    {agents.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name} ({a.type}{a.model ? ` · ${a.model}` : ""})
-                      </option>
-                    ))}
-                  </select>
-
-                  <label style={{ ...label, marginBottom: 6 }}>Mode</label>
-                  <select value={mode} onChange={(e) => setMode(e.target.value as any)} style={{ width: "100%", ...selectStyle }}>
-                    <option value="one_to_one">normal talking</option>
-                    <option value="leader_team">goal-driven talking</option>
-                  </select>
-                </div>
-
-                <div className="card panel chat-config-card">
-                  <div className="chat-config-card-title">History And Retry</div>
-                  <div className="chat-config-card-note">控制模型能看到的上下文範圍，以及失敗時的重試行為。</div>
-
-                  <div className="chat-config-form-grid">
-                    <div>
-                      <label style={{ ...label, marginBottom: 6 }}>Messages sent to model</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={200}
-                        value={historyMessageLimit}
-                        onChange={(e) => setHistoryMessageLimit(clampHistoryLimit(Number(e.target.value)))}
-                        style={{ width: "100%", ...selectStyle }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ ...label, marginBottom: 6 }}>Delay (sec)</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        value={retryDelaySec}
-                        onChange={(e) => {
-                          const next = Number(e.target.value);
-                          setRetryDelaySec(Number.isFinite(next) ? Math.max(0, Math.min(10, next)) : 0);
-                        }}
-                        style={{ width: "100%", ...selectStyle }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ ...label, marginBottom: 6 }}>Max retries</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={10}
-                        value={retryMax}
-                        onChange={(e) => {
-                          const next = Number(e.target.value);
-                          setRetryMax(Number.isFinite(next) ? Math.max(0, Math.min(10, next)) : 0);
-                        }}
-                        style={{ width: "100%", ...selectStyle }}
-                      />
-                    </div>
-                    {mode === "leader_team" && (
-                      <div>
-                        <label style={{ ...label, marginBottom: 6 }}>REACT max</label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={5}
-                          value={reactMax}
-                          onChange={(e) => {
-                            const next = Number(e.target.value);
-                            setReactMax(Number.isFinite(next) ? Math.max(0, Math.min(5, next)) : 0);
-                          }}
-                          style={{ width: "100%", ...selectStyle }}
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="chat-config-help">
-                    Default history is 10. The UI keeps full chat history, but only the latest N messages are sent to the model.
-                  </div>
-                </div>
-              </div>
-
+            <div className="cc-dashboard-grid">
+              <button className="cc-card" onClick={() => setConfigModal("agent")}>
+                <span className="cc-card-label">Agent</span>
+                <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
+                <span className="cc-card-hint">{activeAgent?.type ?? ""}{activeAgent?.model ? ` · ${activeAgent.model}` : ""}</span>
+              </button>
+              <button className="cc-card" onClick={() => setConfigModal("mode")}>
+                <span className="cc-card-label">Mode</span>
+                <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven" : "normal"}</strong>
+                <span className="cc-card-hint">{mode === "leader_team" ? "Leader → Members" : "1:1 對話"}</span>
+              </button>
+              <button className="cc-card" onClick={() => setConfigModal("history")}>
+                <span className="cc-card-label">History & Retry</span>
+                <strong className="cc-card-value">{historyMessageLimit} msgs</strong>
+                <span className="cc-card-hint">retry {retryMax}× / delay {retryDelaySec}s</span>
+              </button>
               {mode === "leader_team" && (
-                <div className="card panel chat-config-card">
-                  <div className="chat-config-card-title">Leader Team Setup</div>
-                  <div className="chat-config-card-note">Leader is the active agent. Pick which member agents can be coordinated in goal-driven mode.</div>
-
-                  <div className="chat-config-member-list">
-                    {agents.filter((a) => a.id !== activeAgentId).map((a) => {
-                      const checked = memberAgentIds.includes(a.id);
-                      return (
-                        <label key={a.id} className={`chat-config-member ${checked ? "checked" : ""}`}>
-                          <input type="checkbox" checked={checked} onChange={() => toggleMember(a.id)} />
-                          <span>{a.name}</span>
-                          <small>
-                            {a.type}
-                            {a.model ? ` · ${a.model}` : ""}
-                          </small>
-                        </label>
-                      );
-                    })}
-                  </div>
-
-                  <div className="chat-config-help">
-                    In chat, send a goal. The leader will ask members one-by-one and synthesize the result in the same timeline.
-                  </div>
-                </div>
+                <button className="cc-card" onClick={() => setConfigModal("team")}>
+                  <span className="cc-card-label">Team</span>
+                  <strong className="cc-card-value">{memberAgentIds.length} members</strong>
+                  <span className="cc-card-hint">Leader: {activeAgent?.name ?? "—"}</span>
+                </button>
               )}
+              <button className="cc-card" onClick={() => setConfigModal("docs")}>
+                <span className="cc-card-label">Docs</span>
+                <strong className="cc-card-value">{docs.length}</strong>
+                <span className="cc-card-hint">IndexedDB 文件庫</span>
+              </button>
+              <button className="cc-card" onClick={() => setConfigModal("mcp")}>
+                <span className="cc-card-label">MCP (SSE)</span>
+                <strong className="cc-card-value">{mcpServers.length}</strong>
+                <span className="cc-card-hint">外部工具伺服器</span>
+              </button>
+              <button className="cc-card cc-card-disabled" onClick={() => setConfigModal("skills")}>
+                <span className="cc-card-label">Skills</span>
+                <strong className="cc-card-value">Reserved</strong>
+                <span className="cc-card-hint">Coming Soon</span>
+              </button>
+              <button className="cc-card cc-card-disabled" onClick={() => setConfigModal("tools")}>
+                <span className="cc-card-label">Built-in Tools</span>
+                <strong className="cc-card-value">Reserved</strong>
+                <span className="cc-card-hint">Coming Soon</span>
+              </button>
             </div>
 
-            <div className="chat-config-resources">
-              <div className="content-grid resources-grid">
-                <div className="card panel">
+            {/* ── Config modals ── */}
+            {configModal === "agent" && (
+              <HelpModal title="Active Agent" onClose={() => setConfigModal(null)} width="min(480px, 92vw)">
+                <div style={{ display: "grid", gap: 8 }}>
+                  {agents.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => { setActiveAgentId(a.id); setConfigModal(null); }}
+                      style={{
+                        textAlign: "left",
+                        padding: 14,
+                        borderRadius: 12,
+                        border: a.id === activeAgentId ? "1px solid var(--primary)" : "1px solid var(--border)",
+                        background: a.id === activeAgentId ? "rgba(91,123,255,0.12)" : "var(--bg-2)",
+                        color: "var(--text)",
+                        cursor: "pointer"
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>{a.name}</div>
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>{a.type}{a.model ? ` · ${a.model}` : ""}</div>
+                    </button>
+                  ))}
+                </div>
+              </HelpModal>
+            )}
+
+            {configModal === "mode" && (
+              <HelpModal title="Mode" onClose={() => setConfigModal(null)} width="min(420px, 92vw)">
+                <div style={{ display: "grid", gap: 8 }}>
+                  {([["one_to_one", "Normal Talking", "一般一對一對話模式"], ["leader_team", "Goal-driven Talking", "Leader 規劃任務，派給 member 協作"]] as const).map(([value, title, desc]) => (
+                    <button
+                      key={value}
+                      onClick={() => { setMode(value); setConfigModal(null); }}
+                      style={{
+                        textAlign: "left",
+                        padding: 14,
+                        borderRadius: 12,
+                        border: mode === value ? "1px solid var(--primary)" : "1px solid var(--border)",
+                        background: mode === value ? "rgba(91,123,255,0.12)" : "var(--bg-2)",
+                        color: "var(--text)",
+                        cursor: "pointer"
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>{title}</div>
+                      <div style={{ fontSize: 12, opacity: 0.7 }}>{desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </HelpModal>
+            )}
+
+            {configModal === "history" && (
+              <HelpModal title="History & Retry" onClose={() => setConfigModal(null)} width="min(460px, 92vw)">
+                <div style={{ display: "grid", gap: 14 }}>
+                  <div>
+                    <label style={label}>Messages sent to model</label>
+                    <input type="number" min={1} max={200} value={historyMessageLimit} onChange={(e) => setHistoryMessageLimit(clampHistoryLimit(Number(e.target.value)))} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
+                  </div>
+                  <div>
+                    <label style={label}>Delay (sec)</label>
+                    <input type="number" min={0} max={10} value={retryDelaySec} onChange={(e) => { const n = Number(e.target.value); setRetryDelaySec(Number.isFinite(n) ? Math.max(0, Math.min(10, n)) : 0); }} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
+                  </div>
+                  <div>
+                    <label style={label}>Max retries</label>
+                    <input type="number" min={0} max={10} value={retryMax} onChange={(e) => { const n = Number(e.target.value); setRetryMax(Number.isFinite(n) ? Math.max(0, Math.min(10, n)) : 0); }} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
+                  </div>
+                  {mode === "leader_team" && (
+                    <div>
+                      <label style={label}>REACT max</label>
+                      <input type="number" min={0} max={5} value={reactMax} onChange={(e) => { const n = Number(e.target.value); setReactMax(Number.isFinite(n) ? Math.max(0, Math.min(5, n)) : 0); }} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
+                    </div>
+                  )}
+                  <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.6 }}>
+                    Default history is 10. Only the latest N messages are sent to the model.
+                  </div>
+                </div>
+              </HelpModal>
+            )}
+
+            {configModal === "team" && (
+              <HelpModal title="Leader Team Setup" onClose={() => setConfigModal(null)} width="min(480px, 92vw)">
+                <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 12, lineHeight: 1.6 }}>
+                  Leader: <strong>{activeAgent?.name ?? "None"}</strong>. Pick member agents below.
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {agents.filter((a) => a.id !== activeAgentId).map((a) => {
+                    const checked = memberAgentIds.includes(a.id);
+                    return (
+                      <label
+                        key={a.id}
+                        style={{
+                          display: "flex",
+                          gap: 10,
+                          alignItems: "center",
+                          padding: 14,
+                          borderRadius: 12,
+                          border: checked ? "1px solid rgba(91,123,255,0.45)" : "1px solid var(--border)",
+                          background: checked ? "rgba(91,123,255,0.08)" : "var(--bg-2)",
+                          cursor: "pointer"
+                        }}
+                      >
+                        <input type="checkbox" checked={checked} onChange={() => toggleMember(a.id)} />
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 13 }}>{a.name}</div>
+                          <div style={{ fontSize: 11, opacity: 0.7 }}>{a.type}{a.model ? ` · ${a.model}` : ""}</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </HelpModal>
+            )}
+
+            {configModal === "docs" && (
+              <HelpModal title="Docs" onClose={() => setConfigModal(null)} width="min(560px, 96vw)">
                 <DocsPanel
                   docs={docs}
                   selectedId={docEditorId}
@@ -1276,51 +1284,50 @@ export default function App() {
                   onSave={onSaveDoc}
                   onDelete={onDeleteDoc}
                 />
-              </div>
+              </HelpModal>
+            )}
 
-                <div className="card panel">
-                  <McpPanel
-                    servers={mcpServers}
-                    activeId={mcpPanelActiveId}
-                    toolsByServer={mcpToolsByServer}
-                    onChangeServers={onChangeMcpServers}
-                    onSelectActive={(id) => {
-                      setMcpPanelActiveId(id);
-                      if (id) {
-                        const server = mcpServers.find((s) => s.id === id);
-                        logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
-                      }
-                    }}
-                    onUpdateTools={(id, tools) => {
-                      setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
+            {configModal === "mcp" && (
+              <HelpModal title="MCP (SSE)" onClose={() => setConfigModal(null)} width="min(560px, 96vw)">
+                <McpPanel
+                  servers={mcpServers}
+                  activeId={mcpPanelActiveId}
+                  toolsByServer={mcpToolsByServer}
+                  onChangeServers={onChangeMcpServers}
+                  onSelectActive={(id) => {
+                    setMcpPanelActiveId(id);
+                    if (id) {
                       const server = mcpServers.find((s) => s.id === id);
-                      logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
-                    }}
-                    pushLog={pushLog}
-                  />
+                      logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
+                    }
+                  }}
+                  onUpdateTools={(id, tools) => {
+                    setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
+                    const server = mcpServers.find((s) => s.id === id);
+                    logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
+                  }}
+                  pushLog={pushLog}
+                />
+              </HelpModal>
+            )}
+
+            {configModal === "skills" && (
+              <HelpModal title="Skills" onClose={() => setConfigModal(null)}>
+                <div className="chat-config-skill-placeholder">
+                  <div className="chat-config-skill-badge">Coming Soon</div>
+                  <div>未來這裡會放 skill 啟用、權限、來源與載入策略設定。</div>
                 </div>
+              </HelpModal>
+            )}
 
-                <div className="card panel chat-config-card">
-                  <div className="chat-config-card-title">Skills</div>
-                  <div className="chat-config-card-note">預留未來 skill 設定入口，會和 Docs、MCP 並列管理。</div>
-
-                  <div className="chat-config-skill-placeholder">
-                    <div className="chat-config-skill-badge">Coming Soon</div>
-                    <div>未來這裡會放 skill 啟用、權限、來源與載入策略設定。</div>
-                  </div>
+            {configModal === "tools" && (
+              <HelpModal title="Built-in Tools" onClose={() => setConfigModal(null)}>
+                <div className="chat-config-skill-placeholder">
+                  <div className="chat-config-skill-badge">Coming Soon</div>
+                  <div>之後這裡會統一管理 built-in tool 的啟用、權限與使用說明。</div>
                 </div>
-
-                <div className="card panel chat-config-card">
-                  <div className="chat-config-card-title">Built-in Tools</div>
-                  <div className="chat-config-card-note">集中管理內建工具，包含 user info tool 等前端提供的能力。</div>
-
-                  <div className="chat-config-skill-placeholder">
-                    <div className="chat-config-skill-badge">Coming Soon</div>
-                    <div>之後這裡會統一管理 built-in tool 的啟用、權限與使用說明。</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+              </HelpModal>
+            )}
           </div>
         )}
 
@@ -1354,7 +1361,7 @@ export default function App() {
 
         {activeTab === "profile" && (
           <div className="content-grid">
-            <div className="card panel" style={{ width: "100%" }}>
+            <div className="card panel" style={{ width: "100%", boxSizing: "border-box" }}>
               <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 6 }}>Your Profile</div>
               <div style={{ fontSize: 13, opacity: 0.75, marginBottom: 16 }}>
                 Set the name, 自我描述, and 大頭照 shown for your side of the conversation. Agents with permission can also call the user info tool to read this profile.
