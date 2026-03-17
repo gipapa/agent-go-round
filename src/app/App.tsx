@@ -5,11 +5,14 @@ import { loadChatHistory, saveChatHistory } from "../storage/chatStore";
 import { loadBuiltInTools, saveBuiltInTools } from "../storage/builtInToolStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
 import {
+  loadModelCredentials,
+  ModelCredentialEntry,
   McpPromptTemplates,
   getDefaultMcpPromptTemplates,
   loadMcpPromptTemplates,
   loadMcpServers,
   loadUiState,
+  saveModelCredentials,
   saveMcpPromptTemplates,
   saveMcpServers,
   saveUiState
@@ -32,6 +35,7 @@ import HelpModal from "../ui/HelpModal";
 import McpPanel from "../ui/McpPanel";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
+import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -66,6 +70,12 @@ type ToolEntry =
             description: string;
             inputSchema?: any;
             handler: "user_profile";
+          }
+        | {
+            name: "pick_best_agent_for_question";
+            description: string;
+            inputSchema?: any;
+            handler: "agent_directory";
           }
         | {
             id: string;
@@ -182,6 +192,93 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeCredentialUrl(url?: string) {
+  return (url ?? "").trim().replace(/\/$/, "");
+}
+
+function describeCredentialEndpoint(url: string) {
+  if (!url) return { label: "Unconfigured Endpoint", hint: "請先設定 endpoint 或 URL" };
+  if (url === "https://api.openai.com/v1") return { label: "OpenAI", hint: url };
+  if (url === "https://api.groq.com/openai/v1") return { label: "Groq", hint: url };
+  try {
+    const parsed = new URL(url);
+    return { label: parsed.hostname, hint: url };
+  } catch {
+    return { label: url, hint: url };
+  }
+}
+
+function createCredentialEntry(preset: "openai" | "groq" | "custom", indexHint = 1): ModelCredentialEntry {
+  const now = Date.now();
+  if (preset === "openai") {
+    return {
+      id: generateId(),
+      preset,
+      label: "OpenAI",
+      endpoint: "https://api.openai.com/v1",
+      apiKey: "",
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+  if (preset === "groq") {
+    return {
+      id: generateId(),
+      preset,
+      label: "Groq",
+      endpoint: "https://api.groq.com/openai/v1",
+      apiKey: "",
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+  return {
+    id: generateId(),
+    preset,
+    label: `Custom ${indexHint}`,
+    endpoint: "",
+    apiKey: "",
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function getModelCredentialSlot(agent: AgentConfig): { id: string; label: string; hint: string } | null {
+  if (agent.type === "openai_compat") {
+    const endpoint = normalizeCredentialUrl(agent.endpoint || "https://api.openai.com/v1");
+    const meta = describeCredentialEndpoint(endpoint);
+    return { id: `openai_compat:${endpoint}`, label: meta.label, hint: meta.hint };
+  }
+  if (agent.type === "custom") {
+    const targetUrl = normalizeCredentialUrl(agent.custom?.url);
+    const meta = describeCredentialEndpoint(targetUrl);
+    return {
+      id: `custom:${targetUrl || "unconfigured"}`,
+      label: meta.label,
+      hint: targetUrl || "Custom adapter URL 尚未設定"
+    };
+  }
+  return null;
+}
+
+function EyeIcon(props: { open: boolean }) {
+  return props.open ? (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 8s2.2-3.5 6-3.5S14 8 14 8s-2.2 3.5-6 3.5S2 8 2 8Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 9.7a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4Z" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  ) : (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 8s2.2-3.5 6-3.5S14 8 14 8s-2.2 3.5-6 3.5S2 8 2 8Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m3 13 10-10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function isCategoryEnabled(flag: boolean | undefined) {
+  return flag !== false;
+}
+
 function buildToolDecisionPrompt(template: string, fallbackTemplate: string, userInput: string, toolListJson: string) {
   const baseTemplate = template.trim() || fallbackTemplate;
   const replacements: Record<string, string> = {
@@ -270,19 +367,21 @@ export default function App() {
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
-  type ConfigModalKey = "agent" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | null;
+  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
   const [docEditorId, setDocEditorId] = useState<string | null>(null);
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
+  const [modelCredentials, setModelCredentials] = useState<ModelCredentialEntry[]>(() => loadModelCredentials());
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => loadMcpServers());
   const [mcpPromptTemplates, setMcpPromptTemplates] = useState<McpPromptTemplates>(() => loadMcpPromptTemplates());
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [visibleCredentialIds, setVisibleCredentialIds] = useState<Record<string, boolean>>({});
   const [logCollapsed, setLogCollapsed] = useState(true);
   const [logHeight, setLogHeight] = useState(160);
   const [logSort, setLogSort] = useState<{ key: LogSortKey; dir: "asc" | "desc" }>({ key: "ts", dir: "desc" });
@@ -396,6 +495,10 @@ export default function App() {
   }, [builtInTools]);
 
   React.useEffect(() => {
+    saveModelCredentials(modelCredentials);
+  }, [modelCredentials]);
+
+  React.useEffect(() => {
     if (!historyLoaded) return;
     let cancelled = false;
     (async () => {
@@ -499,8 +602,38 @@ export default function App() {
     });
   }, [builtInTools]);
 
+  React.useEffect(() => {
+    setModelCredentials((prev) => {
+      let changed = false;
+      const next = [...prev];
+      agents.forEach((agent) => {
+        const slot = getModelCredentialSlot(agent);
+        const legacy = agent.apiKey?.trim();
+        if (slot && legacy && !next.some((entry) => normalizeCredentialUrl(entry.endpoint) === normalizeCredentialUrl(slot.hint))) {
+          next.push({
+            id: generateId(),
+            preset:
+              slot.hint === "https://api.openai.com/v1"
+                ? "openai"
+                : slot.hint === "https://api.groq.com/openai/v1"
+                ? "groq"
+                : "custom",
+            label: slot.label,
+            endpoint: slot.hint,
+            apiKey: legacy,
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          });
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [agents]);
+
   const docsForAgent = useMemo(() => {
     if (!activeAgent) return [];
+    if (!isCategoryEnabled(activeAgent.enableDocs)) return [];
     if (!activeAgent.allowedDocIds) return docs;
     const allowed = new Set(activeAgent.allowedDocIds);
     return docs.filter((d) => allowed.has(d.id));
@@ -508,6 +641,7 @@ export default function App() {
 
   const availableMcpServersForAgent = useMemo(() => {
     if (!activeAgent) return [];
+    if (!isCategoryEnabled(activeAgent.enableMcp)) return [];
     if (!activeAgent.allowedMcpServerIds) return mcpServers;
     const allowed = new Set(activeAgent.allowedMcpServerIds);
     return mcpServers.filter((s) => allowed.has(s.id));
@@ -524,20 +658,44 @@ export default function App() {
 
   const availableCustomBuiltInToolsForAgent = useMemo(() => {
     if (!activeAgent) return [];
+    if (!isCategoryEnabled(activeAgent.enableBuiltInTools)) return [];
     if (!activeAgent.allowedBuiltInToolIds) return builtInTools;
     const allowed = new Set(activeAgent.allowedBuiltInToolIds);
     return builtInTools.filter((tool) => allowed.has(tool.id));
   }, [activeAgent, builtInTools]);
 
   const availableBuiltinToolsForAgent = useMemo(
-    () => [
-      ...(activeAgent?.allowUserProfileTool
+    () =>
+      !activeAgent || !isCategoryEnabled(activeAgent.enableBuiltInTools)
+        ? []
+        : [
+      ...(activeAgent.allowUserProfileTool
         ? [
             {
               name: "get_user_profile" as const,
               description: "Get the current user's name, self-description, and whether an avatar is configured.",
               inputSchema: {},
               handler: "user_profile" as const
+            }
+          ]
+        : []),
+      ...(activeAgent.allowAgentDirectoryTool
+        ? [
+            {
+              name: "pick_best_agent_for_question" as const,
+              description:
+                "Given the user's question, return the name of the most suitable saved agent by comparing the question against each agent description. If none clearly match, return the first saved agent name.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  question: {
+                    type: "string",
+                    description: "The user's original question."
+                  }
+                },
+                required: ["question"]
+              },
+              handler: "agent_directory" as const
             }
           ]
         : []),
@@ -560,6 +718,57 @@ export default function App() {
     ],
     [availableMcpToolsForAgent, availableBuiltinToolsForAgent]
   );
+
+  const credentialSlots = useMemo(() => modelCredentials.slice().sort((a, b) => a.label.localeCompare(b.label)), [modelCredentials]);
+  const configuredCredentialCount = useMemo(
+    () => credentialSlots.filter((slot) => !!slot.apiKey.trim()).length,
+    [credentialSlots]
+  );
+
+  function resolveApiKeyForAgent(agent: AgentConfig) {
+    const slot = getModelCredentialSlot(agent);
+    const shared = slot
+      ? modelCredentials.find((entry) => normalizeCredentialUrl(entry.endpoint) === normalizeCredentialUrl(slot.hint))?.apiKey.trim() ?? ""
+      : "";
+    return shared || agent.apiKey?.trim() || undefined;
+  }
+
+  function hydrateAgentCredentials(agent: AgentConfig) {
+    const apiKey = resolveApiKeyForAgent(agent);
+    return apiKey && apiKey !== agent.apiKey ? { ...agent, apiKey } : agent;
+  }
+
+  function addCredential(preset: "openai" | "groq" | "custom") {
+    setModelCredentials((prev) => {
+      if (preset === "openai" && prev.some((entry) => entry.preset === "openai")) return prev;
+      if (preset === "groq" && prev.some((entry) => entry.preset === "groq")) return prev;
+      const customCount = prev.filter((entry) => entry.preset === "custom").length;
+      return [...prev, createCredentialEntry(preset, customCount + 1)];
+    });
+  }
+
+  function updateCredential(id: string, patch: Partial<ModelCredentialEntry>) {
+    setModelCredentials((prev) =>
+      prev.map((entry) =>
+        entry.id === id
+          ? {
+              ...entry,
+              ...patch,
+              updatedAt: Date.now()
+            }
+          : entry
+      )
+    );
+  }
+
+  function removeCredential(id: string) {
+    setModelCredentials((prev) => prev.filter((entry) => entry.id !== id));
+    setVisibleCredentialIds((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
 
   async function onSaveAgent(a: AgentConfig) {
     try {
@@ -755,7 +964,8 @@ export default function App() {
     try {
       if (mode === "one_to_one") {
         logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
-        const adapter = pickAdapter(activeAgent);
+        const resolvedActiveAgent = hydrateAgentCredentials(activeAgent);
+        const adapter = pickAdapter(resolvedActiveAgent);
         let finalInput = input;
 
         if (availableToolsForAgent.length === 0) {
@@ -768,7 +978,7 @@ export default function App() {
           }
         } else {
           const decision = await runToolDecision({
-            agent: activeAgent,
+            agent: resolvedActiveAgent,
             adapter,
             userInput: input,
             retry: { delaySec: retryDelaySec, max: retryMax },
@@ -798,9 +1008,9 @@ export default function App() {
             });
             finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
           } else if (decision.type === "builtin_tool_call") {
-            const targetTool = availableBuiltinToolsForAgent.find((tool) => tool.handler === "script" && tool.name === decision.tool) ?? null;
+            const targetTool = availableBuiltinToolsForAgent.find((tool) => tool.name === decision.tool) ?? null;
 
-            if (!targetTool || targetTool.handler !== "script") {
+            if (!targetTool) {
               const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${decision.tool} 的 built-in tool。`;
               append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
               logNow({
@@ -813,7 +1023,17 @@ export default function App() {
               finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
             } else {
               try {
-                const toolOutput = await runBuiltInScriptTool(targetTool, decision.input ?? {});
+                const toolOutput =
+                  targetTool.handler === "script"
+                    ? await runBuiltInScriptTool(targetTool, decision.input ?? {}, {
+                        pick_best_agent_for_question: async (question: string) =>
+                          pickBestAgentNameForQuestion(question, loadSavedAgentsFromStorage(), activeAgent.name)
+                      })
+                    : pickBestAgentNameForQuestion(
+                        String(decision.input?.question ?? input),
+                        agents,
+                        activeAgent.name
+                      );
                 const toolOutputText = stringifyAny(toolOutput);
                 const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
                 append(
@@ -930,7 +1150,7 @@ export default function App() {
 
         const full = await runOneToOne({
           adapter,
-          agent: activeAgent,
+          agent: resolvedActiveAgent,
           input: finalInput,
           history: limitHistory(history),
           system: userSystem,
@@ -949,8 +1169,10 @@ export default function App() {
       }
 
       // goal-driven talking: user input is a GOAL
-      const leaderAgent = activeAgent;
-      const memberAgents = agents.filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id);
+      const leaderAgent = hydrateAgentCredentials(activeAgent);
+      const memberAgents = agents
+        .filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id)
+        .map((agent) => hydrateAgentCredentials(agent));
 
       if (memberAgents.length === 0) {
         append(msg("assistant", "No member agents selected. Please select at least one member.", "system", { displayName: "System" }));
@@ -1203,10 +1425,11 @@ export default function App() {
 
     setIsSummaryExporting(true);
     try {
-      const adapter = pickAdapter(activeAgent);
+      const resolvedActiveAgent = hydrateAgentCredentials(activeAgent);
+      const adapter = pickAdapter(resolvedActiveAgent);
       const summary = await runOneToOne({
         adapter,
-        agent: activeAgent,
+        agent: resolvedActiveAgent,
         input:
           "Please compress this conversation into a concise reusable summary for future continuation. Keep key facts, decisions, unresolved items, user preferences, and open tasks. Output plain text only.",
         history,
@@ -1300,7 +1523,7 @@ export default function App() {
                 }}
                 leaderName={mode === "leader_team" ? activeAgent?.name : null}
                 userName={userProfile.name}
-                modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal talking"}
+                modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal (with doc and tools)"}
                 onExportRaw={exportRawHistory}
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
@@ -1324,9 +1547,14 @@ export default function App() {
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">{activeAgent?.type ?? ""}{activeAgent?.model ? ` · ${activeAgent.model}` : ""}</span>
               </button>
+              <button className="cc-card" onClick={() => setConfigModal("credentials")}>
+                <span className="cc-card-label">Credentials</span>
+                <strong className="cc-card-value">{configuredCredentialCount}/{credentialSlots.length}</strong>
+                <span className="cc-card-hint">集中管理模型金鑰與後續憑證</span>
+              </button>
               <button className="cc-card" onClick={() => setConfigModal("mode")}>
                 <span className="cc-card-label">Mode</span>
-                <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven" : "normal"}</strong>
+                <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven" : "normal (with doc and tools)"}</strong>
                 <span className="cc-card-hint">{mode === "leader_team" ? "Leader → Members" : "1:1 對話"}</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("history")}>
@@ -1392,7 +1620,7 @@ export default function App() {
             {configModal === "mode" && (
               <HelpModal title="Mode" onClose={() => setConfigModal(null)} width="min(420px, 92vw)">
                 <div style={{ display: "grid", gap: 8 }}>
-                  {([["one_to_one", "Normal Talking", "一般一對一對話模式"], ["leader_team", "Goal-driven Talking", "Leader 規劃任務，派給 member 協作"]] as const).map(([value, title, desc]) => (
+                  {([["one_to_one", "Normal (with doc and tools)", "一般一對一對話模式，會搭配 docs 與 tools"], ["leader_team", "Goal-driven Talking", "Leader 規劃任務，派給 member 協作"]] as const).map(([value, title, desc]) => (
                     <button
                       key={value}
                       onClick={() => { setMode(value); setConfigModal(null); }}
@@ -1410,6 +1638,98 @@ export default function App() {
                       <div style={{ fontSize: 12, opacity: 0.7 }}>{desc}</div>
                     </button>
                   ))}
+                </div>
+              </HelpModal>
+            )}
+
+            {configModal === "credentials" && (
+              <HelpModal title="Credentials" onClose={() => setConfigModal(null)} width="min(680px, 96vw)">
+                <div style={{ display: "grid", gap: 14 }}>
+                  <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.7 }}>
+                    這裡集中管理和模型或外部服務有關的 credentials。這一版先放共用的 Model API Key，會依 provider / endpoint 自動套用給所有相同服務的 agent。
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => addCredential("openai")} style={iconActionBtn}>
+                      + OpenAI
+                    </button>
+                    <button type="button" onClick={() => addCredential("groq")} style={iconActionBtn}>
+                      + Groq
+                    </button>
+                    <button type="button" onClick={() => addCredential("custom")} style={iconActionBtn}>
+                      + Custom
+                    </button>
+                  </div>
+                  {credentialSlots.length === 0 ? (
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>目前還沒有 credential。可先新增 OpenAI、Groq 或 Custom。</div>
+                  ) : (
+                    credentialSlots.map((slot) => (
+                      <div key={slot.id} className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                          <div>
+                            <div style={{ fontWeight: 800 }}>{slot.label}</div>
+                            <div style={{ fontSize: 12, opacity: 0.72 }}>{slot.endpoint || "尚未設定 endpoint"}</div>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            <div style={{ fontSize: 12, opacity: 0.72 }}>{slot.apiKey.trim() ? "已設定 API key" : "尚未設定 API key"}</div>
+                            <button type="button" onClick={() => removeCredential(slot.id)} style={dangerMiniBtn}>
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <label style={label}>Credential Name</label>
+                          <input
+                            value={slot.label}
+                            onChange={(e) => updateCredential(slot.id, { label: e.target.value })}
+                            style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
+                            placeholder="Credential label"
+                          />
+                        </div>
+
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <label style={label}>Endpoint</label>
+                          <input
+                            value={slot.endpoint}
+                            onChange={(e) => updateCredential(slot.id, { endpoint: e.target.value })}
+                            disabled={slot.preset === "openai" || slot.preset === "groq"}
+                            style={{
+                              width: "100%",
+                              marginTop: 0,
+                              boxSizing: "border-box",
+                              opacity: slot.preset === "openai" || slot.preset === "groq" ? 0.72 : 1,
+                              ...selectStyle
+                            }}
+                            placeholder="https://api.example.com/v1"
+                          />
+                        </div>
+
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <label style={label}>Model API Key</label>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input
+                              type={visibleCredentialIds[slot.id] ? "text" : "password"}
+                              value={slot.apiKey}
+                              onChange={(e) => {
+                                updateCredential(slot.id, { apiKey: e.target.value });
+                              }}
+                              style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
+                              placeholder="Enter API key"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setVisibleCredentialIds((prev) => ({ ...prev, [slot.id]: !prev[slot.id] }))}
+                              style={iconBtn}
+                              title={visibleCredentialIds[slot.id] ? "Hide API key" : "Show API key"}
+                              aria-label={visibleCredentialIds[slot.id] ? "Hide API key" : "Show API key"}
+                            >
+                              <EyeIcon open={!!visibleCredentialIds[slot.id]} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </HelpModal>
             )}
@@ -1548,8 +1868,9 @@ export default function App() {
                 onSave={onSaveAgent}
                 onDelete={onDeleteAgent}
                 onDetect={async (a) => {
-                  const adapter = pickAdapter(a);
-                  const r = adapter.detect ? await adapter.detect(a) : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
+                  const resolvedAgent = hydrateAgentCredentials(a);
+                  const adapter = pickAdapter(resolvedAgent);
+                  const r = adapter.detect ? await adapter.detect(resolvedAgent) : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
                   pushLog({
                     category: "detect",
                     agent: a.name,
@@ -1562,6 +1883,8 @@ export default function App() {
                 docs={docs}
                 mcpServers={mcpServers}
                 builtInTools={builtInTools}
+                credentialProviders={credentialSlots}
+                resolveApiKey={resolveApiKeyForAgent}
               />
             </div>
           </div>
@@ -1651,7 +1974,7 @@ export default function App() {
               }}
               leaderName={mode === "leader_team" ? activeAgent?.name : null}
               userName={userProfile.name}
-              modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal talking"}
+              modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal (with doc and tools)"}
               onExportRaw={exportRawHistory}
               onExportSummary={exportSummaryHistory}
               onImportHistory={importHistoryFile}
@@ -1753,4 +2076,35 @@ const selectStyle: React.CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--bg-2)",
   color: "var(--text)"
+};
+
+const iconBtn: React.CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--bg-2)",
+  color: "var(--text)",
+  display: "grid",
+  placeItems: "center",
+  cursor: "pointer",
+  flex: "0 0 auto"
+};
+
+const iconActionBtn: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 12,
+  border: "1px solid var(--border)",
+  background: "var(--panel-2)",
+  color: "var(--text)",
+  cursor: "pointer"
+};
+
+const dangerMiniBtn: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: 10,
+  border: "1px solid #4a2026",
+  background: "#1d1014",
+  color: "white",
+  cursor: "pointer"
 };

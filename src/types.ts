@@ -48,7 +48,11 @@ export type AgentConfig = {
   allowedDocIds?: string[];
   allowedMcpServerIds?: string[];
   allowedBuiltInToolIds?: string[];
+  enableDocs?: boolean;
+  enableMcp?: boolean;
+  enableBuiltInTools?: boolean;
   allowUserProfileTool?: boolean;
+  allowAgentDirectoryTool?: boolean;
 };
 
 export type DetectResult = {

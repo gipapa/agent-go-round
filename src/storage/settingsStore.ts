@@ -18,8 +18,20 @@ const UI_KEY = "agr_ui_v1";
 const MCP_KEY = "agr_mcp_v1";
 const MCP_ALIAS_KEY = "agr_mcp_aliases_v1";
 const MCP_PROMPT_KEY = "agr_mcp_prompt_templates_v1";
+const MODEL_CREDENTIALS_KEY = "agr_model_credentials_v1";
 
 export type McpToolAliases = Record<string, Record<string, string>>;
+export type ModelCredentialPreset = "openai" | "groq" | "custom";
+export type ModelCredentialEntry = {
+  id: string;
+  preset: ModelCredentialPreset;
+  label: string;
+  endpoint: string;
+  apiKey: string;
+  createdAt: number;
+  updatedAt: number;
+};
+export type ModelCredentials = ModelCredentialEntry[];
 export type McpPromptTemplateKey = "zh" | "en";
 export type McpPromptTemplates = {
   activeId: McpPromptTemplateKey;
@@ -139,4 +151,48 @@ export function loadMcpPromptTemplates(): McpPromptTemplates {
 
 export function saveMcpPromptTemplates(templates: McpPromptTemplates) {
   localStorage.setItem(MCP_PROMPT_KEY, JSON.stringify(templates));
+}
+
+export function loadModelCredentials(): ModelCredentials {
+  try {
+    const raw = localStorage.getItem(MODEL_CREDENTIALS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (item): item is ModelCredentialEntry =>
+          item &&
+          typeof item.id === "string" &&
+          typeof item.label === "string" &&
+          typeof item.endpoint === "string" &&
+          typeof item.apiKey === "string" &&
+          (item.preset === "openai" || item.preset === "groq" || item.preset === "custom")
+      );
+    }
+    if (parsed && typeof parsed === "object") {
+      const now = Date.now();
+      return Object.entries(parsed as Record<string, unknown>)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .map(([key, value], index) => {
+          const endpoint = key.includes(":") ? key.slice(key.indexOf(":") + 1) : "";
+          const preset = endpoint === "https://api.openai.com/v1" ? "openai" : endpoint === "https://api.groq.com/openai/v1" ? "groq" : "custom";
+          return {
+            id: `${preset}-${index}-${now}`,
+            preset,
+            label: preset === "openai" ? "OpenAI" : preset === "groq" ? "Groq" : `Custom ${index + 1}`,
+            endpoint,
+            apiKey: value,
+            createdAt: now,
+            updatedAt: now
+          };
+        });
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveModelCredentials(credentials: ModelCredentials) {
+  localStorage.setItem(MODEL_CREDENTIALS_KEY, JSON.stringify(credentials));
 }

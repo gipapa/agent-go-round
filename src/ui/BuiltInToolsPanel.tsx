@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { BuiltInToolConfig } from "../types";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
+import { pickBestSavedAgentForQuestion } from "../utils/agentDirectoryTool";
 import HelpModal from "./HelpModal";
 
 function emptyTool(index: number): BuiltInToolConfig {
@@ -88,7 +89,9 @@ export default function BuiltInToolsPanel(props: {
     setTestError(null);
     try {
       const input = JSON.parse(testInputDraft || "{}");
-      const output = await runBuiltInScriptTool(selectedTool, input);
+      const output = await runBuiltInScriptTool(selectedTool, input, {
+        pick_best_agent_for_question: pickBestSavedAgentForQuestion
+      });
       setTestResult(typeof output === "string" ? output : JSON.stringify(output, null, 2));
     } catch (error: any) {
       setTestResult("");
@@ -135,12 +138,198 @@ export default function BuiltInToolsPanel(props: {
             2. 如果程式 throw error，系統會把錯誤當成 tool failure 記錄並帶回對話
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
-            範例：
+            <div style={exampleTitle}>範例：彈出視窗工具</div>
+            這個工具會在頁面上直接跳出提示視窗，並把顯示的內容一併回傳給 agent。
+            <br />
+            Input schema：
+            <pre style={exampleBlock}>{`{}`}</pre>
+            JavaScript code：
             <pre style={exampleBlock}>{`const joke = "冷知識：CSS 最會的不是排版，是讓人懷疑人生。";
 alert(joke);
 return {
   joke,
   source: "built-in tool"
+};`}</pre>
+          </div>
+          <hr style={divider} />
+          <div style={{ ...helpText, marginTop: 8 }}>
+            <div style={exampleTitle}>範例：取得目前時間</div>
+            這個工具會讀取目前瀏覽器時間與時區，適合回答現在幾點、目前時區等問題。
+            <br />
+            Input schema：
+            <pre style={exampleBlock}>{`{}`}</pre>
+            JavaScript code：
+            <pre style={exampleBlock}>{`const now = new Date().toISOString();
+return {
+  now,
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+};`}</pre>
+          </div>
+          <hr style={divider} />
+          <div style={{ ...helpText, marginTop: 8 }}>
+            <div style={exampleTitle}>範例：幫使用者做簡單數學</div>
+            例如工具描述可以寫成「幫助使用者計算兩個數字相加」，
+            並讓模型傳入 <code>{`{"a":1,"b":1}`}</code> 這類 input。
+            <br />
+            Input schema：
+            <pre style={exampleBlock}>{`{
+  "type": "object",
+  "properties": {
+    "a": { "type": "number", "description": "第一個數字" },
+    "b": { "type": "number", "description": "第二個數字" }
+  },
+  "required": ["a", "b"]
+}`}</pre>
+            JavaScript code：
+            <pre style={exampleBlock}>{`const a = Number(input?.a ?? 0);
+const b = Number(input?.b ?? 0);
+
+if (!Number.isFinite(a) || !Number.isFinite(b)) {
+  throw new Error("Input must contain numeric a and b.");
+}
+
+return {
+  a,
+  b,
+  result: a + b
+};`}</pre>
+          </div>
+          <hr style={divider} />
+          <div style={{ ...helpText, marginTop: 8 }}>
+            <div style={exampleTitle}>範例：呼叫已儲存的 AI provider endpoint</div>
+            這種做法適合你想把任何一個已儲存 agent 當成工具來呼叫。
+            例如工具描述可以寫成「依照需求使用指定 agent 回答問題」。
+            下例會根據 <code>input.agentName</code> 找到對應的 agent，再使用 <code>input.prompt</code>
+            當成要送給該 agent 的使用者問題。
+            <br />
+            Input schema：
+            <pre style={exampleBlock}>{`{
+  "type": "object",
+  "properties": {
+    "agentName": { "type": "string", "description": "要使用的已儲存 agent 名稱" },
+    "prompt": { "type": "string", "description": "要交給該 agent 回答的問題" }
+  },
+  "required": ["agentName", "prompt"]
+}`}</pre>
+            JavaScript code：
+            <pre style={exampleBlock}>{`const agents = JSON.parse(localStorage.getItem("agr_agents_v1") || "[]");
+const credentials = JSON.parse(localStorage.getItem("agr_model_credentials_v1") || "[]");
+const agentName = String(input?.agentName ?? "").trim();
+const prompt = String(input?.prompt ?? "").trim();
+
+if (!agentName) {
+  throw new Error("Input must include agentName.");
+}
+
+if (!prompt) {
+  throw new Error("Input must include prompt.");
+}
+
+const agent = agents.find((item) => item.name === agentName);
+
+if (!agent) {
+  throw new Error(\`Agent \${agentName} not found.\`);
+}
+
+if (agent.type !== "openai_compat") {
+  throw new Error("This example expects an openai_compat agent.");
+}
+
+const endpoint = String(agent.endpoint || "").replace(/\\/$/, "");
+const credential = credentials.find(
+  (item) => String(item.endpoint || "").replace(/\\/$/, "") === endpoint && item.apiKey
+);
+
+if (!credential) {
+  throw new Error(\`Credential for \${agentName} not found.\`);
+}
+
+const response = await fetch(\`\${endpoint}/chat/completions\`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: \`Bearer \${credential.apiKey}\`
+  },
+  body: JSON.stringify({
+    model: agent.model || "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }]
+  })
+});
+
+if (!response.ok) {
+  throw new Error(\`Provider request failed: \${response.status}\`);
+}
+
+const json = await response.json();
+return {
+  text: json.choices?.[0]?.message?.content ?? "",
+  agent: agentName,
+  model: agent.model || "gpt-4o-mini"
+};`}</pre>
+          </div>
+          <hr style={divider} />
+          <div style={{ ...helpText, marginTop: 8 }}>
+            <div style={exampleTitle}>範例：自動選擇適合的 Agent 來回覆問題</div>
+            這個工具會先呼叫內建 helper <code>pick_best_agent_for_question</code>，
+            從已儲存的 agent 清單中挑出最適合處理問題的 agent，然後再代替使用者呼叫該 agent。
+            <br />
+            Input schema：
+            <pre style={exampleBlock}>{`{
+  "type": "object",
+  "properties": {
+    "question": { "type": "string", "description": "使用者原始問題" }
+  },
+  "required": ["question"]
+}`}</pre>
+            JavaScript code：
+            <pre style={exampleBlock}>{`const agents = JSON.parse(localStorage.getItem("agr_agents_v1") || "[]");
+const credentials = JSON.parse(localStorage.getItem("agr_model_credentials_v1") || "[]");
+const question = String(input?.question ?? "").trim();
+
+if (!question) {
+  throw new Error("Input must include question.");
+}
+
+const agentName = await pick_best_agent_for_question(question);
+const agent = agents.find((item) => item.name === agentName);
+
+if (!agent) {
+  throw new Error(\`Agent \${agentName} not found.\`);
+}
+
+if (agent.type !== "openai_compat") {
+  throw new Error("This example expects an openai_compat agent.");
+}
+
+const endpoint = String(agent.endpoint || "").replace(/\\/$/, "");
+const credential = credentials.find(
+  (item) => String(item.endpoint || "").replace(/\\/$/, "") === endpoint && item.apiKey
+);
+
+if (!credential) {
+  throw new Error(\`Credential for \${agentName} not found.\`);
+}
+
+const response = await fetch(\`\${endpoint}/chat/completions\`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: \`Bearer \${credential.apiKey}\`
+  },
+  body: JSON.stringify({
+    model: agent.model || "gpt-4o-mini",
+    messages: [{ role: "user", content: question }]
+  })
+});
+
+if (!response.ok) {
+  throw new Error(\`Provider request failed: \${response.status}\`);
+}
+
+const json = await response.json();
+return {
+  selectedAgent: agentName,
+  answer: json.choices?.[0]?.message?.content ?? ""
 };`}</pre>
           </div>
         </HelpModal>
@@ -190,9 +379,6 @@ return {
           <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <div style={{ fontWeight: 800 }}>Tool Editor</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={runTest} style={btnSmall} disabled={isRunningTest}>
-                {isRunningTest ? "Testing..." : "Test Tool"}
-              </button>
               <button type="button" onClick={() => deleteTool(selectedTool.id)} style={btnDangerSmall}>
                 Delete Tool
               </button>
@@ -248,7 +434,12 @@ return {
           </div>
 
           <div className="card" style={{ padding: 12, display: "grid", gap: 10, background: "rgba(255,255,255,0.02)" }}>
-            <div style={{ fontWeight: 700 }}>Test Runner</div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 700 }}>Test Runner</div>
+              <button type="button" onClick={runTest} style={btnSmall} disabled={isRunningTest}>
+                {isRunningTest ? "Testing..." : "Test Tool"}
+              </button>
+            </div>
             <div>
               <label style={label}>Test input (JSON)</label>
               <textarea
@@ -318,6 +509,18 @@ const helpBtn: React.CSSProperties = {
   color: "var(--text)",
   fontWeight: 800,
   cursor: "pointer"
+};
+
+const divider: React.CSSProperties = {
+  border: "none",
+  borderTop: "1px solid rgba(255,255,255,0.12)",
+  margin: "12px 0"
+};
+
+const exampleTitle: React.CSSProperties = {
+  fontSize: 17,
+  fontWeight: 800,
+  marginBottom: 6
 };
 
 const helpText: React.CSSProperties = {

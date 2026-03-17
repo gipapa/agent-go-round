@@ -1,289 +1,204 @@
 # AgentGoRound
 
-**AgentGoRound** is a **browser-first agent playground** where multiple AI agents “go round”, collaborate, and solve tasks through simple orchestration patterns — **normal talking** and **goal-driven talking**.
+**AgentGoRound is a browser-first, frontend-only agent playground.** It runs entirely in the browser with no required backend, making it easy to experiment with multi-agent chat, docs context, MCP tools, and browser-side built-in tools, then deploy directly to GitHub Pages.
 
-This repository contains a working MVP built with **Vite + React + TypeScript**, designed to be deployed to **GitHub Pages**.
+**AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。** 整個專案以純前端為核心，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
 
-## Features (MVP)
+## 專案特色
 
-- **Agent management**
-  - Add / edit / delete agents
-  - Upload agent profile photos for lists, settings, and chat messages
-  - Edit agent settings inside a modal, with detect results shown in a separate modal
-  - Built-in adapters:
-    - `chrome_prompt` (Chrome built-in AI / Prompt API)
-    - `openai_compat` (OpenAI-compatible `/v1/chat/completions` streaming)
-    - `custom` (manual mapping: body template + response JSONPath)
-  - OpenAI-compatible endpoint presets for OpenAI and Groq
-  - **Auto-detect** for OpenAI-compatible endpoints via `GET /v1/models`
-  - Load active OpenAI-compatible models from `GET /models`, then choose from a dropdown or switch to custom model input
-  - Per-agent access control for docs, MCP servers, the built-in `user info` tool, and custom browser-side JS tools
+- 純前端架構
+  - 主要由 `Vite + React + TypeScript` 組成
+  - 可直接部署到 `GitHub Pages`
+  - 不需要自建 app server 才能使用主要功能
+- Agent 管理
+  - 新增 / 編輯 / 刪除 agent
+  - 設定名稱、描述、大頭照、provider、endpoint、model
+  - 依 agent 控制可使用的 docs、MCP、built-in tools
+- Chat
+  - 支援一般聊天與 leader / team 協作
+  - 對話歷史會保存在 IndexedDB，重新整理後可延續
+  - 可匯入 / 匯出原始歷史與濃縮歷史
+  - 支援全頁聊天模式
+- Docs
+  - 以 IndexedDB 儲存文件
+  - 允許的 docs 會被注入對應 agent 的 system context
+- MCP
+  - 以 SSE 連接 MCP server
+  - 可自訂 Tool Decision Prompt
+  - 支援中文 / English template
+- Built-in Tools
+  - 可直接撰寫瀏覽器端 JavaScript 工具
+  - 可在編輯器內直接測試
+  - 支援內建 helper，例如 `pick_best_agent_for_question`
+- Profile 與 Credentials
+  - 可設定使用者名稱、自我描述、大頭照
+  - `Credentials` 集中管理 OpenAI / Groq / Custom provider keys
+  - 相同 endpoint 的 agent 可共用同一組 key
 
-- **Chat with history**
-  - Frontend stores and injects history; adapters translate it into provider-specific formats.
-  - Control how many recent messages are sent back to the model (default: 10)
-  - Persist the current conversation in IndexedDB so reloading the page can continue the same chat
-  - Import raw history or compressed carry-over summaries to continue a previous conversation
-  - Export raw history or ask the active model to generate a compressed summary export
+## 架構重點
 
-- **Docs (local)**
-  - Simple plaintext document vault backed by **IndexedDB**
-  - Allowed docs for the active agent are injected into the system context (MVP)
+### Frontend-only
 
-### Docs usage and testing
+這個專案刻意強調 frontend-only：
 
-- In `normal talking`, allowed docs are assembled in `src/app/App.tsx` and injected as extra system context before the model request is sent through `src/orchestrators/oneToOne.ts` and the active adapter such as `src/adapters/openaiCompat.ts`.
-- This means docs are not retrieved by a separate vector search step. They are appended directly into the prompt for the currently active agent.
+- agent 設定、credentials、MCP prompt templates 等資料主要存在 `localStorage`
+- docs 與 chat history 主要存在 `IndexedDB`
+- built-in tools 直接在目前頁面的瀏覽器環境中執行
+- 如果 provider 支援 CORS，前端可以直接呼叫模型 API
 
-How to test docs locally:
+這代表：
 
-1. Start the app with `bash run.sh -dev`.
-2. Open `Chat Config` and create a doc in the `Docs` panel.
-3. Put obvious test content in the doc, for example `彩蛋碼是 42`.
-4. In `Agents`, make sure the current agent is allowed to access that doc.
-5. Go back to `Chat`, keep mode on `normal talking`, and ask something like `根據文件，彩蛋碼是多少？`
-6. If docs are working, the model should answer using the doc content.
+- 優點：部署簡單、開發快速、很適合做 agent workflow 原型
+- 代價：API keys 與自訂 JS tool 都在瀏覽器端，安全性不適合作為正式生產方案
 
-### Built-in tools usage and testing
+## 主要功能
 
-- Custom built-in tools are defined in `Chat Config -> Built-in Tools` and stored locally in `src/storage/builtInToolStore.ts`.
-- Tool code runs in the browser through `src/utils/runBuiltInScriptTool.ts`, and both the editor test button and the actual agent flow use the same execution path.
-- During `normal talking`, the active tool-decision prompt can ask the model to return:
+### 1. Agents
 
-```json
-{"type":"builtin_tool_call","tool":"your_tool_name","input":{}}
+- 支援 `openai_compat`、`chrome_prompt`、`custom`
+- `openai_compat` 可從 `/models` 載入 active models
+- 編輯視窗可設定：
+  - `Profile`
+  - `Access Control`
+- `Access Control` 可控制：
+  - Docs
+  - MCP tools
+  - Custom JS tools
+  - `get_user_profile`
+  - `pick_best_agent_for_question`
+
+### 2. Chat Config
+
+`Chat Config` 集中管理：
+
+- Active agent
+- Credentials
+- Mode
+- History & Retry
+- Docs
+- MCP
+- Built-in Tools
+- Skills（預留）
+
+### 3. Docs
+
+- 每份文件都儲存在瀏覽器本地
+- agent 若被允許使用某份 doc，該內容會在送 request 前注入 prompt context
+- 這不是向量資料庫 / RAG pipeline，而是直接 prompt injection 的 MVP 設計
+
+### 4. MCP
+
+- 透過 SSE 連接 MCP server
+- 支援列出工具與手動 call tool
+- 自動工具判斷會先跑 `Tool Decision Prompt`
+- 如果 model 回傳合法 schema，前端才會代呼叫 MCP 並把結果回填到最終問題中
+
+### 5. Built-in Tools
+
+- 自訂 JS tool 可直接使用：
+  - `alert`
+  - `window`
+  - `document`
+  - 其他目前頁面可用的瀏覽器環境
+- `Test Runner` 可直接測試 `input schema` 與 JS code
+- 目前也有隱藏內建工具可供 agent 使用：
+  - `get_user_profile`
+  - `pick_best_agent_for_question`
+
+## 本機啟動
+
+安裝並啟動 dev server：
+
+```bash
+bash run.sh -dev
 ```
 
-- The app executes the JavaScript, captures the returned value, and injects that result back into the user question before the final answer is generated.
+預設網址：
 
-How to test built-in tools locally:
+```text
+http://127.0.0.1:5566/
+```
 
-1. Open `Chat Config -> Built-in Tools`.
-2. Create a tool with a unique name and a clear description.
-3. Write JavaScript that returns a value, for example:
-   ```js
-   const joke = "冷知識：CSS 最會的不是排版，是讓人懷疑人生。";
-   alert(joke);
-   return {
-     joke,
-     source: "built-in tool"
-   };
-   ```
-4. Click `Test Tool` to execute the current code directly in the browser.
-5. In `Agents`, allow the target agent to use that custom JS tool.
-6. Go back to `Chat` and ask something that should cause the model to choose the tool.
-
-- **MCP (SSE)**
-  - Connect to MCP servers via **SSE**
-  - Rename MCP servers for easier identification
-  - List tools and call tools (client expects an accompanying POST RPC endpoint — see below)
-  - Configure a `Tool Decision Prompt` with Chinese and English templates while keeping JSON schema examples in English
-
-- **Built-in tools**
-  - Agents can optionally use a local `user info` tool to read the current profile name, self-description, and whether a profile photo is configured
-  - Create custom browser-side JavaScript tools in `Chat Config -> Built-in Tools`
-  - Each custom tool includes `name`, `description`, optional `input schema`, and JavaScript code
-  - Test custom tool code directly in the editor before letting agents use it
-  - Built-in tools are enabled per-agent from the `Agents` tab and documented with dedicated help modals
-
-- **Orchestration modes**
-  - `normal talking`
-  - `goal-driven talking` (leader plans tasks → dispatches to workers → leader synthesizes)
-- **Polished dark UI**
-  - Consistent card, button, and input styling with subtle gradients and shadows
-  - Tabs (Chat / Chat Config / Agents / Profile) in a framed bar with clearer active state
-  - Social-style chat bubbles with speaker names, timestamps, and avatars for multi-agent conversations
-  - MCP tool results in normal talking can be expanded under the final assistant reply instead of occupying a separate bubble
-  - Assistant replies that contain `<think>...</think>` render the visible answer normally and expose the thinking block through a collapsible section
-  - Mobile chat layout keeps desktop styling intact while improving small-screen controls, spacing, and horizontal action scrolling
-
-- **Resource and settings hub**
-  - `Chat Config` centralizes active agent, chat mode, history window, retry policy, docs, MCP, built-in tools, and future skills
-  - Includes a reserved `Skills` section for upcoming configuration work
-  - Docs and MCP panels include centered help modals mounted above the page, dim the rest of the layout, and close with `Close` or `Esc`
-
-- **Profile settings**
-  - Set your own character name, self-description, and profile photo from the dedicated `Profile` tab
-
-- **Chat controls**
-  - `Alt+Enter` sends the message
-  - Clear chat button resets the current conversation
-  - Full-page chat mode opens the conversation in a large modal focused on messages, input, send, and exit controls
-  - New messages and local typing keep the chat view pinned to the latest entry
-
-## goal-driven talking (agent-to-agent coordination)
-
-In **goal-driven talking** mode you explicitly configure:
-
-1. **Leader agent**
-2. **Member agents**
-
-Then, in chat, your message is treated as a **GOAL**. The leader runs a controlled loop:
-
-- Leader decides the next action (**ask one member**, or **finish**)
-- The chosen member replies
-- Leader updates progress and decides who to ask next
-- Leader ends the session when the goal is achieved (or max rounds is reached)
-
-Implementation detail: the leader is instructed to output a strict JSON action object:
-- `{ "type": "ask_member", "memberId": "...", "message": "..." }`
-- `{ "type": "finish", "answer": "..." }`
-
-## Quick start
+一般啟動：
 
 ```bash
 bash run.sh
 ```
 
-During local dev the app is served from `/`. Production builds default to `/agent-go-round/` for GitHub Pages; override with `BASE_PATH` or `VITE_BASE_PATH` when deploying to a different subpath.
+## 測試與建置
 
-## Tests
-
-Run the test suite:
+執行測試：
 
 ```bash
 npm test
 ```
 
-This repo uses a versioned pre-push hook to run tests before pushing. If hooks are not active, enable them with:
+執行 build：
 
 ```bash
-git config core.hooksPath .githooks
+npm run build
 ```
 
-## Deploy to GitHub Pages (two options)
+## GitHub Pages 部署
 
-### Option A: `gh-pages` script
-
-1) Make sure your repo name is: **agent-go-round**  
-2) In `vite.config.ts`, `repoName` should match the repo name.
-
-Deploy:
+直接部署：
 
 ```bash
 npm run deploy
 ```
 
-This builds to `dist/` and pushes it to the `gh-pages` branch.
+此指令會：
 
-### Option B: GitHub Actions (recommended)
+1. build 專案
+2. 將 `dist/` 推到 `gh-pages` branch
 
-Create `.github/workflows/pages.yml` (template included below), then enable Pages with “GitHub Actions” as the source.
+## MCP 測試伺服器
 
-## MCP over SSE notes (important)
+專案內附一個簡單的本機 MCP 測試 server：
 
-This MVP uses `EventSource` for SSE. **EventSource cannot send custom headers.**  
-If you need auth, prefer:
-- Querystring token (e.g. `.../sse?token=...`), or
-- Same-site cookies (host MCP and AgentGoRound on the same origin)
-
-Also: SSE is **server → client** only. To send requests from client → server, the MVP expects an HTTP POST endpoint:
-
-- SSE endpoint: `https://your-host/mcp/sse`
-- RPC endpoint: `https://your-host/mcp/rpc` (derived by replacing `/sse` with `/rpc`)
-
-The client sends JSON like:
-
-```json
-{ "id": "uuid", "method": "tools/list", "params": {} }
+```bash
+cd mcp-test
+bash run.sh
 ```
 
-And expects either:
-- An immediate JSON response to the POST, **or**
-- A response later via SSE with the same `id`.
+預設端點：
 
-### MCP quickstart (local)
-
-1) Run an MCP server that exposes:
-   - SSE: `http://localhost:3333/mcp/sse`
-   - RPC: `http://localhost:3333/mcp/rpc` (POST) implementing `tools/list` and `tools/call`
-2) In the **MCP (SSE)** panel (right column), paste the SSE URL and click **Add**.
-3) Click **Connect & List Tools**. The returned tools are saved for that server and shown in the panel.
-4) You can manually call a tool in the panel and configure the `Tool Decision Prompt` template used before automatic tool selection.
-5) You can edit the MCP server name in the MCP panel for easier identification.
-
-#### Example MCP server (repo: `./mcp-test`)
-
-- Location: `./mcp-test`
-- Tools: `echo` (returns text) and `time` (returns current server time)
-- Run it:
-  ```bash
-  cd mcp-test
-  bash run.sh
-  ```
-- Endpoints exposed: `http://localhost:3333/mcp/sse` and `http://localhost:3333/mcp/rpc` (printed on startup with the tool list)
-
-## Security
-
-This MVP stores API keys in the browser (localStorage). Users can inspect the page and extract the key.
-For production, use a small server-side proxy (or your own gateway) to protect secrets.
-
-Custom built-in tools execute user-provided JavaScript in the same browser context as the app. There is no sandbox yet, so only run code you trust.
-
-## Known issues (current review)
-
-- MCP SSE clients are created per list/call and never closed (`src/ui/McpPanel.tsx`, `src/app/App.tsx`), so repeated tool use can leak browser EventSource connections.
-- The sample MCP server lacks request validation and will throw on malformed JSON or missing fields (`mcp-test/server.js`); add guards before reading `req.body.id/method`.
-
-## Repo structure
-
+```text
+http://127.0.0.1:3333/mcp/sse
+http://127.0.0.1:3333/mcp/rpc
 ```
+
+如果你是在 Windows 瀏覽器 + WSL server 的環境中測試，通常應優先使用 WSL IP，而不是 `127.0.0.1`。
+
+## 資料儲存
+
+- `localStorage`
+  - agents
+  - credentials
+  - MCP prompt templates
+  - UI state
+- `IndexedDB`
+  - docs
+  - chat history
+
+## 安全性注意事項
+
+- 這個專案是純前端，所以 provider API keys 會存在瀏覽器端
+- Custom built-in tools 會直接執行使用者輸入的 JavaScript
+- 目前沒有 sandbox
+- 正式上線若要保護 secrets，建議改成 server-side proxy 或自建 gateway
+
+## 專案結構
+
+```text
 src/
-  adapters/        # Provider adapters (Chrome Prompt API, OpenAI-compatible, Custom)
-  orchestrators/   # Collaboration patterns (normal talking, goal-driven talking)
-  mcp/             # MCP SSE client + tool registry
-  storage/         # agent/settings (localStorage) + docs/chat history (IndexedDB)
-  ui/              # React panels
-run.sh             # Install deps if needed and start the dev server
-mcp-test/          # Example MCP server for local testing
-  run.sh           # Install deps and start the MCP test server
-  app/             # App shell
+  adapters/        Provider adapters
+  app/             App shell
+  mcp/             MCP SSE client + tool registry
+  orchestrators/   Chat orchestration
+  storage/         localStorage / IndexedDB helpers
+  ui/              React panels
+  utils/           Shared utilities
+mcp-test/          Local MCP test server
+run.sh             Dev / run helper
 ```
-
-## GitHub Actions Pages workflow (copy/paste)
-
-Create `.github/workflows/pages.yml`:
-
-```yml
-name: Deploy to GitHub Pages
-on:
-  push:
-    branches: [ "main" ]
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - run: npm ci
-      - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
-
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
-```
-
-## License
-
-MIT
