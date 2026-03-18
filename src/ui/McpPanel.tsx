@@ -17,21 +17,30 @@ export default function McpPanel(props: {
   onUpdateTools: (id: string, tools: McpTool[]) => void;
   pushLog: (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => void;
 }) {
-  const [draftUrl, setDraftUrl] = useState("");
-  const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? null, [props.servers, props.activeId]);
+  const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? props.servers[0] ?? null, [props.servers, props.activeId]);
   const [showHelp, setShowHelp] = useState(false);
   const [showPromptConfig, setShowPromptConfig] = useState(false);
   const [templateEditorId, setTemplateEditorId] = useState<McpPromptTemplateKey>(props.promptTemplates.activeId);
-  const defaultTemplates = useMemo(() => getDefaultMcpPromptTemplates(), []);
-
-  const tools = useMemo(() => (active ? props.toolsByServer[active.id] ?? [] : []), [props.toolsByServer, active]);
+  const [editingServerId, setEditingServerId] = useState<string | null>(null);
+  const [serverDraft, setServerDraft] = useState<McpServerConfig | null>(null);
+  const [draftTools, setDraftTools] = useState<McpTool[]>([]);
+  const [draftValidated, setDraftValidated] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [toolName, setToolName] = useState("");
   const [toolInput, setToolInput] = useState("{}");
   const [toolOutput, setToolOutput] = useState("");
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isCallingTool, setIsCallingTool] = useState(false);
+  const defaultTemplates = useMemo(() => getDefaultMcpPromptTemplates(), []);
 
   React.useEffect(() => {
     setTemplateEditorId(props.promptTemplates.activeId);
   }, [props.promptTemplates.activeId]);
+
+  React.useEffect(() => {
+    if (props.activeId && props.servers.some((server) => server.id === props.activeId)) return;
+    props.onSelectActive(props.servers[0]?.id ?? null);
+  }, [props.activeId, props.onSelectActive, props.servers]);
 
   function deriveRpcUrl(sseUrl: string) {
     try {
@@ -44,28 +53,7 @@ export default function McpPanel(props: {
   }
 
   function resolveToolName(input: string) {
-    const trimmed = input.trim();
-    if (!trimmed) return trimmed;
-    return trimmed;
-  }
-
-  function updateServerName(id: string, name: string) {
-    const next = props.servers.map((s) => (s.id === id ? { ...s, name } : s));
-    props.onChangeServers(next);
-  }
-
-  function addServer() {
-    const url = draftUrl.trim();
-    if (!url) return;
-    const s: McpServerConfig = { id: generateId(), name: `MCP ${props.servers.length + 1}`, sseUrl: url };
-    props.onChangeServers([s, ...props.servers]);
-    props.onSelectActive(s.id);
-    setDraftUrl("");
-  }
-
-  function removeServer(id: string) {
-    props.onChangeServers(props.servers.filter((s) => s.id !== id));
-    if (props.activeId === id) props.onSelectActive(null);
+    return input.trim();
   }
 
   function updateTemplate(id: McpPromptTemplateKey, value: string) {
@@ -80,76 +68,168 @@ export default function McpPanel(props: {
     updateTemplate(id, defaultTemplates[id]);
   }
 
-  async function connectAndList() {
-    if (!active) return;
-    const client = new McpSseClient(active);
-    client.connect((t) => props.pushLog({ category: "mcp", agent: active.name, message: t }));
+  function openEditor(server?: McpServerConfig) {
+    if (server) {
+      setEditingServerId(server.id);
+      setServerDraft({ ...server });
+      setDraftTools(props.toolsByServer[server.id] ?? []);
+      setDraftValidated(Object.prototype.hasOwnProperty.call(props.toolsByServer, server.id));
+    } else {
+      const next: McpServerConfig = {
+        id: generateId(),
+        name: `MCP ${props.servers.length + 1}`,
+        sseUrl: ""
+      };
+      setEditingServerId(next.id);
+      setServerDraft(next);
+      setDraftTools([]);
+      setDraftValidated(false);
+    }
+    setDraftError(null);
+    setToolName("");
+    setToolInput("{}");
+    setToolOutput("");
+  }
+
+  function closeEditor() {
+    setEditingServerId(null);
+    setServerDraft(null);
+    setDraftTools([]);
+    setDraftValidated(false);
+    setDraftError(null);
+    setToolName("");
+    setToolInput("{}");
+    setToolOutput("");
+    setIsConnecting(false);
+    setIsCallingTool(false);
+  }
+
+  function removeServer(id: string) {
+    props.onChangeServers(props.servers.filter((server) => server.id !== id));
+    if (props.activeId === id) {
+      props.onSelectActive(props.servers.find((server) => server.id !== id)?.id ?? null);
+    }
+  }
+
+  function updateDraft(patch: Partial<McpServerConfig>) {
+    setServerDraft((current) => {
+      if (!current) return current;
+      const next = { ...current, ...patch };
+      if (patch.sseUrl !== undefined && patch.sseUrl !== current.sseUrl) {
+        setDraftValidated(false);
+        setDraftTools([]);
+        setToolName("");
+        setToolOutput("");
+      }
+      return next;
+    });
+  }
+
+  async function connectAndListDraft() {
+    if (!serverDraft?.sseUrl.trim()) {
+      setDraftError("請先輸入 SSE URL。");
+      return;
+    }
+    setIsConnecting(true);
+    setDraftError(null);
+    const client = new McpSseClient(serverDraft);
+    client.connect((text) => props.pushLog({ category: "mcp", agent: serverDraft.name, message: text }));
     try {
-      const ts = await listTools(client);
-      props.onUpdateTools(active.id, ts);
-      const rpcUrl = deriveRpcUrl(active.sseUrl);
+      const tools = await listTools(client);
+      setDraftTools(tools);
+      setDraftValidated(true);
+      const rpcUrl = deriveRpcUrl(serverDraft.sseUrl);
       props.pushLog({
         category: "mcp",
-        agent: active.name,
+        agent: serverDraft.name,
         ok: true,
         message: "MCP endpoints",
-        details: `SSE: ${active.sseUrl}\nRPC: ${rpcUrl}`
+        details: `SSE: ${serverDraft.sseUrl}\nRPC: ${rpcUrl}`
       });
       props.pushLog({
         category: "mcp",
-        agent: active.name,
+        agent: serverDraft.name,
         ok: true,
-        message: `tools/list -> ${ts.length} tools`,
-        details: ts.map((t) => t.name).join("\n") || "(no tools)"
+        message: `tools/list -> ${tools.length} tools`,
+        details: tools.map((tool) => tool.name).join("\n") || "(no tools)"
       });
-    } catch (e: any) {
+    } catch (error: any) {
+      setDraftValidated(false);
+      setDraftTools([]);
+      setDraftError(String(error?.message ?? error));
       props.pushLog({
         category: "mcp",
-        agent: active.name,
+        agent: serverDraft.name,
         ok: false,
         message: "tools/list error",
-        details: String(e?.message ?? e)
+        details: String(error?.message ?? error)
       });
+    } finally {
+      setIsConnecting(false);
     }
   }
 
   async function doCallTool() {
-    if (!active) return;
-    const client = new McpSseClient(active);
-    client.connect((t) => props.pushLog({ category: "mcp", agent: active.name, message: t }));
+    if (!serverDraft) return;
+    setIsCallingTool(true);
+    setDraftError(null);
+    const client = new McpSseClient(serverDraft);
+    client.connect((text) => props.pushLog({ category: "mcp", agent: serverDraft.name, message: text }));
     try {
       const input = JSON.parse(toolInput || "{}");
       const resolved = resolveToolName(toolName);
       const res = await callTool(client, resolved, input);
       setToolOutput(JSON.stringify(res, null, 2));
-      props.pushLog({ category: "mcp", agent: active.name, ok: true, message: `tools/call ${resolved} OK` });
-    } catch (e: any) {
-      setToolOutput(String(e?.message ?? e));
+      props.pushLog({ category: "mcp", agent: serverDraft.name, ok: true, message: `tools/call ${resolved} OK` });
+    } catch (error: any) {
+      setToolOutput(String(error?.message ?? error));
       props.pushLog({
         category: "mcp",
-        agent: active.name,
+        agent: serverDraft.name,
         ok: false,
         message: "tools/call error",
-        details: String(e?.message ?? e)
+        details: String(error?.message ?? error)
       });
+    } finally {
+      setIsCallingTool(false);
     }
   }
 
+  function saveDraft() {
+    if (!serverDraft) return;
+    if (!serverDraft.sseUrl.trim()) {
+      setDraftError("請先輸入 SSE URL。");
+      return;
+    }
+    if (!draftValidated) {
+      setDraftError("請先完成 Connect & List Tools，再儲存。");
+      return;
+    }
+    const nextServer: McpServerConfig = {
+      ...serverDraft,
+      name: serverDraft.name.trim() || `MCP ${props.servers.length + 1}`,
+      sseUrl: serverDraft.sseUrl.trim()
+    };
+    const exists = props.servers.some((server) => server.id === nextServer.id);
+    const nextServers = exists
+      ? props.servers.map((server) => (server.id === nextServer.id ? nextServer : server))
+      : [nextServer, ...props.servers];
+    props.onChangeServers(nextServers);
+    props.onUpdateTools(nextServer.id, draftTools);
+    props.onSelectActive(nextServer.id);
+    closeEditor();
+  }
+
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
-        <button
-          type="button"
-          onClick={() => setShowHelp(true)}
-          title="MCP 使用說明"
-          aria-label="MCP 使用說明"
-          style={helpBtn}
-        >
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800 }}>MCP</div>
+        <button type="button" onClick={() => setShowHelp(true)} title="MCP 使用說明" aria-label="MCP 使用說明" style={helpBtn}>
           ?
         </button>
       </div>
 
-      {showHelp && (
+      {showHelp ? (
         <HelpModal title="MCP 使用說明與測試方式" onClose={() => setShowHelp(false)}>
           <div style={helpText}>
             MCP 工具是從 `Active MCP servers` 這個區塊連進來的。系統會先連到 `/mcp/sse`，再把路徑中的 `/sse`
@@ -175,30 +255,29 @@ export default function McpPanel(props: {
             2. 如果瀏覽器跑在 Windows、MCP server 跑在 WSL，請優先使用 WSL IP，不要直接用 `127.0.0.1`
             <br />
             3. 例如：`http://172.xx.xx.xx:3333/mcp/sse`
-            <br />
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
             測試方式：
             <br />
-            1. 啟動本地測試 server，例如 `mcp-test/server.js`
+            1. 新增一個 MCP 項目
             <br />
-            2. 加入一個 SSE URL，例如 `http://127.0.0.1:3333/mcp/sse`，或對應的 WSL / 區網 IP
+            2. 在 Edit 視窗中填入 SSE URL
             <br />
             3. 按下 `Connect & List Tools`
             <br />
-            4. 選擇 `time`，再按 `Call` 驗證工具是否真的能執行
+            4. 若成功，才會出現下方 `Call Tool` 區塊
           </div>
         </HelpModal>
-      )}
+      ) : null}
 
-      <div className="card" style={{ padding: 12, marginTop: 12, display: "grid", gap: 8 }}>
+      <div className="card" style={{ padding: 12, display: "grid", gap: 8 }}>
         <div style={{ fontWeight: 800 }}>Tool Decision Prompt</div>
         <button type="button" onClick={() => setShowPromptConfig(true)} style={btnPrimary}>
           {props.promptTemplates.activeId === "zh" ? "中文模板" : "English Template"}
         </button>
       </div>
 
-      {showPromptConfig && (
+      {showPromptConfig ? (
         <HelpModal title="Tool Decision Prompt 設定" onClose={() => setShowPromptConfig(false)} width="min(760px, 96vw)">
           <div style={{ display: "grid", gap: 12 }}>
             <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
@@ -255,109 +334,159 @@ export default function McpPanel(props: {
             </div>
           </div>
         </HelpModal>
-      )}
+      ) : null}
 
-      <div style={{ fontWeight: 800, marginTop: 14 }}>Active MCP servers</div>
-
-      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <input
-          value={draftUrl}
-          onChange={(e) => setDraftUrl(e.target.value)}
-          placeholder="SSE URL (e.g. https://your-mcp/sse) — RPC will be derived automatically"
-          style={inp}
-        />
-        <button onClick={addServer} style={btn}>
-          Add
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800 }}>Active MCP servers</div>
+        <button type="button" onClick={() => openEditor()} style={btnSmall}>
+          + Add
         </button>
       </div>
 
-      <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-        {props.servers.map((s) => (
-          <div
-            key={s.id}
-            className="card"
-            style={{
-              padding: 10,
-              border: s.id === props.activeId ? "1px solid #5b6bff" : "1px solid #222636",
-              background: "#0f1118"
-            }}
-          >
-            <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <div onClick={() => props.onSelectActive(s.id)} style={{ cursor: "pointer", flex: 1 }}>
-                  <div style={{ fontWeight: 650 }}>{s.name}</div>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>{s.sseUrl}</div>
-                </div>
-                <button onClick={() => removeServer(s.id)} style={btnSmall}>
-                  Remove
+      <div style={{ display: "grid", gap: 8 }}>
+        {props.servers.length === 0 ? <div style={{ fontSize: 12, opacity: 0.7 }}>No MCP servers yet.</div> : null}
+        {props.servers.map((server) => {
+          const rowTools = props.toolsByServer[server.id] ?? [];
+          const activeRow = server.id === active?.id;
+          return (
+            <div
+              key={server.id}
+              style={{
+                padding: 12,
+                borderRadius: 14,
+                border: activeRow ? "1px solid var(--primary)" : "1px solid var(--border)",
+                background: activeRow ? "rgba(91, 123, 255, 0.12)" : "var(--bg-2)",
+                color: "var(--text)"
+              }}
+            >
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button type="button" onClick={() => props.onSelectActive(server.id)} style={rowButtonStyle}>
+                  <div style={{ fontWeight: 700 }}>{server.name}</div>
+                  <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>{server.sseUrl || "尚未設定 SSE URL"}</div>
+                  <div style={{ fontSize: 11, opacity: 0.64, marginTop: 4 }}>
+                    {Object.prototype.hasOwnProperty.call(props.toolsByServer, server.id) ? `已載入 ${rowTools.length} 個 tools` : "尚未連線驗證"}
+                  </div>
                 </button>
+                {activeRow ? (
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => openEditor(server)} style={btnSmall}>
+                      Edit
+                    </button>
+                    <button type="button" onClick={() => removeServer(server.id)} style={btnDangerSmall}>
+                      Delete
+                    </button>
+                  </div>
+                ) : null}
               </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {editingServerId && serverDraft ? (
+        <HelpModal title={`Edit MCP: ${serverDraft.name}`} onClose={closeEditor} width="min(820px, calc(100vw - 48px))" footer={null}>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div>
+              <label style={label}>MCP Name</label>
+              <input value={serverDraft.name} onChange={(e) => updateDraft({ name: e.target.value })} style={inp} placeholder="MCP name" />
+            </div>
+
+            <div>
+              <label style={label}>SSE URL</label>
               <input
-                value={s.name}
-                onChange={(e) => updateServerName(s.id, e.target.value)}
-                placeholder="MCP name"
+                value={serverDraft.sseUrl}
+                onChange={(e) => updateDraft({ sseUrl: e.target.value })}
+                placeholder="https://your-mcp-server/mcp/sse"
                 style={inp}
               />
             </div>
-          </div>
-        ))}
-      </div>
 
-      {active && (
-        <>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={connectAndList} style={btnPrimary}>
-              Connect & List Tools
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => void connectAndListDraft()} style={btnPrimarySmall} disabled={isConnecting || !serverDraft.sseUrl.trim()}>
+                {isConnecting ? "Connecting..." : "Connect & List Tools"}
+              </button>
+              {serverDraft.sseUrl.trim() ? (
+                <div style={{ fontSize: 12, opacity: 0.72, alignSelf: "center" }}>RPC: {deriveRpcUrl(serverDraft.sseUrl.trim())}</div>
+              ) : null}
+            </div>
+
+            {draftError ? <div style={errorText}>{draftError}</div> : null}
+
+            {draftValidated ? (
+              <>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ fontWeight: 700 }}>Tools</div>
+                  {draftTools.length === 0 ? (
+                    <div style={{ fontSize: 12, opacity: 0.72 }}>此 MCP server 已連線，但目前沒有列出任何 tools。</div>
+                  ) : (
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {draftTools.map((tool) => (
+                        <div key={tool.name} className="card" style={{ padding: 10 }}>
+                          <div style={{ fontWeight: 650 }}>{tool.name}</div>
+                          <div style={{ fontSize: 12, opacity: 0.72 }}>{tool.description ?? ""}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: "grid", gap: 8 }}>
+                  <div style={{ fontWeight: 700 }}>Call Tool</div>
+                  <select value={toolName} onChange={(e) => setToolName(e.target.value)} style={inp}>
+                    <option value="">Choose a tool</option>
+                    {draftTools.map((tool) => (
+                      <option key={tool.name} value={tool.name}>
+                        {tool.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input value={toolName} onChange={(e) => setToolName(e.target.value)} placeholder="tool name" style={inp} />
+                  <textarea value={toolInput} onChange={(e) => setToolInput(e.target.value)} rows={5} style={inp} />
+                  <button onClick={() => void doCallTool()} style={btnPrimary} disabled={isCallingTool || !toolName.trim()}>
+                    {isCallingTool ? "Calling..." : "Call"}
+                  </button>
+
+                  {toolOutput ? (
+                    <pre style={outputBlock}>
+                      {toolOutput}
+                    </pre>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+              Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies. RPC is derived by replacing `/sse` with `/rpc`.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+            <button type="button" onClick={closeEditor} style={btnSmall}>
+              Close
+            </button>
+            <button type="button" onClick={saveDraft} style={btnPrimarySmall} disabled={!serverDraft.sseUrl.trim() || !draftValidated}>
+              Save
             </button>
           </div>
-
-          {tools.length > 0 && (
-            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.9 }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Tools</div>
-              <div style={{ display: "grid", gap: 6 }}>
-                {tools.map((t) => (
-                  <div key={t.name} className="card" style={{ padding: 8 }}>
-                    <div style={{ fontWeight: 650 }}>{t.name}</div>
-                    <div style={{ opacity: 0.7 }}>{t.description ?? ""}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <hr style={{ margin: "12px 0" }} />
-
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Call Tool</div>
-          <select value={toolName} onChange={(e) => setToolName(e.target.value)} style={{ ...inp, marginBottom: 8 }}>
-            <option value="">Choose a tool</option>
-            {tools.map((t) => {
-              return (
-                <option key={t.name} value={t.name}>
-                  {t.name}
-                </option>
-              );
-            })}
-          </select>
-          <input value={toolName} onChange={(e) => setToolName(e.target.value)} placeholder="tool name" style={inp} />
-          <textarea value={toolInput} onChange={(e) => setToolInput(e.target.value)} rows={5} style={inp} />
-          <button onClick={doCallTool} style={btnPrimary}>
-            Call
-          </button>
-
-          {toolOutput && (
-            <pre style={{ whiteSpace: "pre-wrap", background: "#0f1118", border: "1px solid #222636", padding: 10, borderRadius: 12, marginTop: 10 }}>
-              {toolOutput}
-            </pre>
-          )}
-
-          <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-            Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies. RPC is derived by replacing `/sse` with `/rpc`.
-          </div>
-        </>
-      )}
+        </HelpModal>
+      ) : null}
     </div>
   );
 }
+
+const rowButtonStyle: React.CSSProperties = {
+  flex: 1,
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  padding: 0,
+  cursor: "pointer"
+};
+
+const label: React.CSSProperties = {
+  fontSize: 12,
+  opacity: 0.8
+};
 
 const inp: React.CSSProperties = {
   width: "100%",
@@ -365,15 +494,8 @@ const inp: React.CSSProperties = {
   borderRadius: 12,
   border: "1px solid var(--border)",
   background: "var(--bg-2)",
-  color: "var(--text)"
-};
-
-const btn: React.CSSProperties = {
-  width: 90,
-  borderRadius: 12,
-  border: "1px solid var(--border)",
-  background: "var(--panel-2)",
-  color: "var(--text)"
+  color: "var(--text)",
+  boxSizing: "border-box"
 };
 
 const btnPrimary: React.CSSProperties = {
@@ -409,6 +531,12 @@ const btnSmall: React.CSSProperties = {
   color: "var(--text)"
 };
 
+const btnDangerSmall: React.CSSProperties = {
+  ...btnSmall,
+  border: "1px solid rgba(255, 107, 129, 0.4)",
+  color: "#ff9aa9"
+};
+
 const helpBtn: React.CSSProperties = {
   width: 28,
   height: 28,
@@ -425,4 +553,19 @@ const helpText: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.6,
   opacity: 0.82
+};
+
+const outputBlock: React.CSSProperties = {
+  whiteSpace: "pre-wrap",
+  background: "#0f1118",
+  border: "1px solid #222636",
+  padding: 10,
+  borderRadius: 12,
+  marginTop: 6
+};
+
+const errorText: React.CSSProperties = {
+  fontSize: 12,
+  color: "#ff9aa9",
+  lineHeight: 1.6
 };
