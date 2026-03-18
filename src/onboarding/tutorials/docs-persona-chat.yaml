@@ -1,0 +1,69 @@
+id: docs-persona-chat
+title: "[2] 建立 DOC 並驗證內容注入"
+description: 建立一份文件、讓 Agent 取得權限，並觀察文件內容如何影響對話結果。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識 Docs 功能
+    checklistLabel: 認識文件內容注入
+    instructionTitle: 歡迎來到第二個案例：建立 DOC 並驗證內容注入
+    instructionBody: |
+      在 AgentGoRound 中，Docs 目前的用途是把文件內容當成額外上下文注入到對話提示中，幫助模型理解規則、知識或人設。
+
+      這裡要特別注意：它不是獨立的 system prompt 編輯器，也不是向量檢索；比較接近「把你寫好的文件內容，整理後注入 prompt，讓模型在回答時參考」。
+
+      這個案例會帶你建立一份人設文件，內容是「你是個說話結尾都會喵喵叫的助手」，再用一個簡單問題驗證 Agent 是否有吃到這份文件。
+    actionLabel: 下一步
+    behavior: manual_info
+
+  - id: create-doc
+    title: 建立教學文件
+    checklistLabel: 建立教學用DOC
+    instructionTitle: 第一步：建立一份文件
+    instructionBody: |
+      請前往 Chat Config 頁籤，按下 Docs 進入文件設定。
+
+      接著建立一份新文件：
+      - Title：教學用DOC
+      - Content：你是個說話結尾都會喵喵叫的助手。每次回答的結尾都要補上一句喵。
+
+      建立完成後按下 Save。只要文件名稱與內容正確，這一步就算完成。
+    completionLabel: 等待你建立教學文件
+    tab: chat_config
+    targetId: chat-config-docs-card
+    behavior: create_tutorial_doc
+
+  - id: enable-doc-access
+    title: 讓 Agent 可以使用這份文件
+    checklistLabel: 開啟 Agent 的 Docs 權限
+    instructionTitle: 第二步：讓目前的 Agent 可以讀到這份文件
+    instructionBody: |
+      請前往 Agents 頁籤，編輯剛剛建立的 Groq Agent。
+
+      在 Access Control 裡：
+      - 勾選 Docs
+      - 可以直接選擇 All docs，或至少確保教學用DOC已被允許
+
+      儲存後，這個 Agent 才能在 normal 對話模式下把文件內容注入到 prompt 中。
+    completionLabel: 等待你開啟 Agent 的 Docs 權限
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_doc_access
+
+  - id: chat-doc-persona
+    title: 驗證文件內容是否生效
+    checklistLabel: 用對話驗證 Docs 注入
+    instructionTitle: 第三步：送出一個簡單問題，觀察回答是否帶有人設
+    instructionBody: |
+      請前往 Chat 頁籤，並送出這句話：
+      - 請用一句話自我介紹
+
+      如果設定正確，Agent 的回答應該會帶出文件裡的人設，例如在句尾加上「喵」。
+
+      這一步的重點不是檢查內容是否完美，而是確認文件內容真的有被注入並影響回答。
+    actionLabel: 完成案例教學
+    completionLabel: 等待 Agent 依照文件內容完成回覆
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_doc_persona

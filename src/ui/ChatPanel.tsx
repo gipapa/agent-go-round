@@ -209,6 +209,7 @@ function MessageContent(props: { content: string }) {
 type ChatPanelProps = {
   history: ChatMessage[];
   onSend: (input: string) => Promise<void>;
+  onDraftChange?: (value: string) => void;
   onClear: () => void;
   onExportRaw: () => void;
   onExportSummary: () => Promise<void>;
@@ -220,6 +221,7 @@ type ChatPanelProps = {
   fullscreen?: boolean;
   onOpenFullscreen?: () => void;
   onCloseFullscreen?: () => void;
+  composerSeed?: { value: string; token: number } | null;
 };
 
 export default function ChatPanel(props: ChatPanelProps) {
@@ -232,9 +234,20 @@ export default function ChatPanel(props: ChatPanelProps) {
     const t = text.trim();
     if (!t) return;
     setText("");
+    props.onDraftChange?.("");
     await props.onSend(t);
     inputRef.current?.focus();
   };
+
+  useEffect(() => {
+    props.onDraftChange?.(text);
+  }, [props.onDraftChange, text]);
+
+  useEffect(() => {
+    if (!props.composerSeed) return;
+    setText(props.composerSeed.value);
+    props.onDraftChange?.(props.composerSeed.value);
+  }, [props.composerSeed]);
 
   useEffect(() => {
     const node = threadEndRef.current;
@@ -259,7 +272,7 @@ export default function ChatPanel(props: ChatPanelProps) {
   );
 
   return (
-    <div className={`chat-shell ${props.fullscreen ? "chat-shell-fullscreen" : ""}`}>
+    <div className={`chat-shell ${props.fullscreen ? "chat-shell-fullscreen" : ""}`} data-tutorial-id="chat-shell">
       <div className={`chat-header ${props.fullscreen ? "chat-header-fullscreen" : ""}`}>
         <div>
           <div className="chat-title">Conversation</div>
@@ -397,8 +410,9 @@ export default function ChatPanel(props: ChatPanelProps) {
           rows={3}
           placeholder="Type message..."
           className="chat-input"
+          data-tutorial-id="chat-input"
         />
-        <button onClick={send} className="chat-send-btn">
+        <button onClick={send} className="chat-send-btn" data-tutorial-id="chat-send">
           Send
         </button>
       </div>

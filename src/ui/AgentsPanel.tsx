@@ -10,6 +10,10 @@ const emptyAgent = (): AgentConfig => ({
   type: "openai_compat",
   endpoint: "https://api.openai.com/v1",
   model: "gpt-4o-mini",
+  enableDocs: false,
+  enableMcp: false,
+  enableBuiltInTools: false,
+  enableSkills: false,
   capabilities: { streaming: true }
 });
 
@@ -90,7 +94,7 @@ export default function AgentsPanel(props: {
     <div>
         <div className="agents-toolbar" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontWeight: 800, fontSize: 18 }}>Agents</div>
-        <button onClick={() => setDraft(emptyAgent())} style={{ ...btnSmall, marginLeft: "auto" }}>
+        <button onClick={() => setDraft(emptyAgent())} style={{ ...btnSmall, marginLeft: "auto" }} data-tutorial-id="agents-add-button">
           + Add
         </button>
         </div>
@@ -141,7 +145,7 @@ export default function AgentsPanel(props: {
                 </button>
                 {isActive ? (
                   <div className="agents-actions" style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
-                    <button type="button" onClick={() => setDraft(a)} style={btnSmall}>
+                    <button type="button" onClick={() => setDraft(a)} style={btnSmall} data-tutorial-id="agents-edit-active-button">
                       Edit
                     </button>
                     <button
@@ -182,7 +186,7 @@ export default function AgentsPanel(props: {
       )}
 
       {draft && (
-        <HelpModal title={`Edit Agent: ${draft.name}`} onClose={() => setDraft(null)} width="min(860px, calc(100vw - 48px))">
+        <HelpModal title={`Edit Agent: ${draft.name}`} onClose={() => setDraft(null)} width="min(860px, calc(100vw - 48px))" footer={null}>
           <Editor
             draft={draft}
             docs={props.docs}
@@ -337,7 +341,7 @@ function Editor(props: {
   }
 
   return (
-    <div style={{ marginTop: 4 }}>
+    <div style={{ marginTop: 4 }} data-tutorial-id="agent-edit-modal">
       <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
         <div style={{ fontWeight: 700, marginBottom: 2 }}>Profile</div>
 
@@ -387,6 +391,7 @@ function Editor(props: {
                 });
               }}
               style={inp as any}
+              data-tutorial-id="agent-provider-select"
             >
               {providerOptions.length === 0 ? (
                 <option value="__custom__">No credential provider yet</option>
@@ -401,7 +406,7 @@ function Editor(props: {
             <input value={a.endpoint ?? ""} onChange={(e) => setA({ ...a, endpoint: e.target.value })} style={inp} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <label style={label}>Model</label>
-              <button type="button" onClick={() => void loadModels()} style={btnSmall} disabled={isLoadingModels}>
+              <button type="button" onClick={() => void loadModels()} style={btnSmall} disabled={isLoadingModels} data-tutorial-id="agent-load-models">
                 {isLoadingModels ? "Loading..." : "Load Models"}
               </button>
             </div>
@@ -819,9 +824,9 @@ function Editor(props: {
 
       <div className="agents-editor-actions" style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button onClick={props.onCancel} style={btn}>
-          Cancel
+          Close
         </button>
-        <button onClick={() => props.onSave(a)} style={btnPrimary}>
+        <button onClick={() => props.onSave(a)} style={btnPrimary} data-tutorial-id="agent-save-button">
           Save
         </button>
       </div>

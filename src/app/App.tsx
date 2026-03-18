@@ -60,8 +60,20 @@ import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
 import ChatPanel from "../ui/ChatPanel";
 import DocsPanel from "../ui/DocsPanel";
 import HelpModal from "../ui/HelpModal";
+import LandingPage from "../ui/LandingPage";
 import McpPanel from "../ui/McpPanel";
 import SkillsPanel from "../ui/SkillsPanel";
+import TutorialGuide from "../ui/TutorialGuide";
+import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
+import {
+  applyTutorialStepEntry,
+  captureTutorialWorkspaceSnapshot,
+  evaluateTutorialStep,
+  restoreTutorialWorkspaceSnapshot,
+  TUTORIAL_DOC_NAME,
+  TUTORIAL_MCP_NAME
+} from "../onboarding/runtime";
+import { TutorialScenarioDefinition, TutorialStepEvaluation, TutorialWorkspaceSnapshot } from "../onboarding/types";
 import {
   buildSkillDecisionCatalog,
   buildSkillDecisionPrompt,
@@ -81,6 +93,7 @@ import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
 import { SYSTEM_AGENT_DIRECTORY_TOOL_ID, SYSTEM_BUILT_IN_TOOLS, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
+import { normalizeCredentialUrl } from "../utils/credential";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -208,6 +221,7 @@ function getThinkStreamingState(buffer: string) {
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
+type AppEntryMode = "landing" | "workspace";
 const PROMPT_JSON_PLACEHOLDERS = {
   noToolJson: '{"type":"no_tool"}',
   userProfileJson: '{"type":"builtin_tool_call","tool":"get_user_profile","input":{}}',
@@ -279,10 +293,6 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizeCredentialUrl(url?: string) {
-  return (url ?? "").trim().replace(/\/$/, "");
-}
-
 function describeCredentialEndpoint(url: string) {
   if (!url) return { label: "Unconfigured Endpoint", hint: "請先設定 endpoint 或 URL" };
   if (url === "https://api.openai.com/v1") return { label: "OpenAI", hint: url };
@@ -327,6 +337,40 @@ function createCredentialEntry(preset: "openai" | "groq" | "custom", indexHint =
     apiKey: "",
     createdAt: now,
     updatedAt: now
+  };
+}
+
+type CredentialTestState = {
+  ok: boolean;
+  message: string;
+};
+
+async function testCredentialConnection(slot: ModelCredentialEntry): Promise<CredentialTestState> {
+  const endpoint = normalizeCredentialUrl(slot.endpoint);
+  if (!endpoint) {
+    throw new Error("請先設定 endpoint。");
+  }
+
+  const res = await fetch(`${endpoint}/models`, {
+    headers: slot.apiKey.trim() ? { Authorization: `Bearer ${slot.apiKey.trim()}` } : undefined
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("已連到 provider，但 API key 無效或沒有權限。");
+    }
+    if (res.status === 404) {
+      throw new Error("已連到 endpoint，但找不到 /models。請確認這是不是 OpenAI-compatible endpoint。");
+    }
+    throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
+  }
+
+  const json = await res.json().catch(() => null);
+  const count = Array.isArray(json?.data) ? json.data.filter((item: any) => item?.active !== false).length : undefined;
+  return {
+    ok: true,
+    message: count === undefined ? "測試成功：provider 有回應。" : `測試成功：可用模型 ${count} 個。`
   };
 }
 
@@ -405,6 +449,7 @@ function buildToolDecisionPrompt(template: string, fallbackTemplate: string, use
 }
 
 export default function App() {
+  const [appEntryMode, setAppEntryMode] = useState<AppEntryMode>("landing");
   const initialUi = loadUiState();
   const [agents, setAgents] = useState<AgentConfig[]>(() => {
     const existing = loadAgents();
@@ -445,6 +490,7 @@ export default function App() {
   const [skillVerifyMax, setSkillVerifyMax] = useState<number>(() => clampSkillVerifyMax(initialUi.skillVerifyMax ?? 1));
   const [skillVerifierAgentId, setSkillVerifierAgentId] = useState<string>(() => initialUi.skillVerifierAgentId ?? "");
   const [history, setHistory] = useState<ChatMessage[]>([]);
+  const [chatComposerDraft, setChatComposerDraft] = useState("");
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
 
@@ -492,6 +538,14 @@ export default function App() {
   );
   const [log, setLog] = useState<LogEntry[]>([]);
   const [visibleCredentialIds, setVisibleCredentialIds] = useState<Record<string, boolean>>({});
+  const [credentialTestResults, setCredentialTestResults] = useState<Record<string, CredentialTestState | undefined>>({});
+  const [testingCredentialIds, setTestingCredentialIds] = useState<Record<string, boolean>>({});
+  const [tutorialScenario, setTutorialScenario] = useState<TutorialScenarioDefinition | null>(null);
+  const [tutorialScenarioIndex, setTutorialScenarioIndex] = useState<number | null>(null);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const [showTutorialExitPrompt, setShowTutorialExitPrompt] = useState(false);
+  const [tutorialUnavailableMessage, setTutorialUnavailableMessage] = useState<string | null>(null);
+  const [tutorialComposerSeed, setTutorialComposerSeed] = useState<{ value: string; token: number } | null>(null);
   const [logCollapsed, setLogCollapsed] = useState(true);
   const [logHeight, setLogHeight] = useState(160);
   const [logSort, setLogSort] = useState<{ key: LogSortKey; dir: "asc" | "desc" }>({ key: "ts", dir: "desc" });
@@ -511,6 +565,30 @@ export default function App() {
   const logResizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
   const logNow = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => pushLog(entry);
   const mcpCountRef = React.useRef(mcpServers.length);
+  const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
+  const tutorialStepKeyRef = React.useRef("");
+  const tutorialRuntimeState = useMemo(
+    () => ({
+      agents,
+      activeAgentId,
+      credentials: modelCredentials,
+      credentialTestResults,
+      history,
+      currentChatInput: chatComposerDraft,
+      builtInTools,
+      docs
+    }),
+    [agents, activeAgentId, modelCredentials, credentialTestResults, history, chatComposerDraft, builtInTools, docs]
+  );
+  const tutorialEvaluations = useMemo<TutorialStepEvaluation[]>(
+    () => (tutorialScenario ? tutorialScenario.steps.map((step) => evaluateTutorialStep(step, tutorialRuntimeState)) : []),
+    [tutorialScenario, tutorialRuntimeState]
+  );
+  const currentTutorialStep = tutorialScenario?.steps[tutorialStepIndex] ?? null;
+  const currentTutorialEvaluation = tutorialScenario ? tutorialEvaluations[tutorialStepIndex] ?? null : null;
+  const tutorialActive = !!tutorialScenario;
+  const tutorialPreviewLocked = tutorialActive && tutorialStepIndex === 0;
+  const tutorialShowLandingPreview = tutorialPreviewLocked && tutorialScenarioIndex === 0;
 
   React.useEffect(() => {
     function onMove(e: MouseEvent) {
@@ -713,6 +791,36 @@ export default function App() {
       setIsChatFullscreen(false);
     }
   }, [activeTab, isChatFullscreen]);
+
+  React.useEffect(() => {
+    if (!tutorialScenario || !currentTutorialStep) return;
+    const stepKey = `${tutorialScenario.id}:${currentTutorialStep.id}`;
+    if (tutorialStepKeyRef.current === stepKey) return;
+    tutorialStepKeyRef.current = stepKey;
+    applyTutorialStepEntry(currentTutorialStep, tutorialRuntimeState, {
+      setActiveTab,
+      setConfigModal: (modal) => setConfigModal(modal),
+      setActiveAgentId,
+      clearChat: () => setHistory([]),
+      setComposerSeed: (value) =>
+        setTutorialComposerSeed({
+          value,
+          token: Date.now()
+        })
+    });
+  }, [tutorialScenario, currentTutorialStep, tutorialRuntimeState]);
+
+  React.useEffect(() => {
+    if (!tutorialActive || !currentTutorialEvaluation?.targetId) return;
+    const target = document.querySelector<HTMLElement>(`[data-tutorial-id="${currentTutorialEvaluation.targetId}"]`);
+    if (!target) return;
+
+    target.classList.add("tutorial-highlight-target");
+    target.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    return () => {
+      target.classList.remove("tutorial-highlight-target");
+    };
+  }, [tutorialActive, currentTutorialEvaluation?.targetId, activeTab, configModal, skillPanelSelectedId]);
 
   React.useEffect(() => {
     if (!docsLoaded) return;
@@ -918,6 +1026,14 @@ export default function App() {
           : entry
       )
     );
+    if (patch.endpoint !== undefined || patch.apiKey !== undefined) {
+      setCredentialTestResults((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
   }
 
   function removeCredential(id: string) {
@@ -927,6 +1043,149 @@ export default function App() {
       delete next[id];
       return next;
     });
+    setCredentialTestResults((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setTestingCredentialIds((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
+
+  async function runCredentialTest(slot: ModelCredentialEntry) {
+    setTestingCredentialIds((prev) => ({ ...prev, [slot.id]: true }));
+    setCredentialTestResults((prev) => ({ ...prev, [slot.id]: undefined }));
+    try {
+      const result = await testCredentialConnection(slot);
+      setCredentialTestResults((prev) => ({ ...prev, [slot.id]: result }));
+      logNow({
+        category: "credentials",
+        agent: slot.label,
+        ok: true,
+        message: "Credential test passed",
+        details: `${slot.endpoint}\n${result.message}`
+      });
+    } catch (e: any) {
+      const message = String(e?.message ?? e);
+      setCredentialTestResults((prev) => ({
+        ...prev,
+        [slot.id]: { ok: false, message }
+      }));
+      logNow({
+        category: "credentials",
+        agent: slot.label,
+        ok: false,
+        message: "Credential test failed",
+        details: `${slot.endpoint}\n${message}`
+      });
+    } finally {
+      setTestingCredentialIds((prev) => ({ ...prev, [slot.id]: false }));
+    }
+  }
+
+  async function reloadSkillsFromStore(preferredId?: string | null) {
+    const next = await listSkills();
+    setSkills(next);
+    const nextSelectedId = preferredId && next.some((skill) => skill.id === preferredId) ? preferredId : next[0]?.id ?? null;
+    setSkillPanelSelectedId(nextSelectedId);
+    if (nextSelectedId) {
+      const [docs, files] = await Promise.all([listSkillDocs(nextSelectedId), listSkillFiles(nextSelectedId)]);
+      setSkillPanelDocs(docs);
+      setSkillPanelFiles(files);
+    } else {
+      setSkillPanelDocs([]);
+      setSkillPanelFiles([]);
+    }
+  }
+
+  async function startTutorial(scenarioId: string) {
+    const scenario = getTutorialScenario(scenarioId);
+    if (!scenario) {
+      const issue = getTutorialCatalogError(scenarioId);
+      const message = issue ? `無法進行案例教學：${issue}` : "無法進行案例教學，請稍後再試。";
+      logNow({ category: "tutorial", ok: false, message: `Tutorial unavailable: ${scenarioId}`, details: issue ?? undefined });
+      setTutorialUnavailableMessage(message);
+      return;
+    }
+    const scenarioIndex = tutorialCatalog.findIndex((item) => item.id === scenarioId);
+
+    const snapshot = await captureTutorialWorkspaceSnapshot(tutorialRuntimeState);
+    tutorialSnapshotRef.current = snapshot;
+    tutorialStepKeyRef.current = "";
+    setTutorialScenario(scenario);
+    setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
+    setTutorialStepIndex(0);
+    setShowTutorialExitPrompt(false);
+    setConfigModal(null);
+    setIsChatFullscreen(false);
+    setAppEntryMode("workspace");
+    logNow({ category: "tutorial", ok: true, message: `Tutorial started: ${scenario.title}` });
+  }
+
+  function moveToNextTutorialScenario() {
+    if (tutorialScenarioIndex === null) {
+      setShowTutorialExitPrompt(true);
+      return;
+    }
+    const nextScenario = tutorialCatalog[tutorialScenarioIndex + 1] ?? null;
+    if (!nextScenario) {
+      setShowTutorialExitPrompt(true);
+      return;
+    }
+    tutorialStepKeyRef.current = "";
+    setTutorialScenario(nextScenario);
+    setTutorialScenarioIndex(tutorialScenarioIndex + 1);
+    setTutorialStepIndex(0);
+    setTutorialComposerSeed(null);
+    setConfigModal(null);
+    setIsChatFullscreen(false);
+    logNow({ category: "tutorial", ok: true, message: `Tutorial case switched: ${nextScenario.title}` });
+  }
+
+  async function finishTutorial(keepWorkspaceChanges: boolean) {
+    if (!keepWorkspaceChanges && tutorialSnapshotRef.current) {
+      await restoreTutorialWorkspaceSnapshot(tutorialSnapshotRef.current);
+      setBuiltInTools(tutorialSnapshotRef.current.builtInTools);
+      await reloadSkillsFromStore(skillPanelSelectedId);
+      const tutorialDocs = (await listDocs()).filter((doc) => doc.title === TUTORIAL_DOC_NAME);
+      if (tutorialDocs.length) {
+        await Promise.all(tutorialDocs.map((doc) => deleteDoc(doc.id)));
+        setDocs(await listDocs());
+      }
+      setMcpServers((prev) => prev.filter((server) => server.name !== TUTORIAL_MCP_NAME));
+      logNow({ category: "tutorial", ok: true, message: "Tutorial changes discarded for docs, MCP, tools, and skills" });
+    } else if (tutorialScenario) {
+      logNow({ category: "tutorial", ok: true, message: `Tutorial ended: ${tutorialScenario.title}` });
+    }
+
+    tutorialSnapshotRef.current = null;
+    tutorialStepKeyRef.current = "";
+    setTutorialScenario(null);
+    setTutorialScenarioIndex(null);
+    setTutorialStepIndex(0);
+    setTutorialComposerSeed(null);
+    setShowTutorialExitPrompt(false);
+    setConfigModal(null);
+  }
+
+  function advanceTutorialStep() {
+    if (!tutorialScenario || !currentTutorialStep || !currentTutorialEvaluation?.canContinue) return;
+    if (tutorialStepIndex >= tutorialScenario.steps.length - 1) {
+      moveToNextTutorialScenario();
+      return;
+    }
+    setTutorialStepIndex((current) => current + 1);
+  }
+
+  function skipTutorialScenario() {
+    if (!tutorialScenario) return;
+    logNow({ category: "tutorial", ok: true, message: `Tutorial case skipped: ${tutorialScenario.title}` });
+    moveToNextTutorialScenario();
   }
 
   async function onSaveAgent(a: AgentConfig) {
@@ -2028,8 +2287,10 @@ export default function App() {
       setDocs(await listDocs());
       setDocEditorId(d.id);
       logNow({ category: "docs", ok: true, message: "Doc created", details: JSON.stringify(d, null, 2) });
+      return d;
     } catch (e: any) {
       logNow({ category: "docs", ok: false, message: "Doc create failed", details: String(e?.message ?? e) });
+      return null;
     }
   }
 
@@ -2249,9 +2510,39 @@ export default function App() {
     }
   }
 
+  if (appEntryMode === "landing") {
+    return (
+      <>
+        <LandingPage onStart={() => setAppEntryMode("workspace")} onStartTutorial={() => void startTutorial("first-agent-chat")} />
+        {tutorialUnavailableMessage ? (
+          <HelpModal title="案例教學目前無法使用" onClose={() => setTutorialUnavailableMessage(null)} width="min(560px, 92vw)">
+            <div style={{ fontSize: 13, lineHeight: 1.8, opacity: 0.92 }}>{tutorialUnavailableMessage}</div>
+          </HelpModal>
+        ) : null}
+      </>
+    );
+  }
+
   return (
-    <div className="app-shell">
-      <div className="card topbar">
+    <div className={tutorialActive ? "tutorial-layout" : undefined}>
+      {tutorialScenario && currentTutorialStep && currentTutorialEvaluation ? (
+        <TutorialGuide
+          scenario={tutorialScenario}
+          currentStepIndex={tutorialStepIndex}
+          evaluations={tutorialEvaluations}
+          onAdvance={advanceTutorialStep}
+          onSkip={skipTutorialScenario}
+          onExit={() => setShowTutorialExitPrompt(true)}
+        />
+      ) : null}
+
+      {tutorialShowLandingPreview ? (
+        <div className="tutorial-preview-shell tutorial-preview-shell-blur">
+          <LandingPage onStart={() => {}} onStartTutorial={() => {}} />
+        </div>
+      ) : (
+      <div className={`app-shell ${tutorialActive ? "app-shell-tutorial" : ""} ${tutorialPreviewLocked ? "tutorial-preview-shell-blur" : ""}`}>
+      <div className="card topbar" data-tutorial-id="app-topbar">
         <div>
           <div className="app-title">AgentGoRound</div>
           <div className="app-subtitle">Browser-first agent playground</div>
@@ -2267,6 +2558,7 @@ export default function App() {
               key={t.id}
               onClick={() => setActiveTab(t.id as ActiveTab)}
               className={`tab-btn ${activeTab === t.id ? "tab-btn-active" : ""}`}
+              data-tutorial-id={`tab-${t.id}`}
             >
               {t.label}
             </button>
@@ -2293,6 +2585,8 @@ export default function App() {
                 onImportHistory={importHistoryFile}
                 isSummaryExporting={isSummaryExporting}
                 onOpenFullscreen={() => setIsChatFullscreen(true)}
+                composerSeed={tutorialComposerSeed}
+                onDraftChange={setChatComposerDraft}
               />
             </div>
           </div>
@@ -2306,22 +2600,22 @@ export default function App() {
             </div>
 
             <div className="cc-dashboard-grid">
-              <button className="cc-card" onClick={() => setConfigModal("agent")}>
+              <button className="cc-card" onClick={() => setConfigModal("agent")} data-tutorial-id="chat-config-agent-card">
                 <span className="cc-card-label">Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">{activeAgent?.type ?? ""}{activeAgent?.model ? ` · ${activeAgent.model}` : ""}</span>
               </button>
-              <button className="cc-card" onClick={() => setConfigModal("credentials")}>
+              <button className="cc-card" onClick={() => setConfigModal("credentials")} data-tutorial-id="chat-config-credentials-card">
                 <span className="cc-card-label">Credentials</span>
                 <strong className="cc-card-value">{configuredCredentialCount}/{credentialSlots.length}</strong>
                 <span className="cc-card-hint">集中管理模型金鑰與後續憑證</span>
               </button>
-              <button className="cc-card" onClick={() => setConfigModal("mode")}>
+              <button className="cc-card" onClick={() => setConfigModal("mode")} data-tutorial-id="chat-config-mode-card">
                 <span className="cc-card-label">Mode</span>
                 <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven (deprecated)" : "normal"}</strong>
                 <span className="cc-card-hint">{mode === "leader_team" ? "Legacy Leader → Members" : "1:1 對話"}</span>
               </button>
-              <button className="cc-card" onClick={() => setConfigModal("history")}>
+              <button className="cc-card" onClick={() => setConfigModal("history")} data-tutorial-id="chat-config-history-card">
                 <span className="cc-card-label">History & Retry</span>
                 <strong className="cc-card-value">{historyMessageLimit} msgs</strong>
                 <span className="cc-card-hint">retry {retryMax}× / delay {retryDelaySec}s</span>
@@ -2333,7 +2627,7 @@ export default function App() {
                   <span className="cc-card-hint">Leader: {activeAgent?.name ?? "—"}</span>
                 </button>
               )}
-              <button className="cc-card" onClick={() => setConfigModal("docs")}>
+              <button className="cc-card" onClick={() => setConfigModal("docs")} data-tutorial-id="chat-config-docs-card">
                 <span className="cc-card-label">Docs</span>
                 <strong className="cc-card-value">{docs.length}</strong>
                 <span className="cc-card-hint">IndexedDB 文件庫</span>
@@ -2408,7 +2702,7 @@ export default function App() {
 
             {configModal === "credentials" && (
               <HelpModal title="Credentials" onClose={() => setConfigModal(null)} width="min(680px, 96vw)">
-                <div style={{ display: "grid", gap: 14 }}>
+                <div style={{ display: "grid", gap: 14 }} data-tutorial-id="credentials-modal">
                   <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.7 }}>
                     這裡集中管理和模型或外部服務有關的 credentials。這一版先放共用的 Model API Key，會依 provider / endpoint 自動套用給所有相同服務的 agent。
                   </div>
@@ -2416,7 +2710,7 @@ export default function App() {
                     <button type="button" onClick={() => addCredential("openai")} style={iconActionBtn}>
                       + OpenAI
                     </button>
-                    <button type="button" onClick={() => addCredential("groq")} style={iconActionBtn}>
+                    <button type="button" onClick={() => addCredential("groq")} style={iconActionBtn} data-tutorial-id="credential-add-groq">
                       + Groq
                     </button>
                     <button type="button" onClick={() => addCredential("custom")} style={iconActionBtn}>
@@ -2427,7 +2721,12 @@ export default function App() {
                     <div style={{ fontSize: 12, opacity: 0.7 }}>目前還沒有 credential。可先新增 OpenAI、Groq 或 Custom。</div>
                   ) : (
                     credentialSlots.map((slot) => (
-                      <div key={slot.id} className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+                      <div
+                        key={slot.id}
+                        className="card"
+                        style={{ padding: 14, display: "grid", gap: 10 }}
+                        data-tutorial-id={slot.preset === "groq" ? "credential-groq-card" : undefined}
+                      >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                           <div>
                             <div style={{ fontWeight: 800 }}>{slot.label}</div>
@@ -2490,6 +2789,35 @@ export default function App() {
                               <EyeIcon open={!!visibleCredentialIds[slot.id]} />
                             </button>
                           </div>
+                        </div>
+
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <button
+                            type="button"
+                            onClick={() => void runCredentialTest(slot)}
+                            disabled={testingCredentialIds[slot.id] || !slot.endpoint.trim()}
+                            data-tutorial-id={slot.preset === "groq" ? "credential-groq-test" : undefined}
+                            style={{
+                              ...iconActionBtn,
+                              width: "fit-content",
+                              opacity: testingCredentialIds[slot.id] || !slot.endpoint.trim() ? 0.64 : 1,
+                              cursor: testingCredentialIds[slot.id] || !slot.endpoint.trim() ? "not-allowed" : "pointer"
+                            }}
+                          >
+                            {testingCredentialIds[slot.id] ? "測試中..." : "測試 Provider 連線"}
+                          </button>
+                          {credentialTestResults[slot.id] ? (
+                            <div
+                              style={{
+                                fontSize: 12,
+                                lineHeight: 1.6,
+                                color: credentialTestResults[slot.id]?.ok ? "var(--ok)" : "var(--danger)",
+                                opacity: 0.92
+                              }}
+                            >
+                              {credentialTestResults[slot.id]?.message}
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     ))
@@ -2849,6 +3177,45 @@ export default function App() {
           </div>
         )}
       </div>
+
+      {showTutorialExitPrompt && tutorialScenario ? (
+        <HelpModal
+          title={tutorialScenario.exitTitle}
+          onClose={() => setShowTutorialExitPrompt(false)}
+          width="min(560px, 92vw)"
+          footer={
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => setShowTutorialExitPrompt(false)} style={iconActionBtn}>
+                繼續教學
+              </button>
+              <button type="button" onClick={() => void finishTutorial(false)} style={dangerMiniBtn}>
+                不保留資源(doc、tool、mcp、skill)
+              </button>
+              <button type="button" onClick={() => void finishTutorial(true)} style={iconActionBtn}>
+                保留並離開
+              </button>
+            </div>
+          }
+        >
+          <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.9 }}>{tutorialScenario.exitBody}</div>
+            <div style={{ fontSize: 12, lineHeight: 1.7, opacity: 0.72 }}>
+              目前案例：<strong>{tutorialScenario.title}</strong>
+              <br />
+              進度：{tutorialStepIndex + 1} / {tutorialScenario.steps.length}
+              <br />
+              目前步驟：{currentTutorialStep?.checklistLabel ?? "—"}
+            </div>
+          </div>
+        </HelpModal>
+      ) : null}
+      {tutorialUnavailableMessage ? (
+        <HelpModal title="案例教學目前無法使用" onClose={() => setTutorialUnavailableMessage(null)} width="min(560px, 92vw)">
+          <div style={{ fontSize: 13, lineHeight: 1.8, opacity: 0.92 }}>{tutorialUnavailableMessage}</div>
+        </HelpModal>
+      ) : null}
+      </div>
+      )}
     </div>
   );
 }

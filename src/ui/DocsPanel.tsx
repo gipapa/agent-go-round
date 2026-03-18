@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React from "react";
 import { DocItem } from "../types";
 import HelpModal from "./HelpModal";
 
@@ -6,35 +6,80 @@ export default function DocsPanel(props: {
   docs: DocItem[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  onCreate: () => Promise<void>;
+  onCreate: () => Promise<DocItem | null>;
   onSave: (d: DocItem) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
-  const selected = useMemo(() => props.docs.find((d) => d.id === props.selectedId) ?? null, [props.docs, props.selectedId]);
-  const [edit, setEdit] = useState<DocItem | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
+  const [showHelp, setShowHelp] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [editingDocId, setEditingDocId] = React.useState<string | null>(null);
+  const [docDraft, setDocDraft] = React.useState<DocItem | null>(null);
 
-  React.useEffect(() => setEdit(selected ? { ...selected } : null), [selected?.id]);
+  const selected = props.docs.find((d) => d.id === props.selectedId) ?? props.docs[0] ?? null;
+  const editingDoc = props.docs.find((d) => d.id === editingDocId) ?? null;
+
+  React.useEffect(() => {
+    if (!selected && props.selectedId) {
+      props.onSelect(null);
+      return;
+    }
+    if (!props.selectedId && props.docs[0]) {
+      props.onSelect(props.docs[0].id);
+    }
+  }, [props.docs, props.onSelect, props.selectedId, selected]);
+
+  function openEditor(doc: DocItem) {
+    setEditingDocId(doc.id);
+    setDocDraft({ ...doc });
+    setError(null);
+  }
+
+  function closeEditor() {
+    setEditingDocId(null);
+    setDocDraft(null);
+  }
+
+  async function createDoc() {
+    setError(null);
+    const created = await props.onCreate();
+    if (!created) return;
+    props.onSelect(created.id);
+    openEditor(created);
+  }
+
+  async function saveDoc() {
+    if (!docDraft) return;
+    if (!docDraft.title.trim()) {
+      setError("Title is required.");
+      return;
+    }
+    setError(null);
+    await props.onSave({ ...docDraft, title: docDraft.title.trim() });
+    closeEditor();
+  }
+
+  async function deleteDoc(id: string) {
+    setError(null);
+    await props.onDelete(id);
+    if (props.selectedId === id) {
+      const next = props.docs.find((doc) => doc.id !== id) ?? null;
+      props.onSelect(next?.id ?? null);
+    }
+  }
 
   return (
-    <div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <div style={{ fontWeight: 800 }}>Docs</div>
-        <button
-          type="button"
-          onClick={() => setShowHelp((v) => !v)}
-          title="Docs 使用說明"
-          aria-label="Docs 使用說明"
-          style={helpBtn}
-        >
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, fontSize: 18 }}>Docs</div>
+        <button type="button" onClick={() => setShowHelp(true)} title="Docs 使用說明" aria-label="Docs 使用說明" style={helpBtn}>
           ?
         </button>
-        <button onClick={props.onCreate} style={{ ...btnSmall, marginLeft: "auto" }}>
+        <button onClick={() => void createDoc()} style={{ ...btnSmall, marginLeft: "auto" }} data-tutorial-id="docs-new-button">
           + New
         </button>
       </div>
 
-      {showHelp && (
+      {showHelp ? (
         <HelpModal title="Docs 使用說明與測試方式" onClose={() => setShowHelp(false)}>
           <div style={helpText}>
             在 `normal talking` 模式中，該 agent 被允許使用的文件內容會先被整理後注入 system context，再送給模型。
@@ -54,53 +99,91 @@ export default function DocsPanel(props: {
             4. 如果設定正確，模型就應該能根據文件內容回答
           </div>
         </HelpModal>
-      )}
+      ) : null}
 
-      <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-        {props.docs.map((d) => (
-          <button
-            key={d.id}
-            onClick={() => props.onSelect(d.id)}
-            style={{
-              textAlign: "left",
-              padding: 10,
-              borderRadius: 12,
-              border: d.id === props.selectedId ? "1px solid #5b6bff" : "1px solid #222636",
-              background: "#0f1118",
-              color: "white"
-            }}
-          >
-            <div style={{ fontWeight: 650 }}>{d.title}</div>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>{new Date(d.updatedAt).toLocaleString()}</div>
-          </button>
-        ))}
+      <div style={{ display: "grid", gap: 8 }}>
+        {props.docs.length === 0 ? <div style={{ fontSize: 12, opacity: 0.7 }}>No docs yet.</div> : null}
+        {props.docs.map((doc) => {
+          const active = doc.id === selected?.id;
+          return (
+            <div
+              key={doc.id}
+              style={{
+                padding: 12,
+                borderRadius: 14,
+                border: active ? "1px solid var(--primary)" : "1px solid var(--border)",
+                background: active ? "rgba(91, 123, 255, 0.12)" : "var(--bg-2)",
+                color: "var(--text)"
+              }}
+            >
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button type="button" onClick={() => props.onSelect(doc.id)} style={rowButtonStyle}>
+                  <div style={{ fontWeight: 700 }}>{doc.title}</div>
+                  <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>{new Date(doc.updatedAt).toLocaleString()}</div>
+                </button>
+                {active ? (
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => openEditor(doc)} style={btnSmall}>
+                      Edit
+                    </button>
+                    <button type="button" onClick={() => void deleteDoc(doc.id)} style={btnDangerSmall}>
+                      Delete
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      <hr style={{ margin: "12px 0" }} />
+      <div style={{ opacity: 0.7, fontSize: 12 }}>選擇一份文件後可編輯；要讓 agent 使用哪些文件，請到 `Agents` 頁設定權限。</div>
+      {error ? <div style={errorText}>{error}</div> : null}
 
-      {!edit ? (
-        <div style={{ opacity: 0.7, fontSize: 12 }}>
-          選擇一份文件後即可編輯；要讓 agent 使用哪些文件，請到 `Agents` 頁設定權限。
-        </div>
-      ) : (
-        <div className="card" style={{ padding: 10 }}>
-          <label style={label}>Title</label>
-          <input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} style={inp} />
-          <label style={label}>Content</label>
-          <textarea value={edit.content} onChange={(e) => setEdit({ ...edit, content: e.target.value })} rows={10} style={inp} />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => props.onDelete(edit.id)} style={btnDanger}>
-              Delete
+      {editingDoc ? (
+        <HelpModal title={`Edit Doc: ${editingDoc.title}`} onClose={closeEditor} width="min(820px, calc(100vw - 48px))" footer={null}>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div>
+              <label style={label}>Title</label>
+              <input
+                value={docDraft?.title ?? ""}
+                onChange={(e) => docDraft && setDocDraft({ ...docDraft, title: e.target.value })}
+                style={inp}
+              />
+            </div>
+            <div>
+              <label style={label}>Content</label>
+              <textarea
+                value={docDraft?.content ?? ""}
+                onChange={(e) => docDraft && setDocDraft({ ...docDraft, content: e.target.value })}
+                rows={14}
+                style={{ ...inp, fontFamily: "inherit", resize: "vertical" }}
+              />
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+            <button type="button" onClick={closeEditor} style={btnSmall}>
+              Close
             </button>
-            <button onClick={() => props.onSave(edit)} style={btnPrimary}>
+            <button type="button" onClick={() => void saveDoc()} style={btnPrimary}>
               Save
             </button>
           </div>
-        </div>
-      )}
+        </HelpModal>
+      ) : null}
     </div>
   );
 }
+
+const rowButtonStyle: React.CSSProperties = {
+  flex: 1,
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  padding: 0,
+  cursor: "pointer"
+};
 
 const label: React.CSSProperties = { fontSize: 12, opacity: 0.8 };
 
@@ -111,33 +194,30 @@ const inp: React.CSSProperties = {
   borderRadius: 12,
   border: "1px solid var(--border)",
   background: "var(--bg-2)",
-  color: "var(--text)"
+  color: "var(--text)",
+  boxSizing: "border-box"
 };
 
 const btnSmall: React.CSSProperties = {
-  padding: "7px 11px",
-  borderRadius: 12,
+  padding: "10px 14px",
+  borderRadius: 10,
   border: "1px solid var(--border)",
-  background: "var(--panel-2)",
-  color: "var(--text)"
+  background: "var(--bg-2)",
+  color: "var(--text)",
+  fontWeight: 700,
+  cursor: "pointer"
+};
+
+const btnDangerSmall: React.CSSProperties = {
+  ...btnSmall,
+  border: "1px solid rgba(255, 107, 129, 0.4)",
+  color: "#ff9aa9"
 };
 
 const btnPrimary: React.CSSProperties = {
-  padding: "8px 10px",
-  borderRadius: 12,
-  border: "1px solid var(--primary)",
-  background: "var(--primary)",
-  color: "#0b0e14",
-  width: "100%"
-};
-
-const btnDanger: React.CSSProperties = {
-  padding: "8px 10px",
-  borderRadius: 12,
-  border: "1px solid #4a2026",
-  background: "#1d1014",
-  color: "white",
-  width: "100%"
+  ...btnSmall,
+  border: "1px solid rgba(91,123,255,0.45)",
+  background: "rgba(91,123,255,0.14)"
 };
 
 const helpBtn: React.CSSProperties = {
@@ -156,4 +236,10 @@ const helpText: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.6,
   opacity: 0.82
+};
+
+const errorText: React.CSSProperties = {
+  fontSize: 12,
+  color: "#ff9aa9",
+  lineHeight: 1.6
 };

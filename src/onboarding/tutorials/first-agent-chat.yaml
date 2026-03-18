@@ -1,0 +1,73 @@
+id: first-agent-chat
+title: "[1] 自訂 Agent 並完成第一次對話"
+description: 從 Credentials、Agent 到第一句對話，完成 AgentGoRound 的第一次使用體驗。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具與 skills。Agent、Credentials 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 歡迎使用
+    checklistLabel: 認識 AgentGoRound
+    instructionTitle: 歡迎使用 agent go round 系統，我將一步一步帶您熟悉系統操作
+    instructionBody: |
+      這個系統是 AgentGoRound，是一個 browser-first、frontend-only 的 agent playground。整個專案以純前端為核心，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
+
+      這個教學案例會帶你完成第一個最基本的 use case：先設定 provider credentials、建立自己的 Agent，再讓它完成第一次對話。
+    actionLabel: 下一步
+    behavior: manual_info
+
+  - id: setup-credentials
+    title: 輸入 Credentials 資訊
+    checklistLabel: 設定 Groq Credentials
+    instructionTitle: "第一步: 輸入LLM服務提供商的驗證資訊"
+    instructionBody: |
+      請前往 Chat Config 頁籤，按下 Credentials 以進入設定視窗。這裡集中管理模型或外部服務用到的憑證；相同 provider / endpoint 的多個 agent，可以共用同一組 key。
+
+      建議先使用 Groq：
+      1. 登入 Groq Console
+      2. 在首頁找到 API Keys
+      3. 建立新的 API key
+
+      請在這裡按下 + Groq，填入你的 API key，接著按下「測試 Provider 連線」。
+      當回傳訊息前面是「測試成功」時，這一步就完成了。
+    completionLabel: 等待你完成 Groq 連線測試
+    tab: chat_config
+    targetId: chat-config-credentials-card
+    behavior: setup_groq_credential
+
+  - id: create-agent
+    title: 新增一個 Agent
+    checklistLabel: 建立第一個 Groq Agent
+    instructionTitle: 第二步請新增一個 Agent
+    instructionBody: |
+      我已經幫你切到 Agents 頁面。
+
+      請先按下 Add，接著在編輯視窗中完成以下設定：
+      - Name：自行命名
+      - Provider：選擇 Groq
+      - 按下 Load Models
+      - Model：選擇 moonshotai/kimi-k2-instruct-0905
+      - Access Control：先全部不要勾選
+
+      最後按下 Save，完成你的第一個自訂 Agent。
+    completionLabel: 等待你建立並儲存 Agent
+    tab: agents
+    targetId: agents-add-button
+    behavior: create_groq_agent
+
+  - id: first-chat
+    title: 第一次對話
+    checklistLabel: 讓 Agent 完成第一次對話
+    instructionTitle: 第三步進行簡單對話
+    instructionBody: |
+      我已經幫你切到 Chat 頁面，並預先填入「告訴我一個笑話」。
+
+      這個頁面中：
+      - 中間是對話視窗
+      - 上方按鈕可匯出原始歷史、匯出濃縮歷史、匯入歷史與清除對話
+
+      你現在只要送出這句話，並等待 Agent 回覆即可。這個案例不會檢查笑話內容是否真的好笑；只要有成功回覆、畫面正常運作，就算完成。
+    actionLabel: 完成案例教學
+    completionLabel: 等待 Agent 完成回覆
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_joke

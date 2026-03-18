@@ -496,7 +496,7 @@ Then prefer using the built-in tool \`計算\` to obtain the exact result before
       </div>
 
       {editingSkill ? (
-        <HelpModal title={`Edit Skill: ${editingSkill.name}`} onClose={() => setEditingSkillId(null)} width="min(960px, calc(100vw - 48px))">
+        <HelpModal title={`Edit Skill: ${editingSkill.name}`} onClose={() => setEditingSkillId(null)} width="min(960px, calc(100vw - 48px))" footer={null}>
           <div style={{ display: "grid", gap: 12 }}>
             <div style={{ fontSize: 13, lineHeight: 1.7, opacity: 0.86 }}>{editingSkill.description}</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -600,7 +600,7 @@ Then prefer using the built-in tool \`計算\` to obtain the exact result before
 
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button type="button" onClick={() => setEditingSkillId(null)} style={btnSmall}>
-                Cancel
+                Close
               </button>
               <button type="button" onClick={() => void onSaveSkill()} style={btnPrimary} disabled={busy}>
                 {busy ? "Saving..." : "Save"}

@@ -605,7 +605,7 @@ return {
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
             <button type="button" onClick={closeEditor} style={btnSmall}>
-              {editingTool.source === "system" ? "Close" : "Cancel"}
+              Close
             </button>
             {editingTool.source !== "system" ? (
               <button type="button" onClick={saveTool} style={btnPrimary}>

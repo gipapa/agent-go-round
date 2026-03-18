@@ -1,6 +1,11 @@
 import JSZip from "jszip";
 import { SkillConfig, SkillDocItem, SkillFileItem, SkillWorkflowPolicy } from "../types";
 
+export type SkillSnapshot = {
+  meta: SkillConfig;
+  files: SkillFileItem[];
+};
+
 const DB_NAME = "agr_skills_db";
 const VERSION = 1;
 const META_STORE = "skills_meta";
@@ -540,4 +545,17 @@ export async function importSkillZip(file: File): Promise<SkillConfig> {
   });
 
   return meta;
+}
+
+export async function restoreSkillSnapshots(snapshots: SkillSnapshot[]): Promise<void> {
+  const db = await openDb();
+  const existing = await listSkills();
+
+  for (const skill of existing) {
+    await deleteSkillRecords(db, skill.id);
+  }
+
+  for (const snapshot of snapshots) {
+    await writeSkillSnapshot(db, snapshot.meta, snapshot.files);
+  }
 }

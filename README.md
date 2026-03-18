@@ -6,6 +6,11 @@
 
 ## 專案特色
 
+- Landing / Onboarding
+  - 首頁提供 `開始使用` 與 `使用案例教學`
+  - 教學模式採左側 checklist + 右側真實操作介面
+  - 案例內容以 YAML 定義，適合人類操作與 agent 驗證
+  - YAML 解析失敗時不會讓整個 app 白屏，只會停用案例教學
 - 純前端架構
   - 主要由 `Vite + React + TypeScript` 組成
   - 可直接部署到 `GitHub Pages`
@@ -24,6 +29,7 @@
 - Docs
   - 以 IndexedDB 儲存文件
   - 允許的 docs 會被注入對應 agent 的 system context
+  - Docs 設定頁改成列表選取後再進入 `Edit` modal
 - MCP
   - 以 SSE 連接 MCP server
   - 可自訂 Tool Decision Prompt
@@ -87,11 +93,42 @@
 - Skills
 - Built-in Tools
 
+### 2.1 Onboarding / 案例教學
+
+- 入口在首頁 `使用案例教學`
+- 目前提供兩個案例：
+  - `[1] 自訂 Agent 並完成第一次對話`
+  - `[2] 建立 DOC 並驗證內容注入`
+- 教學模式特性：
+  - 左側固定 checklist 與系統提示
+  - 右側保留真實可操作的 app 介面
+  - 案例第一步介紹時可先保留 landing preview，再進入實際操作
+  - 可 `略過案例` 或 `離開教學`
+- 離開教學時：
+  - 可選擇是否保留教學期間的 `doc / tool / mcp / skill`
+  - `tool / skill` 會還原到教學開始前狀態
+  - `Docs / MCP` 會清掉固定教學資源名稱：
+    - `教學用DOC`
+    - `教學用MCP`
+
+- 教學案例以 YAML 定義，並搭配 runtime 驗證：
+
+```text
+src/onboarding/
+  catalog.ts         Tutorial catalog + safe YAML parsing
+  runtime.ts         Step entry / validation / restore logic
+  types.ts           Tutorial schema / runtime types
+  tutorials/
+    first-agent-chat.yaml
+    docs-persona-chat.yaml
+```
+
 ### 3. Docs
 
 - 每份文件都儲存在瀏覽器本地
 - agent 若被允許使用某份 doc，該內容會在送 request 前注入 prompt context
 - 這不是向量資料庫 / RAG pipeline，而是直接 prompt injection 的 MVP 設計
+- 目前 Docs 案例教學會示範把一份人設文件內容注入 prompt，觀察回答是否受影響
 
 ### 4. MCP
 
@@ -163,6 +200,7 @@ skill-name/
     - `查看思考過程`
     - `查看 tool result`
     - `查看 skill 流程紀錄`
+- 第一、第二個 onboarding 案例在進入聊天步驟前，會自動清空對話歷史，避免驗證干擾
 
 ### 8. Legacy Goal-Driven Mode
 
@@ -262,6 +300,7 @@ src/
   adapters/        Provider adapters
   app/             App shell
   mcp/             MCP SSE client + tool registry
+  onboarding/      Tutorial schema / runtime / YAML scenarios
   orchestrators/   Chat orchestration
   runtime/         Skill runtime / executor
   storage/         localStorage / IndexedDB helpers
