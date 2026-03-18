@@ -13,12 +13,14 @@
 - Agent 管理
   - 新增 / 編輯 / 刪除 agent
   - 設定名稱、描述、大頭照、provider、endpoint、model
-  - 依 agent 控制可使用的 docs、MCP、built-in tools
+  - 依 agent 控制可使用的 docs、MCP、built-in tools、skills
 - Chat
-  - 支援一般聊天與 leader / team 協作
+  - 支援一般聊天與 legacy 的 leader / team 協作模式
   - 對話歷史會保存在 IndexedDB，重新整理後可延續
   - 可匯入 / 匯出原始歷史與濃縮歷史
   - 支援全頁聊天模式
+  - assistant 訊息可顯示思考中 / skill / tool 狀態
+  - fenced code block 會以卡片方式顯示，並支援複製與收合
 - Docs
   - 以 IndexedDB 儲存文件
   - 允許的 docs 會被注入對應 agent 的 system context
@@ -29,7 +31,11 @@
 - Built-in Tools
   - 可直接撰寫瀏覽器端 JavaScript 工具
   - 可在編輯器內直接測試
-  - 支援內建 helper，例如 `pick_best_agent_for_question`
+  - 支援系統工具，例如 `get_user_profile`、`pick_best_agent_for_question`
+- Skills
+  - 使用 `skill-name/SKILL.md + references/ + scripts/ + assets/` 格式
+  - 技能包與 skill references 透過 IndexedDB abstraction layer 儲存
+  - 支援單輪與多輪 skill runtime
 - Profile 與 Credentials
   - 可設定使用者名稱、自我描述、大頭照
   - `Credentials` 集中管理 OpenAI / Groq / Custom provider keys
@@ -61,9 +67,10 @@
   - `Profile`
   - `Access Control`
 - `Access Control` 可控制：
+  - Skills
   - Docs
   - MCP tools
-  - Custom JS tools
+  - Custom JS tools / system built-in tools
   - `get_user_profile`
   - `pick_best_agent_for_question`
 
@@ -77,8 +84,8 @@
 - History & Retry
 - Docs
 - MCP
+- Skills
 - Built-in Tools
-- Skills（預留）
 
 ### 3. Docs
 
@@ -101,9 +108,67 @@
   - `document`
   - 其他目前頁面可用的瀏覽器環境
 - `Test Runner` 可直接測試 `input schema` 與 JS code
-- 目前也有隱藏內建工具可供 agent 使用：
+- 內建系統工具也走同一套 built-in tools 架構：
   - `get_user_profile`
   - `pick_best_agent_for_question`
+- 可設定「使用工具前需使用者確認」
+
+### 6. Skills
+
+- 匯入格式：
+
+```text
+skill-name/
+├── SKILL.md
+├── scripts/
+├── references/
+└── assets/
+```
+
+- `SKILL.md` 使用 YAML frontmatter + Markdown body
+- `references/` 會依 `SKILL.md` 內的引用按需載入
+- `scripts/` 與 `assets/` 會被存檔，但 script 目前不執行
+- 支援建立空白 skill、編輯 `SKILL.md`、新增/刪除文字型 `references` 與 `assets`、重新匯出 zip
+
+#### Skill Runtime
+
+- `single_turn`
+  - 輕量 skill 模式
+  - 適合語氣調整、回答框架、輕量 docs/tool 輔助
+  - 不會在最終回答後做 refine
+- `multi_turn`
+  - 會先在背景執行 verify / refine
+  - 最後一輪答案再以 streaming 顯示
+  - 可設定 verify 次數與 verifier agent
+
+#### 技能與工具整合
+
+- skill 先做 `skill decision`
+- 若命中 skill，會載入 `SKILL.md`、references 與 skill scope
+- 接著再進入 tool decision
+- tool 仍然受 agent access control 與 skill workflow 的交集限制
+
+### 7. Chat UI 行為
+
+- 一般回答：直接 streaming 顯示
+- `<think>...</think>`：
+  - `</think>` 前只顯示「思考中…」
+  - `</think>` 後的正式內容會繼續 streaming
+- tool / skill：
+  - 執行期間會顯示狀態，例如：
+    - `正在載入 skill...`
+    - `正在呼叫 MCP 工具...`
+    - `正在進行 skill verify...`
+  - 完成後可展開查看：
+    - `查看思考過程`
+    - `查看 tool result`
+    - `查看 skill 流程紀錄`
+
+### 8. Legacy Goal-Driven Mode
+
+- `goal-driven talking` 仍保留在專案中
+- 目前已視為 legacy / deprecated 模式
+- 新的 skill 多輪邏輯不依賴這條 orchestrator
 
 ## 本機啟動
 
@@ -180,6 +245,8 @@ http://127.0.0.1:3333/mcp/rpc
 - `IndexedDB`
   - docs
   - chat history
+  - skills
+  - skill references / scripts / assets
 
 ## 安全性注意事項
 
@@ -196,9 +263,11 @@ src/
   app/             App shell
   mcp/             MCP SSE client + tool registry
   orchestrators/   Chat orchestration
+  runtime/         Skill runtime / executor
   storage/         localStorage / IndexedDB helpers
   ui/              React panels
   utils/           Shared utilities
+docs/              Design notes
 mcp-test/          Local MCP test server
 run.sh             Dev / run helper
 ```

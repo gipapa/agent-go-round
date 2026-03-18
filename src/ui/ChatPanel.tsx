@@ -1,6 +1,34 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChatMessage } from "../types";
 
+type MessageSegment =
+  | { type: "text"; content: string }
+  | { type: "code"; content: string; language?: string };
+
+function collectAdjacentToolMessages(messages: ChatMessage[], index: number) {
+  const items: ChatMessage[] = [];
+
+  for (let i = index - 1; i >= 0; i--) {
+    const current = messages[i];
+    if (current.role === "tool") {
+      items.unshift(current);
+      continue;
+    }
+    break;
+  }
+
+  for (let i = index + 1; i < messages.length; i++) {
+    const current = messages[i];
+    if (current.role === "tool") {
+      items.push(current);
+      continue;
+    }
+    break;
+  }
+
+  return items;
+}
+
 function initials(name: string) {
   return (name || "?")
     .trim()
@@ -27,6 +55,51 @@ function splitThinkContent(content: string) {
     visibleContent: visible,
     thoughts
   };
+}
+
+function parseMessageSegments(content: string): MessageSegment[] {
+  const segments: MessageSegment[] = [];
+  const pattern = /```([^\n\r`]*)\r?\n?([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      const text = content.slice(lastIndex, match.index);
+      if (text) segments.push({ type: "text", content: text });
+    }
+
+    segments.push({
+      type: "code",
+      language: match[1]?.trim() || undefined,
+      content: match[2]?.replace(/\n$/, "") ?? ""
+    });
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < content.length) {
+    const text = content.slice(lastIndex);
+    if (text) segments.push({ type: "text", content: text });
+  }
+
+  return segments.length ? segments : [{ type: "text", content }];
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "true");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  area.remove();
 }
 
 function Avatar(props: { name: string; avatarUrl?: string; tone?: "user" | "assistant" | "system" }) {
@@ -58,6 +131,78 @@ function HeaderIconButton(props: {
     >
       {props.children}
     </button>
+  );
+}
+
+function SkillTraceBlock(props: { label: string; content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lineCount = useMemo(() => props.content.split(/\r?\n/).length, [props.content]);
+  const collapsible = lineCount > 5;
+
+  return (
+    <div className="chat-trace-item">
+      <div className="chat-trace-label">{props.label}</div>
+      <pre className={`chat-tool-pre chat-trace-pre ${collapsible && !expanded ? "chat-trace-pre-clamped" : ""}`}>{props.content}</pre>
+      {collapsible ? (
+        <button type="button" className="chat-trace-toggle" onClick={() => setExpanded((current) => !current)}>
+          {expanded ? "收合" : "展開全文"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function CodeBlockCard(props: { content: string; language?: string }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const lineCount = useMemo(() => props.content.split(/\r?\n/).length, [props.content]);
+
+  return (
+    <div className="chat-code-card">
+      <div className="chat-code-header">
+        <div className="chat-code-meta">
+          <span className="chat-code-dot amber" />
+          <span className="chat-code-dot cyan" />
+          <span className="chat-code-label">{props.language || "CODE"}</span>
+          <span className="chat-code-lines">{lineCount} lines</span>
+        </div>
+        <div className="chat-code-actions">
+          <button
+            type="button"
+            className="chat-code-action"
+            onClick={async () => {
+              await copyText(props.content);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1200);
+            }}
+          >
+            {copied ? "已複製" : "複製"}
+          </button>
+          <button type="button" className="chat-code-action" onClick={() => setCollapsed((current) => !current)}>
+            {collapsed ? "展開區塊" : "收起區塊"}
+          </button>
+        </div>
+      </div>
+      {!collapsed ? <pre className="chat-code-pre">{props.content}</pre> : <div className="chat-code-collapsed">程式碼區塊已收起</div>}
+    </div>
+  );
+}
+
+function MessageContent(props: { content: string }) {
+  const segments = useMemo(() => parseMessageSegments(props.content), [props.content]);
+
+  return (
+    <div className="chat-rich-text">
+      {segments.map((segment, index) =>
+        segment.type === "code" ? (
+          <CodeBlockCard key={`code-${index}`} content={segment.content} language={segment.language} />
+        ) : (
+          <div key={`text-${index}`} className="chat-message-text">
+            {segment.content}
+          </div>
+        )
+      )}
+    </div>
   );
 }
 
@@ -166,17 +311,23 @@ export default function ChatPanel(props: ChatPanelProps) {
       <div className={`chat-thread ${props.fullscreen ? "chat-thread-fullscreen" : ""}`}>
         {props.history.length === 0 ? <div className="chat-empty">{emptyLabel}</div> : null}
         {props.history.map((m, index) => {
-          const prev = props.history[index - 1];
-          const next = props.history[index + 1];
           const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;
           const isPhase = m.role === "system" && m.name === "phase";
           const { visibleContent, thoughts } = m.role === "assistant" ? splitThinkContent(m.content) : { visibleContent: m.content, thoughts: [] };
+          const toolMessages = m.role === "assistant" ? collectAdjacentToolMessages(props.history, index) : [];
+          const shouldHideStreamingContent = m.role === "assistant" && m.isStreaming && m.hideWhileStreaming;
+          const renderedContent = shouldHideStreamingContent ? "" : visibleContent;
+          const hasVisibleContent = renderedContent.trim().length > 0;
           const tone = m.role === "user" ? "user" : m.role === "tool" || m.role === "system" ? "system" : "assistant";
           const displayName =
             m.displayName ?? (m.role === "user" ? props.userName : m.role === "tool" ? "Tool" : m.role === "system" ? "System" : m.name || "Agent");
 
-          if (m.role === "tool" && next?.role === "assistant") {
-            return null;
+          if (m.role === "tool") {
+            const prevNonTool = props.history.slice(0, index).reverse().find((item) => item.role !== "tool");
+            const nextNonTool = props.history.slice(index + 1).find((item) => item.role !== "tool");
+            if (prevNonTool?.role === "assistant" || nextNonTool?.role === "assistant") {
+              return null;
+            }
           }
 
           if (isPhase) {
@@ -196,8 +347,11 @@ export default function ChatPanel(props: ChatPanelProps) {
                   <span className="chat-role-tag">{m.role}</span>
                   <span className="chat-time">{formatTime(m.ts)}</span>
                 </div>
+                {m.role === "assistant" && m.statusText ? (
+                  <div className={`chat-status-pill ${m.isStreaming ? "live" : ""}`}>{m.statusText}</div>
+                ) : null}
                 <div className={`chat-bubble ${m.role} ${isLeader ? "leader" : ""}`}>
-                  <div className="chat-message-text">{visibleContent}</div>
+                  {hasVisibleContent ? <MessageContent content={renderedContent} /> : <div className="chat-status-placeholder">...</div>}
                 </div>
                 {m.role === "assistant" && thoughts.length > 0 ? (
                   <details className="chat-tool-details">
@@ -205,10 +359,20 @@ export default function ChatPanel(props: ChatPanelProps) {
                     <pre className="chat-tool-pre">{thoughts.join("\n\n")}</pre>
                   </details>
                 ) : null}
-                {m.role === "assistant" && prev?.role === "tool" ? (
+                {m.role === "assistant" && m.skillTrace && m.skillTrace.length > 0 ? (
+                  <details className="chat-tool-details">
+                    <summary>查看 skill 流程紀錄</summary>
+                    <div className="chat-trace-list">
+                      {m.skillTrace.map((entry, traceIndex) => (
+                        <SkillTraceBlock key={`${m.id}-skill-trace-${traceIndex}`} label={entry.label} content={entry.content} />
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+                {m.role === "assistant" && toolMessages.length > 0 ? (
                   <details className="chat-tool-details">
                     <summary>查看 tool result</summary>
-                    <pre className="chat-tool-pre">{prev.content}</pre>
+                    <pre className="chat-tool-pre">{toolMessages.map((item) => item.content).join("\n\n---\n\n")}</pre>
                   </details>
                 ) : null}
               </div>

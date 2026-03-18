@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { AgentConfig, BuiltInToolConfig, DetectResult, DocItem, McpServerConfig } from "../types";
+import { AgentConfig, BuiltInToolConfig, DetectResult, DocItem, McpServerConfig, SkillConfig } from "../types";
 import { ModelCredentialEntry } from "../storage/settingsStore";
 import { generateId } from "../utils/id";
 import HelpModal from "./HelpModal";
@@ -78,6 +78,7 @@ export default function AgentsPanel(props: {
   docs: DocItem[];
   mcpServers: McpServerConfig[];
   builtInTools: BuiltInToolConfig[];
+  skills: SkillConfig[];
   credentialProviders: ModelCredentialEntry[];
   resolveApiKey: (agent: AgentConfig) => string | undefined;
 }) {
@@ -88,7 +89,7 @@ export default function AgentsPanel(props: {
   return (
     <div>
         <div className="agents-toolbar" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 800 }}>Agents</div>
+          <div style={{ fontWeight: 800, fontSize: 18 }}>Agents</div>
         <button onClick={() => setDraft(emptyAgent())} style={{ ...btnSmall, marginLeft: "auto" }}>
           + Add
         </button>
@@ -187,6 +188,7 @@ export default function AgentsPanel(props: {
             docs={props.docs}
             mcpServers={props.mcpServers}
             builtInTools={props.builtInTools}
+            skills={props.skills}
             credentialProviders={props.credentialProviders}
             resolveApiKey={props.resolveApiKey}
             onCancel={() => setDraft(null)}
@@ -206,6 +208,7 @@ function Editor(props: {
   docs: DocItem[];
   mcpServers: McpServerConfig[];
   builtInTools: BuiltInToolConfig[];
+  skills: SkillConfig[];
   credentialProviders: ModelCredentialEntry[];
   resolveApiKey: (agent: AgentConfig) => string | undefined;
   onCancel: () => void;
@@ -221,9 +224,12 @@ function Editor(props: {
   const allowAllDocs = a.allowedDocIds === undefined;
   const allowAllMcps = a.allowedMcpServerIds === undefined;
   const allowAllBuiltIns = a.allowedBuiltInToolIds === undefined;
+  const allowAllSkills = a.allowedSkillIds === undefined;
   const docsEnabled = a.enableDocs !== false;
   const mcpEnabled = a.enableMcp !== false;
   const builtInToolsEnabled = a.enableBuiltInTools !== false;
+  const skillsEnabled = a.enableSkills === true;
+  const accessLockedBySkills = skillsEnabled;
 
   function toggleDoc(id: string) {
     const allowed = new Set(a.allowedDocIds ?? []);
@@ -244,6 +250,13 @@ function Editor(props: {
     if (allowed.has(id)) allowed.delete(id);
     else allowed.add(id);
     setA({ ...a, allowedBuiltInToolIds: Array.from(allowed) });
+  }
+
+  function toggleSkill(id: string) {
+    const allowed = new Set(a.allowedSkillIds ?? []);
+    if (allowed.has(id)) allowed.delete(id);
+    else allowed.add(id);
+    setA({ ...a, allowedSkillIds: Array.from(allowed) });
   }
 
   function onAvatarPicked(file: File | undefined) {
@@ -277,6 +290,31 @@ function Editor(props: {
     setRemoteModels([]);
     setModelLoadError(null);
   }, [a.endpoint, resolvedApiKey]);
+
+  React.useEffect(() => {
+    if (!skillsEnabled) return;
+    setA((prev) => {
+      if (
+        prev.enableDocs !== true ||
+        prev.enableMcp !== true ||
+        prev.enableBuiltInTools !== true ||
+        prev.allowedDocIds !== undefined ||
+        prev.allowedMcpServerIds !== undefined ||
+        prev.allowedBuiltInToolIds !== undefined
+      ) {
+        return {
+          ...prev,
+          enableDocs: true,
+          enableMcp: true,
+          enableBuiltInTools: true,
+          allowedDocIds: undefined,
+          allowedMcpServerIds: undefined,
+          allowedBuiltInToolIds: undefined
+        };
+      }
+      return prev;
+    });
+  }, [skillsEnabled]);
 
   async function loadModels() {
     setIsLoadingModels(true);
@@ -468,7 +506,63 @@ function Editor(props: {
             <label style={sectionToggleRow}>
               <input
                 type="checkbox"
+                checked={skillsEnabled}
+                onChange={(e) =>
+                  setA({
+                    ...a,
+                    enableSkills: e.target.checked,
+                    allowedSkillIds: e.target.checked ? undefined : []
+                  })
+                }
+              />
+              <div>
+                <div style={sectionTitle}>Skills</div>
+                <div style={sectionHint}>勾選後會先做 skill decision；同時會強制開啟 Docs、MCP 與 Built-in Tools 的全部存取。</div>
+              </div>
+            </label>
+            {skillsEnabled ? (
+              <>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <label style={checkRow}>
+                    <input
+                      type="radio"
+                      name={`skills-mode-${a.id}`}
+                      checked={allowAllSkills}
+                      onChange={() => setA({ ...a, allowedSkillIds: undefined })}
+                    />
+                    <span>All skills</span>
+                  </label>
+                  <label style={checkRow}>
+                    <input
+                      type="radio"
+                      name={`skills-mode-${a.id}`}
+                      checked={!allowAllSkills}
+                      onChange={() => setA({ ...a, allowedSkillIds: a.allowedSkillIds ?? [] })}
+                    />
+                    <span>Custom selection</span>
+                  </label>
+                </div>
+                {!allowAllSkills ? (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {props.skills.length === 0 ? <div style={{ fontSize: 12, opacity: 0.7 }}>No skills yet.</div> : null}
+                    {props.skills.map((skill) => (
+                      <label key={skill.id} style={checkRow}>
+                        <input type="checkbox" checked={a.allowedSkillIds?.includes(skill.id) ?? false} onChange={() => toggleSkill(skill.id)} />
+                        <span>{skill.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+
+          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+            <label style={sectionToggleRow}>
+              <input
+                type="checkbox"
                 checked={docsEnabled}
+                disabled={accessLockedBySkills}
                 onChange={(e) =>
                   setA({
                     ...a,
@@ -479,7 +573,9 @@ function Editor(props: {
               />
               <div>
                 <div style={sectionTitle}>Docs</div>
-                <div style={sectionHint}>勾選後預設可使用全部文件；若需要可改成只允許特定文件。</div>
+                <div style={sectionHint}>
+                  {accessLockedBySkills ? "Skills 已啟用：Docs 已強制允許全部，且暫時不可修改。" : "勾選後預設可使用全部文件；若需要可改成只允許特定文件。"}
+                </div>
               </div>
             </label>
             {docsEnabled ? (
@@ -490,6 +586,7 @@ function Editor(props: {
                       type="radio"
                       name={`docs-mode-${a.id}`}
                       checked={allowAllDocs}
+                      disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedDocIds: undefined })}
                     />
                     <span>All docs</span>
@@ -499,6 +596,7 @@ function Editor(props: {
                       type="radio"
                       name={`docs-mode-${a.id}`}
                       checked={!allowAllDocs}
+                      disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedDocIds: a.allowedDocIds ?? [] })}
                     />
                     <span>Custom selection</span>
@@ -509,7 +607,7 @@ function Editor(props: {
                     {props.docs.length === 0 && <div style={{ fontSize: 12, opacity: 0.7 }}>No docs yet.</div>}
                     {props.docs.map((d) => (
                       <label key={d.id} style={checkRow}>
-                        <input type="checkbox" checked={a.allowedDocIds?.includes(d.id) ?? false} onChange={() => toggleDoc(d.id)} />
+                        <input type="checkbox" checked={a.allowedDocIds?.includes(d.id) ?? false} disabled={accessLockedBySkills} onChange={() => toggleDoc(d.id)} />
                         <span>{d.title}</span>
                       </label>
                     ))}
@@ -524,6 +622,7 @@ function Editor(props: {
               <input
                 type="checkbox"
                 checked={mcpEnabled}
+                disabled={accessLockedBySkills}
                 onChange={(e) =>
                   setA({
                     ...a,
@@ -534,7 +633,9 @@ function Editor(props: {
               />
               <div>
                 <div style={sectionTitle}>MCP Tools</div>
-                <div style={sectionHint}>勾選後預設可使用全部 MCP tools；若需要可改成只允許特定 server。</div>
+                <div style={sectionHint}>
+                  {accessLockedBySkills ? "Skills 已啟用：MCP 已強制允許全部，且暫時不可修改。" : "勾選後預設可使用全部 MCP tools；若需要可改成只允許特定 server。"}
+                </div>
               </div>
             </label>
             {mcpEnabled ? (
@@ -545,6 +646,7 @@ function Editor(props: {
                       type="radio"
                       name={`mcp-mode-${a.id}`}
                       checked={allowAllMcps}
+                      disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedMcpServerIds: undefined })}
                     />
                     <span>All MCP servers</span>
@@ -554,6 +656,7 @@ function Editor(props: {
                       type="radio"
                       name={`mcp-mode-${a.id}`}
                       checked={!allowAllMcps}
+                      disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedMcpServerIds: a.allowedMcpServerIds ?? [] })}
                     />
                     <span>Custom selection</span>
@@ -567,6 +670,7 @@ function Editor(props: {
                         <input
                           type="checkbox"
                           checked={a.allowedMcpServerIds?.includes(s.id) ?? false}
+                          disabled={accessLockedBySkills}
                           onChange={() => toggleMcp(s.id)}
                         />
                         <span>{s.name}</span>
@@ -584,19 +688,22 @@ function Editor(props: {
                 <input
                   type="checkbox"
                   checked={builtInToolsEnabled}
+                  disabled={accessLockedBySkills}
                   onChange={(e) =>
                     setA({
                       ...a,
                       enableBuiltInTools: e.target.checked,
-                      allowedBuiltInToolIds: e.target.checked ? undefined : a.allowedBuiltInToolIds,
-                      allowUserProfileTool: e.target.checked ? a.allowUserProfileTool : false,
-                      allowAgentDirectoryTool: e.target.checked ? a.allowAgentDirectoryTool : false
+                      allowedBuiltInToolIds: e.target.checked ? undefined : []
                     })
                   }
                 />
                 <div>
                   <div style={sectionTitle}>Built-in Tools</div>
-                  <div style={sectionHint}>勾選後預設可使用全部自訂工具；也可另外開啟使用者資訊工具與個別工具名單。</div>
+                  <div style={sectionHint}>
+                    {accessLockedBySkills
+                      ? "Skills 已啟用：Built-in Tools 已強制允許全部，且暫時不可修改。"
+                      : "勾選後預設可使用全部使用者自訂工具；若改成 Custom selection，則可逐一選擇系統工具與自訂工具。"}
+                  </div>
                 </div>
               </label>
               <button
@@ -617,6 +724,7 @@ function Editor(props: {
                       type="radio"
                       name={`builtin-mode-${a.id}`}
                       checked={allowAllBuiltIns}
+                      disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedBuiltInToolIds: undefined })}
                     />
                     <span>All custom JS tools</span>
@@ -626,63 +734,84 @@ function Editor(props: {
                       type="radio"
                       name={`builtin-mode-${a.id}`}
                       checked={!allowAllBuiltIns}
+                      disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedBuiltInToolIds: a.allowedBuiltInToolIds ?? [] })}
                     />
                     <span>Custom selection</span>
                   </label>
                 </div>
-                <label style={checkRow}>
-                  <input
-                    type="checkbox"
-                    checked={!!a.allowUserProfileTool}
-                    onChange={(e) => setA({ ...a, allowUserProfileTool: e.target.checked })}
-                  />
-                  <span>允許存取使用者資訊（get_user_profile）</span>
-                </label>
-                <label style={checkRow}>
-                  <input
-                    type="checkbox"
-                    checked={!!a.allowAgentDirectoryTool}
-                    onChange={(e) => setA({ ...a, allowAgentDirectoryTool: e.target.checked })}
-                  />
-                  <span>允許存取所有Agent清單（pick_best_agent_for_question）</span>
-                </label>
                 {!allowAllBuiltIns ? (
-                  <div style={{ display: "grid", gap: 6 }}>
-                    {props.builtInTools.length === 0 && <div style={{ fontSize: 12, opacity: 0.7 }}>No custom JS tools yet.</div>}
-                    {props.builtInTools.map((tool) => (
-                      <label key={tool.id} style={checkRow}>
-                        <input
-                          type="checkbox"
-                          checked={a.allowedBuiltInToolIds?.includes(tool.id) ?? false}
-                          onChange={() => toggleBuiltInTool(tool.id)}
-                        />
-                        <span>{tool.name}</span>
-                      </label>
-                    ))}
-                  </div>
+                  <>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {props.builtInTools.filter((tool) => tool.source === "system").length > 0 ? (
+                        <>
+                          <div style={{ fontSize: 12, opacity: 0.72, fontWeight: 700 }}>系統工具</div>
+                          {props.builtInTools
+                            .filter((tool) => tool.source === "system")
+                            .map((tool) => (
+                              <label key={tool.id} style={checkRow}>
+                                <input
+                                  type="checkbox"
+                                  checked={a.allowedBuiltInToolIds?.includes(tool.id) ?? false}
+                                  disabled={accessLockedBySkills}
+                                  onChange={() => toggleBuiltInTool(tool.id)}
+                                />
+                                <span>{tool.displayLabel ?? tool.name}</span>
+                              </label>
+                            ))}
+                        </>
+                      ) : null}
+                    </div>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      <div style={{ fontSize: 12, opacity: 0.72, fontWeight: 700 }}>使用者自訂工具</div>
+                      {props.builtInTools.filter((tool) => tool.source !== "system").length === 0 ? (
+                        <div style={{ fontSize: 12, opacity: 0.7 }}>No custom JS tools yet.</div>
+                      ) : (
+                        props.builtInTools
+                          .filter((tool) => tool.source !== "system")
+                          .map((tool) => (
+                            <label key={tool.id} style={checkRow}>
+                              <input
+                                type="checkbox"
+                                checked={a.allowedBuiltInToolIds?.includes(tool.id) ?? false}
+                                disabled={accessLockedBySkills}
+                                onChange={() => toggleBuiltInTool(tool.id)}
+                              />
+                              <span>{tool.name}</span>
+                            </label>
+                          ))
+                      )}
+                    </div>
+                  </>
                 ) : null}
               </>
             ) : null}
           </div>
+
         </div>
 
         {showUserInfoHelp && (
-          <HelpModal title="使用者資訊工具說明與測試方式" onClose={() => setShowUserInfoHelp(false)}>
+          <HelpModal title="系統工具說明與測試方式" onClose={() => setShowUserInfoHelp(false)}>
             <div style={helpText}>
-              這個 built-in tool 會讓 agent 讀取目前使用者在 <strong>Profile</strong> 頁填寫的資訊。
-              目前會回傳使用者名稱、自我描述，以及是否有設定大頭照。
+              在 <strong>Built-in Tools</strong> 裡，除了使用者自訂的 JS tools，也有兩個系統工具：
+              <code>get_user_profile</code> 與 <code>pick_best_agent_for_question</code>。
             </div>
             <div style={{ ...helpText, marginTop: 8 }}>
               使用方式：
               <br />
               1. 到 <strong>Profile</strong> 填入名稱、自我描述，必要時也可設定大頭照
               <br />
-              2. 在 <strong>Agents</strong> 頁面替目標 agent 勾選 <strong>允許存取使用者資訊(profile)</strong>
+              2. 在 <strong>Agents</strong> 頁面替目標 agent 開啟 <strong>Built-in Tools</strong>
               <br />
-              3. 回到 <strong>Chat</strong>，詢問像是 <code>我是誰？</code>、<code>你知道我的偏好嗎？</code> 這類問題
+              3. 若要使用系統工具，切換成 <strong>Custom selection</strong> 後勾選：
               <br />
-              4. 如果 agent 決定呼叫這個工具，最後回覆就能根據你已儲存的個人資料回答，並附上可展開的 tool result 區塊
+              <code>[系統工具]允許存取使用者資訊(get_user_profile)</code>
+              <br />
+              或
+              <br />
+              <code>[系統工具]允許存取所有Agent清單(pick_best_agent_for_question)</code>
+              <br />
+              4. 回到 <strong>Chat</strong> 後，agent 就能在工具判斷階段決定是否呼叫這些系統工具
             </div>
           </HelpModal>
         )}

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { BuiltInToolConfig } from "../types";
+import { loadUiState } from "../storage/settingsStore";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestSavedAgentForQuestion } from "../utils/agentDirectoryTool";
@@ -12,87 +13,118 @@ function emptyTool(index: number): BuiltInToolConfig {
     description: "Describe what this browser-side JS tool does for the agent.",
     code: 'const joke = "冷知識：CSS 最會的不是排版，是讓人懷疑人生。";\nalert(joke);\nreturn {\n  joke,\n  source: "built-in tool"\n};',
     inputSchema: {},
-    updatedAt: Date.now()
+    requireConfirmation: false,
+    updatedAt: Date.now(),
+    source: "custom"
   };
 }
 
+function stringifyAny(value: any) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 export default function BuiltInToolsPanel(props: {
+  systemTools: BuiltInToolConfig[];
   tools: BuiltInToolConfig[];
   onChange: (next: BuiltInToolConfig[]) => void;
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(props.tools[0]?.id ?? null);
+  const allTools = useMemo(() => [...props.systemTools, ...props.tools], [props.systemTools, props.tools]);
+  const [selectedId, setSelectedId] = useState<string | null>(() => props.systemTools[0]?.id ?? props.tools[0]?.id ?? null);
+  const [showHelp, setShowHelp] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editingToolId, setEditingToolId] = useState<string | null>(null);
+  const [toolDraft, setToolDraft] = useState<BuiltInToolConfig | null>(null);
   const [schemaDraft, setSchemaDraft] = useState("{}");
   const [schemaError, setSchemaError] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const [testInputDraft, setTestInputDraft] = useState("{}");
   const [testError, setTestError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<string>("");
+  const [testResult, setTestResult] = useState("");
   const [isRunningTest, setIsRunningTest] = useState(false);
+  const [isNewTool, setIsNewTool] = useState(false);
 
-  const selectedTool = useMemo(() => props.tools.find((tool) => tool.id === selectedId) ?? null, [props.tools, selectedId]);
+  const editingTool = useMemo(() => (toolDraft?.id === editingToolId ? toolDraft : allTools.find((tool) => tool.id === editingToolId) ?? null), [allTools, editingToolId, toolDraft]);
   const duplicateName = useMemo(() => {
-    if (!selectedTool) return false;
-    const name = selectedTool.name.trim();
+    if (!toolDraft || toolDraft.source === "system") return false;
+    const name = toolDraft.name.trim();
     if (!name) return false;
-    return props.tools.some((tool) => tool.id !== selectedTool.id && tool.name.trim() === name);
-  }, [props.tools, selectedTool]);
-  const reservedName = selectedTool?.name.trim() === "get_user_profile";
+    return allTools.some((tool) => tool.id !== toolDraft.id && tool.name.trim() === name);
+  }, [allTools, toolDraft]);
+  const reservedName = useMemo(() => {
+    if (!toolDraft || toolDraft.source === "system") return false;
+    return props.systemTools.some((tool) => tool.name === toolDraft.name.trim());
+  }, [props.systemTools, toolDraft]);
 
   React.useEffect(() => {
-    if (selectedId && props.tools.some((tool) => tool.id === selectedId)) return;
-    setSelectedId(props.tools[0]?.id ?? null);
-  }, [props.tools, selectedId]);
+    if (selectedId && allTools.some((tool) => tool.id === selectedId)) return;
+    setSelectedId(props.systemTools[0]?.id ?? props.tools[0]?.id ?? null);
+  }, [allTools, props.systemTools, props.tools, selectedId]);
 
-  React.useEffect(() => {
-    if (!selectedTool) {
-      setSchemaDraft("{}");
-      setSchemaError(null);
-      setTestInputDraft("{}");
-      setTestError(null);
-      setTestResult("");
-      return;
-    }
-    setSchemaDraft(JSON.stringify(selectedTool.inputSchema ?? {}, null, 2));
+  function openEditor(tool: BuiltInToolConfig, nextIsNew = false) {
+    setEditingToolId(tool.id);
+    setToolDraft({ ...tool, inputSchema: tool.inputSchema ?? {} });
+    setSchemaDraft(JSON.stringify(tool.inputSchema ?? {}, null, 2));
     setSchemaError(null);
     setTestInputDraft("{}");
     setTestError(null);
     setTestResult("");
-  }, [selectedTool?.id, selectedTool?.updatedAt]);
+    setIsNewTool(nextIsNew);
+  }
 
-  function updateTool(id: string, patch: Partial<BuiltInToolConfig>) {
-    props.onChange(
-      props.tools.map((tool) =>
-        tool.id === id
-          ? {
-              ...tool,
-              ...patch,
-              updatedAt: Date.now()
-            }
-          : tool
-      )
-    );
+  function closeEditor() {
+    setEditingToolId(null);
+    setToolDraft(null);
+    setSchemaDraft("{}");
+    setSchemaError(null);
+    setTestInputDraft("{}");
+    setTestError(null);
+    setTestResult("");
+    setIsNewTool(false);
   }
 
   function addTool() {
     const tool = emptyTool(props.tools.length);
-    props.onChange([tool, ...props.tools]);
     setSelectedId(tool.id);
+    openEditor(tool, true);
   }
 
   function deleteTool(id: string) {
     props.onChange(props.tools.filter((tool) => tool.id !== id));
+    if (selectedId === id) {
+      setSelectedId(props.systemTools[0]?.id ?? props.tools.find((tool) => tool.id !== id)?.id ?? null);
+    }
   }
 
   async function runTest() {
-    if (!selectedTool) return;
+    if (!toolDraft) return;
     setIsRunningTest(true);
     setTestError(null);
     try {
+      if (toolDraft.requireConfirmation) {
+        const allowed = window.confirm(`允許執行工具「${toolDraft.displayLabel ?? toolDraft.name}」測試嗎？`);
+        if (!allowed) {
+          throw new Error("User blocked tool execution.");
+        }
+      }
       const input = JSON.parse(testInputDraft || "{}");
-      const output = await runBuiltInScriptTool(selectedTool, input, {
-        pick_best_agent_for_question: pickBestSavedAgentForQuestion
+      const output = await runBuiltInScriptTool(toolDraft, input, {
+        system: {
+          get_user_profile: () => {
+            const state = loadUiState();
+            return {
+              name: state.userName ?? "You",
+              description: state.userDescription ?? "",
+              hasAvatar: !!state.userAvatarUrl
+            };
+          },
+          pick_best_agent_for_question: pickBestSavedAgentForQuestion
+        }
       });
-      setTestResult(typeof output === "string" ? output : JSON.stringify(output, null, 2));
+      setTestResult(stringifyAny(output));
     } catch (error: any) {
       setTestResult("");
       setTestError(String(error?.message ?? error));
@@ -101,9 +133,65 @@ export default function BuiltInToolsPanel(props: {
     }
   }
 
+  function onSchemaChange(next: string) {
+    setSchemaDraft(next);
+    if (!toolDraft || toolDraft.source === "system") return;
+    try {
+      const parsed = JSON.parse(next || "{}");
+      setToolDraft({ ...toolDraft, inputSchema: parsed });
+      setSchemaError(null);
+    } catch (error: any) {
+      setSchemaError(error?.message ?? "Invalid JSON");
+    }
+  }
+
+  function saveTool() {
+    if (!toolDraft || toolDraft.source === "system") {
+      closeEditor();
+      return;
+    }
+    if (!toolDraft.name.trim()) {
+      setError("Tool name is required.");
+      return;
+    }
+    if (duplicateName) {
+      setError("Tool name must be unique.");
+      return;
+    }
+    if (reservedName) {
+      setError("System tool names are reserved.");
+      return;
+    }
+    if (schemaError) {
+      setError(schemaError);
+      return;
+    }
+
+    const nextTool: BuiltInToolConfig = {
+      ...toolDraft,
+      name: toolDraft.name.trim(),
+      description: toolDraft.description.trim(),
+      updatedAt: Date.now(),
+      source: "custom"
+    };
+
+    const nextTools = isNewTool
+      ? [nextTool, ...props.tools]
+      : props.tools.map((tool) => (tool.id === nextTool.id ? nextTool : tool));
+    props.onChange(nextTools);
+    setSelectedId(nextTool.id);
+    setError(null);
+    closeEditor();
+  }
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
+          Register browser-side JavaScript tools for agents. Tool code runs in the same page context, so it can call globals
+          such as <code>alert</code>, <code>window</code>, and <code>document</code>. Return a value if you want the model to
+          receive structured tool output.
+        </div>
         <button type="button" onClick={() => setShowHelp(true)} title="Built-in Tools 使用說明" aria-label="Built-in Tools 使用說明" style={helpBtn}>
           ?
         </button>
@@ -270,7 +358,7 @@ return {
           <hr style={divider} />
           <div style={{ ...helpText, marginTop: 8 }}>
             <div style={exampleTitle}>範例：自動選擇適合的 Agent 來回覆問題</div>
-            這個工具會先呼叫內建 helper <code>pick_best_agent_for_question</code>，
+            這個工具會先呼叫內建 helper <code>system.pick_best_agent_for_question</code>，
             從已儲存的 agent 清單中挑出最適合處理問題的 agent，然後再代替使用者呼叫該 agent。
             <br />
             Input schema：
@@ -290,7 +378,7 @@ if (!question) {
   throw new Error("Input must include question.");
 }
 
-const agentName = await pick_best_agent_for_question(question);
+const agentName = await system.pick_best_agent_for_question(question);
 const agent = agents.find((item) => item.name === agentName);
 
 if (!agent) {
@@ -335,14 +423,45 @@ return {
         </HelpModal>
       )}
 
-      <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
-        Register browser-side JavaScript tools for agents. Tool code runs in the same page context, so it can call globals
-        such as <code>alert</code>, <code>window</code>, and <code>document</code>. Return a value if you want the model to
-        receive structured tool output.
+      <div style={{ display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>系統工具</div>
+        {props.systemTools.map((tool) => {
+          const active = tool.id === selectedId;
+          return (
+            <div
+              key={tool.id}
+              style={{
+                padding: 12,
+                borderRadius: 14,
+                border: active ? "1px solid var(--primary)" : "1px solid var(--border)",
+                background: active ? "rgba(91, 123, 255, 0.12)" : "var(--bg-2)",
+                color: "var(--text)"
+              }}
+            >
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(tool.id)}
+                  style={rowButtonStyle}
+                >
+                  <div style={{ fontWeight: 700 }}>{tool.displayLabel ?? tool.name}</div>
+                  <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>{tool.description}</div>
+                </button>
+                {active ? (
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                    <button type="button" onClick={() => openEditor(tool)} style={btnSmall}>
+                      Edit
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 800 }}>Registered Tools</div>
+        <div style={{ fontWeight: 800 }}>使用者自訂工具</div>
         <button type="button" onClick={addTool} style={btnSmall}>
           + Add JS Tool
         </button>
@@ -353,120 +472,171 @@ return {
         {props.tools.map((tool) => {
           const active = tool.id === selectedId;
           return (
-            <button
+            <div
               key={tool.id}
-              type="button"
-              onClick={() => setSelectedId(tool.id)}
               style={{
-                textAlign: "left",
                 padding: 12,
                 borderRadius: 14,
                 border: active ? "1px solid var(--primary)" : "1px solid var(--border)",
                 background: active ? "rgba(91, 123, 255, 0.12)" : "var(--bg-2)",
-                color: "var(--text)",
-                cursor: "pointer"
+                color: "var(--text)"
               }}
             >
-              <div style={{ fontWeight: 700 }}>{tool.name}</div>
-              <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>{tool.description || "No description yet."}</div>
-            </button>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(tool.id)}
+                  style={rowButtonStyle}
+                >
+                  <div style={{ fontWeight: 700 }}>{tool.name}</div>
+                  <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>{tool.description || "No description yet."}</div>
+                </button>
+                {active ? (
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => openEditor(tool)} style={btnSmall}>
+                      Edit
+                    </button>
+                    <button type="button" onClick={() => deleteTool(tool.id)} style={btnDangerSmall}>
+                      Delete
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
           );
         })}
       </div>
 
-      {selectedTool ? (
-        <div className="card" style={{ padding: 14, display: "grid", gap: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ fontWeight: 800 }}>Tool Editor</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={() => deleteTool(selectedTool.id)} style={btnDangerSmall}>
-                Delete Tool
-              </button>
-            </div>
-          </div>
+      {error ? <div style={errorText}>{error}</div> : null}
 
-          <div>
-            <label style={label}>Tool name</label>
-            <input value={selectedTool.name} onChange={(e) => updateTool(selectedTool.id, { name: e.target.value })} style={inp} />
-            {duplicateName ? <div style={errorText}>Tool name must be unique.</div> : null}
-            {reservedName ? <div style={errorText}>`get_user_profile` is reserved for the built-in profile tool.</div> : null}
-          </div>
-
-          <div>
-            <label style={label}>Description</label>
-            <textarea
-              value={selectedTool.description}
-              onChange={(e) => updateTool(selectedTool.id, { description: e.target.value })}
-              rows={3}
-              style={{ ...inp, fontFamily: "inherit" }}
-            />
-          </div>
-
-          <div>
-            <label style={label}>Input schema (JSON)</label>
-            <textarea
-              value={schemaDraft}
-              onChange={(e) => {
-                const next = e.target.value;
-                setSchemaDraft(next);
-                try {
-                  const parsed = JSON.parse(next || "{}");
-                  updateTool(selectedTool.id, { inputSchema: parsed });
-                  setSchemaError(null);
-                } catch (error: any) {
-                  setSchemaError(error?.message ?? "Invalid JSON");
-                }
-              }}
-              rows={6}
-              style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
-            />
-            {schemaError ? <div style={errorText}>{schemaError}</div> : null}
-          </div>
-
-          <div>
-            <label style={label}>JavaScript code</label>
-            <textarea
-              value={selectedTool.code}
-              onChange={(e) => updateTool(selectedTool.id, { code: e.target.value })}
-              rows={12}
-              style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
-            />
-          </div>
-
-          <div className="card" style={{ padding: 12, display: "grid", gap: 10, background: "rgba(255,255,255,0.02)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ fontWeight: 700 }}>Test Runner</div>
-              <button type="button" onClick={runTest} style={btnSmall} disabled={isRunningTest}>
-                {isRunningTest ? "Testing..." : "Test Tool"}
-              </button>
-            </div>
+      {editingTool ? (
+        <HelpModal
+          title={`${editingTool.source === "system" ? "View Tool" : "Edit Tool"}: ${editingTool.displayLabel ?? editingTool.name}`}
+          onClose={closeEditor}
+          width="min(860px, calc(100vw - 48px))"
+          footer={null}
+        >
+          <div style={{ display: "grid", gap: 12 }}>
             <div>
-              <label style={label}>Test input (JSON)</label>
+              <label style={label}>Tool name</label>
+              <input
+                value={toolDraft?.name ?? ""}
+                onChange={(e) => toolDraft && setToolDraft({ ...toolDraft, name: e.target.value })}
+                style={inp}
+                disabled={editingTool.source === "system"}
+              />
+              {duplicateName ? <div style={errorText}>Tool name must be unique.</div> : null}
+              {reservedName ? <div style={errorText}>System tool names are reserved.</div> : null}
+            </div>
+
+            <div>
+              <label style={label}>Description</label>
               <textarea
-                value={testInputDraft}
-                onChange={(e) => {
-                  setTestInputDraft(e.target.value);
-                  setTestError(null);
-                }}
-                rows={4}
-                style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
+                value={toolDraft?.description ?? ""}
+                onChange={(e) => toolDraft && setToolDraft({ ...toolDraft, description: e.target.value })}
+                rows={3}
+                style={{ ...inp, fontFamily: "inherit" }}
+                disabled={editingTool.source === "system"}
               />
             </div>
-            {testError ? <div style={errorText}>Test failed: {testError}</div> : null}
-            {testResult ? (
-              <div>
-                <label style={label}>Test result</label>
-                <pre style={outputBlock}>{testResult}</pre>
+
+            <label style={{ ...checkRow, marginTop: -2 }}>
+              <input
+                type="checkbox"
+                checked={!!toolDraft?.requireConfirmation}
+                onChange={(e) => toolDraft && setToolDraft({ ...toolDraft, requireConfirmation: e.target.checked })}
+                disabled={editingTool.source === "system"}
+              />
+              <span>使用工具前需使用者確認</span>
+            </label>
+
+            <div>
+              <label style={label}>Input schema (JSON)</label>
+              <textarea
+                value={schemaDraft}
+                onChange={(e) => onSchemaChange(e.target.value)}
+                rows={6}
+                style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
+                disabled={editingTool.source === "system"}
+              />
+              {schemaError ? <div style={errorText}>{schemaError}</div> : null}
+            </div>
+
+            <div>
+              <label style={label}>JavaScript code</label>
+              <textarea
+                value={toolDraft?.code ?? ""}
+                onChange={(e) => toolDraft && setToolDraft({ ...toolDraft, code: e.target.value })}
+                rows={12}
+                style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
+                disabled={editingTool.source === "system"}
+              />
+            </div>
+
+            {editingTool.source !== "system" ? (
+              <div className="card" style={{ padding: 12, display: "grid", gap: 10, background: "rgba(255,255,255,0.02)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 700 }}>Test Runner</div>
+                  <button type="button" onClick={runTest} style={btnSmall} disabled={isRunningTest || !toolDraft}>
+                    {isRunningTest ? "Testing..." : "Test Tool"}
+                  </button>
+                </div>
+                <div>
+                  <label style={label}>Test input (JSON)</label>
+                  <textarea
+                    value={testInputDraft}
+                    onChange={(e) => {
+                      setTestInputDraft(e.target.value);
+                      setTestError(null);
+                    }}
+                    rows={4}
+                    style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
+                  />
+                </div>
+                {testError ? <div style={errorText}>Test failed: {testError}</div> : null}
+                {testResult ? (
+                  <div>
+                    <label style={label}>Test result</label>
+                    <pre style={outputBlock}>{testResult}</pre>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
-        </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+            <button type="button" onClick={closeEditor} style={btnSmall}>
+              {editingTool.source === "system" ? "Close" : "Cancel"}
+            </button>
+            {editingTool.source !== "system" ? (
+              <button type="button" onClick={saveTool} style={btnPrimary}>
+                Save
+              </button>
+            ) : null}
+          </div>
+        </HelpModal>
       ) : null}
     </div>
   );
 }
 
+const rowButtonStyle: React.CSSProperties = {
+  flex: 1,
+  textAlign: "left",
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  padding: 0,
+  cursor: "pointer"
+};
+
 const label: React.CSSProperties = { fontSize: 12, opacity: 0.8 };
+
+const checkRow: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  fontSize: 13
+};
 
 const inp: React.CSSProperties = {
   width: "100%",
@@ -485,6 +655,12 @@ const btnSmall: React.CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--panel-2)",
   color: "var(--text)"
+};
+
+const btnPrimary: React.CSSProperties = {
+  ...btnSmall,
+  border: "1px solid rgba(91,123,255,0.45)",
+  background: "rgba(91,123,255,0.14)"
 };
 
 const btnDangerSmall: React.CSSProperties = {

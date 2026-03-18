@@ -1,8 +1,11 @@
-import { McpServerConfig, OrchestratorMode } from "../types";
+import { McpServerConfig, OrchestratorMode, SkillExecutionMode } from "../types";
 
 export type UiState = {
   activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
   mode?: OrchestratorMode;
+  skillExecutionMode?: SkillExecutionMode;
+  skillVerifyMax?: number;
+  skillVerifierAgentId?: string;
   activeAgentId?: string;
   memberAgentIds?: string[];
   reactMax?: number;

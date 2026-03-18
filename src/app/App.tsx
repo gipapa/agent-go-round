@@ -1,9 +1,36 @@
 import React, { useMemo, useState } from "react";
-import { AgentConfig, BuiltInToolConfig, ChatMessage, OrchestratorMode, DocItem, McpServerConfig, McpTool, LogEntry } from "../types";
+import {
+  AgentConfig,
+  BuiltInToolConfig,
+  ChatTraceEntry,
+  ChatMessage,
+  LoadedSkillRuntime,
+  OrchestratorMode,
+  SkillExecutionMode,
+  DocItem,
+  McpServerConfig,
+  McpTool,
+  LogEntry,
+  SkillConfig,
+  SkillDocItem,
+  SkillFileItem
+} from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
 import { loadChatHistory, saveChatHistory } from "../storage/chatStore";
 import { loadBuiltInTools, saveBuiltInTools } from "../storage/builtInToolStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
+import {
+  createEmptySkill,
+  deleteSkill,
+  deleteSkillTextFile,
+  exportSkillZip,
+  importSkillZip,
+  listSkillDocs,
+  listSkillFiles,
+  listSkills,
+  updateSkillMarkdown,
+  upsertSkillTextFile
+} from "../storage/skillStore";
 import {
   loadModelCredentials,
   ModelCredentialEntry,
@@ -23,6 +50,7 @@ import { ChromePromptAdapter } from "../adapters/chromePrompt";
 import { CustomAdapter } from "../adapters/custom";
 
 import { runOneToOne } from "../orchestrators/oneToOne";
+// Deprecated legacy orchestrator. Multi-turn skill refine uses its own executor and does not reuse leaderTeam.
 import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
 import { McpSseClient } from "../mcp/sseClient";
 import { callTool } from "../mcp/toolRegistry";
@@ -33,9 +61,26 @@ import ChatPanel from "../ui/ChatPanel";
 import DocsPanel from "../ui/DocsPanel";
 import HelpModal from "../ui/HelpModal";
 import McpPanel from "../ui/McpPanel";
+import SkillsPanel from "../ui/SkillsPanel";
+import {
+  buildSkillDecisionCatalog,
+  buildSkillDecisionPrompt,
+  buildSkillSessionSnapshot,
+  getAllowedSkillsFromSnapshot,
+  loadSkillRuntime,
+  pushSkillTrace
+} from "../runtime/skillRuntime";
+import {
+  buildSkillRefinementInput,
+  buildSkillVerifyPrompt,
+  clampSkillVerifyMax,
+  normalizeSkillVerifyDecision,
+  pushSkillExecutionModeTrace
+} from "../runtime/skillExecutor";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
+import { SYSTEM_AGENT_DIRECTORY_TOOL_ID, SYSTEM_BUILT_IN_TOOLS, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -53,9 +98,21 @@ function msg(
 }
 
 type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
-type UserProfileAction = { type: "user_profile_call"; tool: "get_user_profile" };
 type BuiltInToolAction = { type: "builtin_tool_call"; tool: string; input?: any };
-type ToolDecision = { type: "no_tool" } | McpAction | UserProfileAction | BuiltInToolAction;
+type ToolDecision = { type: "no_tool" } | McpAction | BuiltInToolAction;
+type SkillAction = { type: "skill_call"; skillId: string; input?: any };
+type SkillDecision = { type: "no_skill" } | SkillAction;
+type PreparedSkillExecution = {
+  baseInput: string;
+  finalInput: string;
+  system?: string;
+  trace: ChatTraceEntry[];
+  runtime: LoadedSkillRuntime;
+  scopedBuiltInTools: BuiltInToolConfig[];
+  scopedMcpServers: McpServerConfig[];
+  scopedMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+  decisionContext?: string;
+};
 type ToolEntry =
   | {
       kind: "mcp";
@@ -64,27 +121,7 @@ type ToolEntry =
     }
   | {
       kind: "builtin";
-      tool:
-        | {
-            name: "get_user_profile";
-            description: string;
-            inputSchema?: any;
-            handler: "user_profile";
-          }
-        | {
-            name: "pick_best_agent_for_question";
-            description: string;
-            inputSchema?: any;
-            handler: "agent_directory";
-          }
-        | {
-            id: string;
-            name: string;
-            description: string;
-            inputSchema?: any;
-            code: string;
-            handler: "script";
-          };
+      tool: BuiltInToolConfig;
     };
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
@@ -118,7 +155,7 @@ function normalizeToolDecision(obj: any): ToolDecision | null {
   if (!obj || typeof obj !== "object") return null;
   if (obj.type === "no_tool") return { type: "no_tool" };
   if (obj.type === "user_profile_call" && obj.tool === "get_user_profile") {
-    return { type: "user_profile_call", tool: "get_user_profile" };
+    return { type: "builtin_tool_call", tool: "get_user_profile", input: {} };
   }
   if (obj.type === "builtin_tool_call" && typeof obj.tool === "string") {
     return { type: "builtin_tool_call", tool: obj.tool, input: obj.input };
@@ -126,6 +163,15 @@ function normalizeToolDecision(obj: any): ToolDecision | null {
   const action = normalizeMcpAction(obj);
   if (!action?.serverId) return null;
   return action;
+}
+
+function normalizeSkillDecision(obj: any): SkillDecision | null {
+  if (!obj || typeof obj !== "object") return null;
+  if (obj.type === "no_skill") return { type: "no_skill" };
+  if (obj.type === "skill_call" && typeof obj.skillId === "string" && obj.skillId.trim()) {
+    return { type: "skill_call", skillId: obj.skillId.trim(), input: obj.input };
+  }
+  return null;
 }
 
 function stringifyAny(v: any): string {
@@ -138,22 +184,43 @@ function stringifyAny(v: any): string {
   }
 }
 
+function getThinkStreamingState(buffer: string) {
+  const trimmed = buffer.trimStart();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("<think>")) {
+    return {
+      hideWhileStreaming: !lower.includes("</think>"),
+      statusText: lower.includes("</think>") ? undefined : "思考中…"
+    };
+  }
+  if ("<think>".startsWith(lower)) {
+    return {
+      hideWhileStreaming: true,
+      statusText: "思考中…"
+    };
+  }
+  return {
+    hideWhileStreaming: false,
+    statusText: undefined
+  };
+}
+
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
 const PROMPT_JSON_PLACEHOLDERS = {
   noToolJson: '{"type":"no_tool"}',
-  userProfileJson: '{"type":"user_profile_call","tool":"get_user_profile"}',
+  userProfileJson: '{"type":"builtin_tool_call","tool":"get_user_profile","input":{}}',
   builtinToolJson: '{"type":"builtin_tool_call","tool":"your_tool_name","input":{}}',
   mcpCallJson: '{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
 } as const;
 
-function formatUserProfileToolOutput(profile: UserProfile) {
-  return stringifyAny({
+function getUserProfileToolPayload(profile: UserProfile) {
+  return {
     name: profile.name,
     description: profile.description?.trim() || "",
     hasAvatar: !!profile.avatarUrl
-  });
+  };
 }
 
 function clampHistoryLimit(value: number) {
@@ -165,6 +232,11 @@ function normalizeImportedMessage(input: any): ChatMessage | null {
   if (!input || typeof input !== "object") return null;
   if (typeof input.role !== "string" || typeof input.content !== "string") return null;
   if (!["system", "user", "assistant", "tool"].includes(input.role)) return null;
+  const skillTrace = Array.isArray(input.skillTrace)
+    ? input.skillTrace
+        .filter((entry: any) => entry && typeof entry.label === "string" && typeof entry.content === "string")
+        .map((entry: any) => ({ label: entry.label, content: entry.content } satisfies ChatTraceEntry))
+    : undefined;
   return {
     id: typeof input.id === "string" ? input.id : generateId(),
     role: input.role,
@@ -172,12 +244,27 @@ function normalizeImportedMessage(input: any): ChatMessage | null {
     name: typeof input.name === "string" ? input.name : undefined,
     displayName: typeof input.displayName === "string" ? input.displayName : undefined,
     avatarUrl: typeof input.avatarUrl === "string" ? input.avatarUrl : undefined,
+    statusText: typeof input.statusText === "string" ? input.statusText : undefined,
+    isStreaming: input.isStreaming === true,
+    hideWhileStreaming: input.hideWhileStreaming === true,
+    skillTrace: skillTrace?.length ? skillTrace : undefined,
     ts: typeof input.ts === "number" ? input.ts : Date.now()
   };
 }
 
 function downloadBlob(filename: string, content: string, type: string) {
   const blob = new Blob([content], { type });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(href);
+}
+
+function downloadFileBlob(filename: string, blob: Blob) {
   const href = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = href;
@@ -352,6 +439,11 @@ export default function App() {
   const [mode, setMode] = useState<OrchestratorMode>(() =>
     initialUi.mode === "leader_team" || initialUi.mode === "one_to_one" ? initialUi.mode : "one_to_one"
   );
+  const [skillExecutionMode, setSkillExecutionMode] = useState<SkillExecutionMode>(() =>
+    initialUi.skillExecutionMode === "multi_turn" ? "multi_turn" : "single_turn"
+  );
+  const [skillVerifyMax, setSkillVerifyMax] = useState<number>(() => clampSkillVerifyMax(initialUi.skillVerifyMax ?? 1));
+  const [skillVerifierAgentId, setSkillVerifierAgentId] = useState<string>(() => initialUi.skillVerifierAgentId ?? "");
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
@@ -373,13 +465,31 @@ export default function App() {
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
   const [docEditorId, setDocEditorId] = useState<string | null>(null);
+  const [skills, setSkills] = useState<SkillConfig[]>([]);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [skillPanelSelectedId, setSkillPanelSelectedId] = useState<string | null>(null);
+  const [skillPanelDocs, setSkillPanelDocs] = useState<SkillDocItem[]>([]);
+  const [skillPanelFiles, setSkillPanelFiles] = useState<SkillFileItem[]>([]);
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
   const [modelCredentials, setModelCredentials] = useState<ModelCredentialEntry[]>(() => loadModelCredentials());
+  const systemBuiltInTools = useMemo(() => SYSTEM_BUILT_IN_TOOLS, []);
+  const allBuiltInTools = useMemo(
+    () => [...systemBuiltInTools, ...builtInTools.map((tool) => ({ ...tool, source: "custom" as const, readonly: false }))],
+    [builtInTools, systemBuiltInTools]
+  );
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => loadMcpServers());
   const [mcpPromptTemplates, setMcpPromptTemplates] = useState<McpPromptTemplates>(() => loadMcpPromptTemplates());
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
+  const globalMcpToolCatalog = useMemo(
+    () =>
+      mcpServers.map((server) => ({
+        server,
+        tools: mcpToolsByServer[server.id] ?? []
+      })),
+    [mcpServers, mcpToolsByServer]
+  );
   const [log, setLog] = useState<LogEntry[]>([]);
   const [visibleCredentialIds, setVisibleCredentialIds] = useState<Record<string, boolean>>({});
   const [logCollapsed, setLogCollapsed] = useState(true);
@@ -437,6 +547,47 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
+    (async () => {
+      try {
+        const list = await listSkills();
+        setSkills(list);
+        setSkillsLoaded(true);
+        setSkillPanelSelectedId((current) => current ?? list[0]?.id ?? null);
+        logNow({ category: "skills", ok: true, message: `Skills loaded: ${list.length}` });
+      } catch (e: any) {
+        logNow({ category: "skills", ok: false, message: "Skills load failed", details: String(e?.message ?? e) });
+      }
+    })();
+  }, []);
+
+  React.useEffect(() => {
+    if (!skillPanelSelectedId) {
+      setSkillPanelDocs([]);
+      setSkillPanelFiles([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [docs, files] = await Promise.all([listSkillDocs(skillPanelSelectedId), listSkillFiles(skillPanelSelectedId)]);
+        if (!cancelled) {
+          setSkillPanelDocs(docs);
+          setSkillPanelFiles(files);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setSkillPanelDocs([]);
+          setSkillPanelFiles([]);
+          logNow({ category: "skills", ok: false, message: "Skill docs load failed", details: String(e?.message ?? e) });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [skillPanelSelectedId]);
+
+  React.useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -470,6 +621,9 @@ export default function App() {
     saveUiState({
       activeTab,
       mode,
+      skillExecutionMode,
+      skillVerifyMax,
+      skillVerifierAgentId,
       activeAgentId,
       memberAgentIds,
       reactMax,
@@ -480,7 +634,7 @@ export default function App() {
       userAvatarUrl,
       userDescription
     });
-  }, [activeTab, mode, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillVerifierAgentId, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -542,6 +696,13 @@ export default function App() {
   }, [docs, docEditorId, docsLoaded]);
 
   React.useEffect(() => {
+    if (!skillsLoaded) return;
+    if (skillPanelSelectedId && !skills.some((skill) => skill.id === skillPanelSelectedId)) {
+      setSkillPanelSelectedId(skills[0]?.id ?? null);
+    }
+  }, [skills, skillPanelSelectedId, skillsLoaded]);
+
+  React.useEffect(() => {
     if (mcpPanelActiveId && !mcpServers.some((s) => s.id === mcpPanelActiveId)) {
       setMcpPanelActiveId(null);
     }
@@ -587,20 +748,52 @@ export default function App() {
   }, [mcpServers]);
 
   React.useEffect(() => {
-    const builtInIds = new Set(builtInTools.map((tool) => tool.id));
+    const builtInIds = new Set(allBuiltInTools.map((tool) => tool.id));
     setAgents((prev) => {
       let changed = false;
       const next = prev.map((agent) => {
-        const nextBuiltIns = agent.allowedBuiltInToolIds ? agent.allowedBuiltInToolIds.filter((id) => builtInIds.has(id)) : undefined;
-        if (nextBuiltIns !== agent.allowedBuiltInToolIds) {
+        let nextBuiltIns = agent.allowedBuiltInToolIds ? agent.allowedBuiltInToolIds.filter((id) => builtInIds.has(id)) : undefined;
+        if (agent.allowUserProfileTool || agent.allowAgentDirectoryTool) {
+          const merged = new Set(nextBuiltIns ?? builtInTools.map((tool) => tool.id));
+          if (agent.allowUserProfileTool) merged.add(SYSTEM_USER_PROFILE_TOOL_ID);
+          if (agent.allowAgentDirectoryTool) merged.add(SYSTEM_AGENT_DIRECTORY_TOOL_ID);
+          nextBuiltIns = Array.from(merged);
+        }
+        if (
+          nextBuiltIns !== agent.allowedBuiltInToolIds ||
+          agent.allowUserProfileTool !== undefined ||
+          agent.allowAgentDirectoryTool !== undefined
+        ) {
           changed = true;
-          return { ...agent, allowedBuiltInToolIds: nextBuiltIns };
+          return {
+            ...agent,
+            allowedBuiltInToolIds: nextBuiltIns,
+            allowUserProfileTool: undefined,
+            allowAgentDirectoryTool: undefined
+          };
         }
         return agent;
       });
       return changed ? next : prev;
     });
-  }, [builtInTools]);
+  }, [allBuiltInTools, builtInTools]);
+
+  React.useEffect(() => {
+    if (!skillsLoaded) return;
+    const skillIds = new Set(skills.map((skill) => skill.id));
+    setAgents((prev) => {
+      let changed = false;
+      const next = prev.map((agent) => {
+        const nextSkills = agent.allowedSkillIds ? agent.allowedSkillIds.filter((id) => skillIds.has(id)) : undefined;
+        if (nextSkills !== agent.allowedSkillIds) {
+          changed = true;
+          return { ...agent, allowedSkillIds: nextSkills };
+        }
+        return agent;
+      });
+      return changed ? next : prev;
+    });
+  }, [skills, skillsLoaded]);
 
   React.useEffect(() => {
     setModelCredentials((prev) => {
@@ -656,59 +849,21 @@ export default function App() {
       .filter((entry) => entry.tools.length > 0);
   }, [availableMcpServersForAgent, mcpToolsByServer]);
 
-  const availableCustomBuiltInToolsForAgent = useMemo(() => {
+  const availableBuiltinToolsForAgent = useMemo(() => {
     if (!activeAgent) return [];
     if (!isCategoryEnabled(activeAgent.enableBuiltInTools)) return [];
-    if (!activeAgent.allowedBuiltInToolIds) return builtInTools;
+    if (!activeAgent.allowedBuiltInToolIds) {
+      return allBuiltInTools.filter((tool) => tool.source !== "system");
+    }
     const allowed = new Set(activeAgent.allowedBuiltInToolIds);
-    return builtInTools.filter((tool) => allowed.has(tool.id));
-  }, [activeAgent, builtInTools]);
+    return allBuiltInTools.filter((tool) => allowed.has(tool.id));
+  }, [activeAgent, allBuiltInTools]);
 
-  const availableBuiltinToolsForAgent = useMemo(
-    () =>
-      !activeAgent || !isCategoryEnabled(activeAgent.enableBuiltInTools)
-        ? []
-        : [
-      ...(activeAgent.allowUserProfileTool
-        ? [
-            {
-              name: "get_user_profile" as const,
-              description: "Get the current user's name, self-description, and whether an avatar is configured.",
-              inputSchema: {},
-              handler: "user_profile" as const
-            }
-          ]
-        : []),
-      ...(activeAgent.allowAgentDirectoryTool
-        ? [
-            {
-              name: "pick_best_agent_for_question" as const,
-              description:
-                "Given the user's question, return the name of the most suitable saved agent by comparing the question against each agent description. If none clearly match, return the first saved agent name.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  question: {
-                    type: "string",
-                    description: "The user's original question."
-                  }
-                },
-                required: ["question"]
-              },
-              handler: "agent_directory" as const
-            }
-          ]
-        : []),
-      ...availableCustomBuiltInToolsForAgent.map((tool) => ({
-        id: tool.id,
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema ?? {},
-        code: tool.code,
-        handler: "script" as const
-      }))
-    ],
-    [activeAgent, availableCustomBuiltInToolsForAgent]
+  const skillSessionSnapshot = useMemo(() => buildSkillSessionSnapshot({ agent: activeAgent, skills }), [activeAgent, skills]);
+  const availableSkillsForAgent = useMemo(() => getAllowedSkillsFromSnapshot(skillSessionSnapshot, skills), [skillSessionSnapshot, skills]);
+  const configuredSkillVerifierAgent = useMemo(
+    () => (skillVerifierAgentId ? agents.find((agent) => agent.id === skillVerifierAgentId) ?? null : null),
+    [agents, skillVerifierAgentId]
   );
 
   const availableToolsForAgent = useMemo<ToolEntry[]>(
@@ -736,6 +891,10 @@ export default function App() {
   function hydrateAgentCredentials(agent: AgentConfig) {
     const apiKey = resolveApiKeyForAgent(agent);
     return apiKey && apiKey !== agent.apiKey ? { ...agent, apiKey } : agent;
+  }
+
+  function resolveSkillVerifierAgent(active: AgentConfig) {
+    return hydrateAgentCredentials(configuredSkillVerifierAgent ?? active);
   }
 
   function addCredential(preset: "openai" | "groq" | "custom") {
@@ -810,6 +969,10 @@ export default function App() {
     setHistory((h) => [...h, m]);
   }
 
+  function patchMessage(id: string, patch: Partial<ChatMessage>) {
+    setHistory((h) => h.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
+
   async function runToolDecision(args: {
     agent: AgentConfig;
     adapter: ReturnType<typeof pickAdapter>;
@@ -881,6 +1044,499 @@ export default function App() {
     }
 
     return null;
+  }
+
+  async function runSkillDecision(args: {
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    userInput: string;
+    retry: { delaySec: number; max: number };
+    skills: SkillConfig[];
+    language: "zh" | "en";
+  }): Promise<SkillDecision | null> {
+    const skillList = buildSkillDecisionCatalog(args.skills);
+    const prompt = buildSkillDecisionPrompt(args.userInput, JSON.stringify(skillList, null, 2), args.language);
+
+    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
+      const raw = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.agent,
+        input: prompt,
+        history: [],
+        onDelta: () => {},
+        retry: args.retry,
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      });
+
+      const decision = normalizeSkillDecision(extractJsonObject(raw));
+      if (decision) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: true,
+          message: `Skill decision: ${decision.type}`,
+          details: raw
+        });
+        return decision;
+      }
+
+      logNow({
+        category: "skills",
+        agent: args.agent.name,
+        ok: false,
+        message: `Skill decision invalid schema (${attempt + 1}/${args.retry.max + 1})`,
+        details: raw
+      });
+
+      if (attempt < args.retry.max) {
+        await sleep(args.retry.delaySec * 1000);
+      }
+    }
+
+    return null;
+  }
+
+  async function runSkillVerifyDecision(args: {
+    answeringAgent: AgentConfig;
+    verifierAgent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    userInput: string;
+    currentInput: string;
+    answer: string;
+    skill: SkillConfig;
+    runtime: LoadedSkillRuntime;
+    round: number;
+    retry: { delaySec: number; max: number };
+  }) {
+    const prompt = buildSkillVerifyPrompt({
+      skill: args.skill,
+      runtime: args.runtime,
+      userInput: args.userInput,
+      currentInput: args.currentInput,
+      answer: args.answer,
+      round: args.round
+    });
+
+    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
+      const raw = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.verifierAgent,
+        input: prompt,
+        history: [],
+        onDelta: () => {},
+        retry: args.retry,
+        onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, message: t })
+      });
+
+      const decision = normalizeSkillVerifyDecision(extractJsonObject(raw));
+      if (decision) {
+        logNow({
+          category: "skills",
+          agent: args.answeringAgent.name,
+          ok: true,
+          message: `Skill verify round ${args.round}: ${decision.type}`,
+          details: raw
+        });
+        return decision;
+      }
+
+      logNow({
+        category: "skills",
+        agent: args.answeringAgent.name,
+        ok: false,
+        message: `Skill verify invalid schema (${attempt + 1}/${args.retry.max + 1})`,
+        details: raw
+      });
+
+      if (attempt < args.retry.max) {
+        await sleep(args.retry.delaySec * 1000);
+      }
+    }
+
+    return null;
+  }
+
+  async function resolveToolAugmentedInput(args: {
+    input: string;
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    availableBuiltinTools: BuiltInToolConfig[];
+    availableMcpServers: McpServerConfig[];
+    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+    toolEntries: ToolEntry[];
+    decisionContext?: string;
+    onStatus?: (text: string) => void;
+  }): Promise<string> {
+    if (args.toolEntries.length === 0) {
+      if (args.availableBuiltinTools.length > 0) {
+        logNow({ category: "tool", agent: args.agent.name, message: "Tool decision skipped: no available tool entries" });
+      } else if (args.availableMcpServers.length === 0) {
+        return args.input;
+      } else if (args.availableMcpTools.length === 0) {
+        logNow({ category: "mcp", agent: args.agent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
+      }
+      return args.input;
+    }
+
+    args.onStatus?.("正在判斷是否需要呼叫工具中…");
+    const decision = await runToolDecision({
+      agent: args.agent,
+      adapter: args.adapter,
+      userInput: args.decisionContext ? `${args.input}\n\nCurrent loaded skill context (internal only):\n${args.decisionContext}` : args.input,
+      retry: { delaySec: retryDelaySec, max: retryMax },
+      toolEntries: args.toolEntries,
+      promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
+      fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
+    });
+
+    if (!decision) {
+      logNow({ category: "tool", agent: args.agent.name, ok: false, message: "Tool decision failed after retries; continue without tools" });
+      return args.input;
+    }
+
+    if (decision.type === "no_tool") {
+      logNow({ category: "tool", agent: args.agent.name, message: "Tool decision resolved: no_tool" });
+      return args.input;
+    }
+
+    if (decision.type === "builtin_tool_call") {
+      args.onStatus?.(`正在呼叫內建工具「${decision.tool}」中…`);
+      const targetTool = args.availableBuiltinTools.find((tool) => tool.name === decision.tool) ?? null;
+      if (!targetTool) {
+        const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${decision.tool} 的 built-in tool。`;
+        append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
+        logNow({
+          category: "tool",
+          agent: args.agent.name,
+          ok: false,
+          message: `Built-in tool not found: ${decision.tool}`,
+          details: JSON.stringify(decision)
+        });
+        return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+      }
+
+      try {
+        const allowed =
+          !targetTool.requireConfirmation ||
+          window.confirm(
+            `允許 agent ${args.agent.name} 執行工具「${targetTool.displayLabel ?? targetTool.name}」嗎？\n\ninput:\n${stringifyAny(decision.input ?? {})}`
+          );
+
+        if (!allowed) {
+          const toolSummaryForQuestion = `工具執行已被使用者阻止：${decision.tool}`;
+          append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
+          logNow({
+            category: "tool",
+            agent: args.agent.name,
+            ok: false,
+            message: `Built-in tool blocked by user: ${decision.tool}`,
+            details: stringifyAny(decision.input ?? {})
+          });
+          return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+        }
+
+        const allowedSystemHelpers: NonNullable<Parameters<typeof runBuiltInScriptTool>[2]>["system"] = {};
+        if (args.availableBuiltinTools.some((tool) => tool.id === SYSTEM_USER_PROFILE_TOOL_ID)) {
+          allowedSystemHelpers.get_user_profile = () => getUserProfileToolPayload(userProfile);
+        }
+        if (args.availableBuiltinTools.some((tool) => tool.id === SYSTEM_AGENT_DIRECTORY_TOOL_ID)) {
+          allowedSystemHelpers.pick_best_agent_for_question = async (question: string) =>
+            pickBestAgentNameForQuestion(question, loadSavedAgentsFromStorage(), args.agent.name);
+        }
+
+        const toolOutput = await runBuiltInScriptTool(targetTool, decision.input ?? {}, {
+          system: allowedSystemHelpers
+        });
+        const toolOutputText = stringifyAny(toolOutput);
+        const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
+        append(
+          msg(
+            "tool",
+            `Built-in tool -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
+            "builtin_tool",
+            { displayName: "Built-in Tool" }
+          )
+        );
+        logNow({
+          category: "tool",
+          agent: args.agent.name,
+          ok: true,
+          message: `Built-in tool call OK: ${decision.tool}`,
+          details: toolOutputText
+        });
+        return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+      } catch (e: any) {
+        const briefError = String(e?.message ?? e);
+        const toolSummaryForQuestion = `工具執行失敗：${decision.tool} 執行失敗（${briefError}）。`;
+        append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
+        logNow({
+          category: "tool",
+          agent: args.agent.name,
+          ok: false,
+          message: `Built-in tool call failed: ${decision.tool}`,
+          details: briefError
+        });
+        return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+      }
+    }
+
+    const targetServer = args.availableMcpServers.find((server) => server.id === decision.serverId) ?? null;
+    const targetTool = args.availableMcpTools.find((entry) => entry.server.id === decision.serverId)?.tools.find((tool) => tool.name === decision.tool) ?? null;
+    let toolSummaryForQuestion = "";
+    args.onStatus?.(`正在呼叫 MCP 工具「${decision.tool}」中…`);
+
+    if (!targetServer) {
+      toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${decision.serverId} 的可用 MCP server。`;
+      logNow({
+        category: "mcp",
+        agent: args.agent.name,
+        ok: false,
+        message: `Tool decision selected unavailable server: ${decision.serverId}`,
+        details: JSON.stringify(decision)
+      });
+      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+    } else if (!targetTool) {
+      toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${decision.tool} 這個工具。`;
+      logNow({
+        category: "mcp",
+        agent: args.agent.name,
+        ok: false,
+        message: `Tool decision selected unavailable tool: ${decision.tool}`,
+        details: JSON.stringify(decision)
+      });
+      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+    } else {
+      try {
+        const client = new McpSseClient(targetServer);
+        client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
+        const toolOutput = await callTool(client, decision.tool, decision.input ?? {});
+        const toolOutputText = stringifyAny(toolOutput);
+        toolSummaryForQuestion = `工具執行結果：server=${targetServer.name}, tool=${decision.tool}, result=${toolOutputText}`;
+        logNow({
+          category: "mcp",
+          agent: targetServer.name,
+          ok: true,
+          message: `MCP tool call OK: ${decision.tool}`,
+          details: toolOutputText
+        });
+        append(
+          msg(
+            "tool",
+            `MCP ${targetServer.name} -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
+            "mcp",
+            { displayName: "MCP Tool" }
+          )
+        );
+      } catch (e: any) {
+        const briefError = String(e?.message ?? e);
+        toolSummaryForQuestion = `工具執行失敗：${decision.tool} 呼叫失敗（${briefError}）。`;
+        append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+        logNow({
+          category: "mcp",
+          agent: targetServer.name,
+          ok: false,
+          message: `Tool call failed: ${decision.tool}`,
+          details: briefError
+        });
+      }
+    }
+
+    return toolSummaryForQuestion ? `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}` : args.input;
+  }
+
+  async function prepareSkillExecution(args: {
+    skill: SkillConfig;
+    skillInput: any;
+    userInput: string;
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    onStatus?: (text: string) => void;
+  }): Promise<PreparedSkillExecution> {
+    args.onStatus?.(`正在載入 skill「${args.skill.name}」中…`);
+    const loaded = loadSkillRuntime({
+      skill: args.skill,
+      skillDocs: args.skill.workflow.useSkillDocs !== false ? await listSkillDocs(args.skill.id) : [],
+      agentDocs: docsForAgent,
+      availableMcpServers: availableMcpServersForAgent,
+      availableMcpTools: availableMcpToolsForAgent,
+      availableBuiltinTools: availableBuiltinToolsForAgent,
+      userInput: args.userInput,
+      skillInput: args.skillInput
+    });
+
+    const scopedMcpServers = loaded.runtime.allowMcp
+      ? loaded.runtime.allowedMcpServerIds?.length
+        ? availableMcpServersForAgent.filter((server) => loaded.runtime.allowedMcpServerIds?.includes(server.id))
+        : availableMcpServersForAgent
+      : [];
+
+    const scopedMcpTools = loaded.runtime.allowMcp
+      ? availableMcpToolsForAgent.filter((entry) => scopedMcpServers.some((server) => server.id === entry.server.id))
+      : [];
+
+    const scopedBuiltInTools = loaded.runtime.allowBuiltInTools
+      ? loaded.runtime.allowedBuiltInToolIds?.length
+        ? availableBuiltinToolsForAgent.filter((tool) => loaded.runtime.allowedBuiltInToolIds?.includes(tool.id))
+        : availableBuiltinToolsForAgent
+      : [];
+
+    const scopedToolEntries: ToolEntry[] = [
+      ...scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
+      ...scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
+    ];
+
+    const decisionContext = [
+      loaded.runtime.instructions ? `Skill workflow:\n${loaded.runtime.instructions}` : "",
+      loaded.runtime.loadedReferences.length
+        ? `Loaded references:\n${loaded.runtime.loadedReferences.map((doc) => `- ${doc.path}`).join("\n")}`
+        : ""
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const finalInput = await resolveToolAugmentedInput({
+      input: loaded.finalInput,
+      agent: args.agent,
+      adapter: args.adapter,
+      availableBuiltinTools: scopedBuiltInTools,
+      availableMcpServers: scopedMcpServers,
+      availableMcpTools: scopedMcpTools,
+      toolEntries: scopedToolEntries,
+      decisionContext,
+      onStatus: args.onStatus
+    });
+
+    return {
+      baseInput: loaded.finalInput,
+      finalInput,
+      system: loaded.system,
+      trace: loaded.trace,
+      runtime: loaded.runtime,
+      scopedBuiltInTools,
+      scopedMcpServers,
+      scopedMcpTools,
+      decisionContext
+    };
+  }
+
+  async function executeMultiTurnSkill(args: {
+    initialTrace: ChatTraceEntry[];
+    prepared: PreparedSkillExecution;
+    skill: SkillConfig;
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    userInput: string;
+    onStatus?: (text: string) => void;
+  }): Promise<{ finalInput: string; trace: ChatTraceEntry[] }> {
+    const trace = [...args.initialTrace];
+    const verifierAgent = resolveSkillVerifierAgent(args.agent);
+    const verifierAdapter = pickAdapter(verifierAgent);
+    const scopedToolEntries: ToolEntry[] = [
+      ...args.prepared.scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
+      ...args.prepared.scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
+    ];
+
+    pushSkillExecutionModeTrace(trace, {
+      mode: "multi_turn",
+      verifyMax: skillVerifyMax,
+      verifierName: verifierAgent.name
+    });
+
+    args.onStatus?.("正在依 skill 產生初版回答中…");
+    let currentInput = args.prepared.finalInput;
+    let currentAnswer = await runOneToOne({
+      adapter: args.adapter,
+      agent: args.agent,
+      input: currentInput,
+      history: limitHistory(history),
+      system: args.prepared.system,
+      onDelta: () => {},
+      retry: { delaySec: retryDelaySec, max: retryMax },
+      onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+    });
+
+    pushSkillTrace(trace, "Skill answer round 1", currentAnswer);
+
+    if (skillVerifyMax === 0) {
+      pushSkillTrace(trace, "Skill verify", "已設定 verify 次數為 0，略過 refine。");
+      return { finalInput: currentInput, trace };
+    }
+
+    for (let round = 1; round <= skillVerifyMax; round++) {
+      args.onStatus?.(`正在進行 skill verify 第 ${round} 輪…`);
+      const verifyDecision = await runSkillVerifyDecision({
+        answeringAgent: args.agent,
+        verifierAgent,
+        adapter: verifierAdapter,
+        userInput: args.userInput,
+        currentInput,
+        answer: currentAnswer,
+        skill: args.skill,
+        runtime: args.prepared.runtime,
+        round,
+        retry: { delaySec: retryDelaySec, max: retryMax }
+      });
+
+      if (!verifyDecision) {
+        pushSkillTrace(trace, `Skill verify round ${round}`, "Verifier 在重試後仍未回傳合法 JSON，停止 refine。");
+        break;
+      }
+
+      if (verifyDecision.type === "pass") {
+        pushSkillTrace(
+          trace,
+          `Skill verify round ${round}`,
+          [`結果：通過`, verifyDecision.reason ? `原因：${verifyDecision.reason}` : ""].filter(Boolean).join("\n")
+        );
+        return { finalInput: currentInput, trace };
+      }
+
+      pushSkillTrace(
+        trace,
+        `Skill verify round ${round}`,
+        [`結果：需要 refine`, `原因：${verifyDecision.reason}`, verifyDecision.revisionPrompt ? `Revision prompt:\n${verifyDecision.revisionPrompt}` : ""]
+          .filter(Boolean)
+          .join("\n")
+      );
+
+      const refinedBaseInput = buildSkillRefinementInput({
+        currentInput: args.prepared.baseInput,
+        verifyDecision,
+        round
+      });
+
+      args.onStatus?.(`正在依 verifier 建議進行第 ${round} 輪修正…`);
+      currentInput = await resolveToolAugmentedInput({
+        input: refinedBaseInput,
+        agent: args.agent,
+        adapter: args.adapter,
+        availableBuiltinTools: args.prepared.scopedBuiltInTools,
+        availableMcpServers: args.prepared.scopedMcpServers,
+        availableMcpTools: args.prepared.scopedMcpTools,
+        toolEntries: scopedToolEntries,
+        decisionContext: args.prepared.decisionContext,
+        onStatus: args.onStatus
+      });
+
+      pushSkillTrace(trace, `Skill refine round ${round}`, currentInput);
+
+      args.onStatus?.(`正在產生第 ${round + 1} 輪回答中…`);
+      currentAnswer = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.agent,
+        input: currentInput,
+        history: limitHistory(history),
+        system: args.prepared.system,
+        onDelta: () => {},
+        retry: { delaySec: retryDelaySec, max: retryMax },
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      });
+
+      pushSkillTrace(trace, `Skill answer round ${round + 1}`, currentAnswer);
+    }
+
+    pushSkillTrace(trace, "Skill verify", `已達最大 verify 次數 ${skillVerifyMax}，回傳最後一次 refine 的結果。`);
+    return { finalInput: currentInput, trace };
   }
 
   function readUserAvatar(file: File | undefined) {
@@ -964,184 +1620,208 @@ export default function App() {
     try {
       if (mode === "one_to_one") {
         logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
+        const assistantId = generateId();
+        append({
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          ts: Date.now(),
+          name: activeAgent.name,
+          displayName: activeAgent.name,
+          avatarUrl: activeAgent.avatarUrl,
+          statusText: "準備回覆中…",
+          isStreaming: true
+        });
+        const setAssistantStatus = (statusText: string, patch: Partial<ChatMessage> = {}) => {
+          patchMessage(assistantId, { statusText, isStreaming: true, ...patch });
+        };
+        const finalizeAssistant = (patch: Partial<ChatMessage>) => {
+          patchMessage(assistantId, {
+            statusText: undefined,
+            isStreaming: false,
+            hideWhileStreaming: false,
+            ...patch
+          });
+        };
         const resolvedActiveAgent = hydrateAgentCredentials(activeAgent);
         const adapter = pickAdapter(resolvedActiveAgent);
         let finalInput = input;
+        let finalSystem = userSystem;
+        const skillTrace: ChatTraceEntry[] = [];
+        let preparedSkillExecution: PreparedSkillExecution | null = null;
+        let selectedSkillForExecution: SkillConfig | null = null;
+        if (skillSessionSnapshot && activeAgent.enableSkills === true) {
+          const allowedSkills = skillSessionSnapshot.availableSkills.filter((item) => item.allowed);
+          const blockedSkills = skillSessionSnapshot.availableSkills.filter((item) => !item.allowed && item.reason);
+          pushSkillTrace(
+            skillTrace,
+            "Skill snapshot",
+            [
+              `可用 skills：${allowedSkills.length} 個`,
+              allowedSkills.length ? allowedSkills.map((item) => `- ${item.name}`).join("\n") : "沒有可用的 skill。",
+              blockedSkills.length ? `不可用：\n${blockedSkills.map((item) => `- ${item.name}: ${item.reason}`).join("\n")}` : ""
+            ]
+              .filter(Boolean)
+              .join("\n\n")
+          );
+        }
 
-        if (availableToolsForAgent.length === 0) {
-          if (activeAgent.allowUserProfileTool) {
-            logNow({ category: "tool", agent: activeAgent.name, message: "Tool decision skipped: no available tool entries" });
-          } else if (availableMcpServersForAgent.length === 0) {
-            logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP server available" });
-          } else if (availableMcpToolsForAgent.length === 0) {
-            logNow({ category: "mcp", agent: activeAgent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
-          }
-        } else {
-          const decision = await runToolDecision({
+        if (availableSkillsForAgent.length > 0) {
+          setAssistantStatus("正在分析是否需要使用 skill 中…");
+          const skillDecision = await runSkillDecision({
             agent: resolvedActiveAgent,
             adapter,
             userInput: input,
             retry: { delaySec: retryDelaySec, max: retryMax },
-            toolEntries: availableToolsForAgent,
-            promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
-            fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
+            skills: availableSkillsForAgent,
+            language: mcpPromptTemplates.activeId
           });
 
-          if (!decision) {
-            logNow({ category: "tool", agent: activeAgent.name, ok: false, message: "Tool decision failed after retries; continue without tools" });
-          } else if (decision.type === "no_tool") {
-            logNow({ category: "tool", agent: activeAgent.name, message: "Tool decision resolved: no_tool" });
-          } else if (decision.type === "user_profile_call") {
-            const toolOutputText = formatUserProfileToolOutput(userProfile);
-            const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
-            append(
-              msg("tool", `Built-in tool -> ${decision.tool}\noutput:\n${toolOutputText}`, "user_profile_tool", {
-                displayName: "User Info Tool"
-              })
-            );
-            logNow({
-              category: "tool",
-              agent: activeAgent.name,
-              ok: true,
-              message: `Built-in tool call OK: ${decision.tool}`,
-              details: toolOutputText
+          if (!skillDecision) {
+            pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：skill decision 重試後仍失敗，改走一般 tool decision。`);
+            logNow({ category: "skills", agent: activeAgent.name, ok: false, message: "Skill decision failed after retries; continue without skills" });
+            finalInput = await resolveToolAugmentedInput({
+              input,
+              agent: resolvedActiveAgent,
+              adapter,
+              availableBuiltinTools: availableBuiltinToolsForAgent,
+              availableMcpServers: availableMcpServersForAgent,
+              availableMcpTools: availableMcpToolsForAgent,
+              toolEntries: availableToolsForAgent,
+              onStatus: setAssistantStatus
             });
-            finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
-          } else if (decision.type === "builtin_tool_call") {
-            const targetTool = availableBuiltinToolsForAgent.find((tool) => tool.name === decision.tool) ?? null;
-
-            if (!targetTool) {
-              const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${decision.tool} 的 built-in tool。`;
-              append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
-              logNow({
-                category: "tool",
-                agent: activeAgent.name,
-                ok: false,
-                message: `Built-in tool not found: ${decision.tool}`,
-                details: JSON.stringify(decision)
-              });
-              finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
-            } else {
-              try {
-                const toolOutput =
-                  targetTool.handler === "script"
-                    ? await runBuiltInScriptTool(targetTool, decision.input ?? {}, {
-                        pick_best_agent_for_question: async (question: string) =>
-                          pickBestAgentNameForQuestion(question, loadSavedAgentsFromStorage(), activeAgent.name)
-                      })
-                    : pickBestAgentNameForQuestion(
-                        String(decision.input?.question ?? input),
-                        agents,
-                        activeAgent.name
-                      );
-                const toolOutputText = stringifyAny(toolOutput);
-                const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
-                append(
-                  msg(
-                    "tool",
-                    `Built-in tool -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
-                    "builtin_tool",
-                    { displayName: "Built-in Tool" }
-                  )
-                );
-                logNow({
-                  category: "tool",
-                  agent: activeAgent.name,
-                  ok: true,
-                  message: `Built-in tool call OK: ${decision.tool}`,
-                  details: toolOutputText
-                });
-                finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
-              } catch (e: any) {
-                const briefError = String(e?.message ?? e);
-                const toolSummaryForQuestion = `工具執行失敗：${decision.tool} 執行失敗（${briefError}）。`;
-                append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
-                logNow({
-                  category: "tool",
-                  agent: activeAgent.name,
-                  ok: false,
-                  message: `Built-in tool call failed: ${decision.tool}`,
-                  details: briefError
-                });
-                finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
-              }
-            }
+          } else if (skillDecision.type === "no_skill") {
+            pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：這一回合不使用 skill。`);
+            logNow({ category: "skills", agent: activeAgent.name, message: "Skill decision resolved: no_skill" });
+            finalInput = await resolveToolAugmentedInput({
+              input,
+              agent: resolvedActiveAgent,
+              adapter,
+              availableBuiltinTools: availableBuiltinToolsForAgent,
+              availableMcpServers: availableMcpServersForAgent,
+              availableMcpTools: availableMcpToolsForAgent,
+              toolEntries: availableToolsForAgent,
+              onStatus: setAssistantStatus
+            });
           } else {
-            const targetServer = availableMcpServersForAgent.find((server) => server.id === decision.serverId) ?? null;
-            const targetTool = availableMcpToolsForAgent.find((entry) => entry.server.id === decision.serverId)?.tools.find((tool) => tool.name === decision.tool) ?? null;
-            let toolSummaryForQuestion = "";
-
-            if (!targetServer) {
-              toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${decision.serverId} 的可用 MCP server。`;
+            const selectedSkill = availableSkillsForAgent.find((skill) => skill.id === skillDecision.skillId) ?? null;
+            if (!selectedSkill) {
+              pushSkillTrace(
+                skillTrace,
+                "Skill decision",
+                `模型選擇了不存在或不可用的 skill：${skillDecision.skillId}\n系統已回退到一般 tool decision。`
+              );
               logNow({
-                category: "mcp",
+                category: "skills",
                 agent: activeAgent.name,
                 ok: false,
-                message: `Tool decision selected unavailable server: ${decision.serverId}`,
-                details: JSON.stringify(decision)
+                message: `Skill decision selected unavailable skill: ${skillDecision.skillId}`,
+                details: JSON.stringify(skillDecision)
               });
-              append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-            } else if (!targetTool) {
-              toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${decision.tool} 這個工具。`;
-              logNow({
-                category: "mcp",
-                agent: activeAgent.name,
-                ok: false,
-                message: `Tool decision selected unavailable tool: ${decision.tool}`,
-                details: JSON.stringify(decision)
+              finalInput = await resolveToolAugmentedInput({
+                input,
+                agent: resolvedActiveAgent,
+                adapter,
+                availableBuiltinTools: availableBuiltinToolsForAgent,
+                availableMcpServers: availableMcpServersForAgent,
+                availableMcpTools: availableMcpToolsForAgent,
+                toolEntries: availableToolsForAgent,
+                onStatus: setAssistantStatus
               });
-              append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
             } else {
-              try {
-                const client = new McpSseClient(targetServer);
-                client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
-                const toolOutput = await callTool(client, decision.tool, decision.input ?? {});
-                const toolOutputText = stringifyAny(toolOutput);
-                toolSummaryForQuestion = `工具執行結果：server=${targetServer.name}, tool=${decision.tool}, result=${toolOutputText}`;
-                logNow({
-                  category: "mcp",
-                  agent: targetServer.name,
-                  ok: true,
-                  message: `MCP tool call OK: ${decision.tool}`,
-                  details: toolOutputText
-                });
-                append(
-                  msg(
-                    "tool",
-                    `MCP ${targetServer.name} -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
-                    "mcp",
-                    { displayName: "MCP Tool" }
-                  )
-                );
-              } catch (e: any) {
-                const briefError = String(e?.message ?? e);
-                toolSummaryForQuestion = `工具執行失敗：${decision.tool} 呼叫失敗（${briefError}）。`;
-                append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-                logNow({
-                  category: "mcp",
-                  agent: targetServer.name,
-                  ok: false,
-                  message: `Tool call failed: ${decision.tool}`,
-                  details: briefError
-                });
-              }
+              setAssistantStatus(`正在載入 skill「${selectedSkill.name}」中…`);
+              pushSkillTrace(
+                skillTrace,
+                "Skill decision",
+                [`選中 skill：${selectedSkill.name} (${selectedSkill.id})`, `輸入：${stringifyAny(skillDecision.input ?? {})}`].join("\n")
+              );
+              const prepared = await prepareSkillExecution({
+                skill: selectedSkill,
+                skillInput: skillDecision.input,
+                userInput: input,
+                agent: resolvedActiveAgent,
+                adapter,
+                onStatus: setAssistantStatus
+              });
+              preparedSkillExecution = prepared;
+              selectedSkillForExecution = selectedSkill;
+              finalInput = prepared.finalInput;
+              finalSystem = prepared.system;
+              skillTrace.push(...prepared.trace);
+              logNow({
+                category: "skills",
+                agent: activeAgent.name,
+                ok: true,
+                message: `Skill selected: ${selectedSkill.name}`,
+                details: JSON.stringify(skillDecision.input ?? {})
+              });
             }
+          }
+        } else {
+          if (activeAgent.enableSkills === true) {
+            pushSkillTrace(skillTrace, "Skill decision", "沒有可用的 skill，已略過 skill decision。");
+          }
+          logNow({ category: "skills", agent: activeAgent.name, message: "Skill decision skipped: no available skills" });
+          finalInput = await resolveToolAugmentedInput({
+            input,
+            agent: resolvedActiveAgent,
+            adapter,
+            availableBuiltinTools: availableBuiltinToolsForAgent,
+            availableMcpServers: availableMcpServersForAgent,
+            availableMcpTools: availableMcpToolsForAgent,
+            toolEntries: availableToolsForAgent,
+            onStatus: setAssistantStatus
+          });
+        }
 
-            if (toolSummaryForQuestion) {
-              finalInput = `${input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
-            }
+        if (selectedSkillForExecution && preparedSkillExecution) {
+          if (skillExecutionMode === "multi_turn") {
+            const executed = await executeMultiTurnSkill({
+              initialTrace: skillTrace,
+              prepared: preparedSkillExecution,
+              skill: selectedSkillForExecution,
+              agent: resolvedActiveAgent,
+              adapter,
+              userInput: input,
+              onStatus: setAssistantStatus
+            });
+            finalInput = executed.finalInput;
+            finalSystem = preparedSkillExecution.system;
+            patchMessage(assistantId, {
+              skillTrace: executed.trace.length ? executed.trace : undefined,
+              statusText: "正在生成最終回覆中…",
+              isStreaming: true,
+              hideWhileStreaming: false
+            });
+            skillTrace.length = 0;
+            skillTrace.push(...executed.trace);
+          }
+
+          if (skillExecutionMode !== "multi_turn") {
+            pushSkillExecutionModeTrace(skillTrace, {
+              mode: "single_turn",
+              verifyMax: 0
+            });
           }
         }
 
-        const assistantId = generateId();
-        setHistory((h) => [
-          ...h,
-          { id: assistantId, role: "assistant", content: "", ts: Date.now(), name: activeAgent.name, displayName: activeAgent.name, avatarUrl: activeAgent.avatarUrl }
-        ]);
+        patchMessage(assistantId, {
+          skillTrace: skillTrace.length ? skillTrace : undefined,
+          statusText: "正在生成回覆中…",
+          isStreaming: true
+        });
 
         let sawDelta = false;
+        let buffered = "";
         const onDelta = (t: string) => {
-          setHistory((h) => h.map((m) => (m.id === assistantId ? { ...m, content: m.content + t } : m)));
+          buffered += t;
+          const thinkState = getThinkStreamingState(buffered);
+          patchMessage(assistantId, {
+            content: buffered,
+            hideWhileStreaming: thinkState.hideWhileStreaming,
+            statusText: thinkState.statusText,
+            isStreaming: true
+          });
           if (!sawDelta && t) {
             sawDelta = true;
             logNow({ category: "chat", agent: activeAgent.name, message: "normal talking streaming started" });
@@ -1153,10 +1833,14 @@ export default function App() {
           agent: resolvedActiveAgent,
           input: finalInput,
           history: limitHistory(history),
-          system: userSystem,
+          system: finalSystem,
           onDelta,
           retry: { delaySec: retryDelaySec, max: retryMax },
           onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
+        });
+        finalizeAssistant({
+          content: full,
+          skillTrace: skillTrace.length ? skillTrace : undefined
         });
         logNow({
           category: "chat",
@@ -1168,7 +1852,7 @@ export default function App() {
         return;
       }
 
-      // goal-driven talking: user input is a GOAL
+      // Deprecated legacy goal-driven talking: user input is a GOAL
       const leaderAgent = hydrateAgentCredentials(activeAgent);
       const memberAgents = agents
         .filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id)
@@ -1370,6 +2054,86 @@ export default function App() {
     }
   }
 
+  async function onImportSkill(file: File) {
+    const skill = await importSkillZip(file);
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(skill.id);
+    const [docs, files] = await Promise.all([listSkillDocs(skill.id), listSkillFiles(skill.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+    logNow({ category: "skills", ok: true, message: `Skill imported: ${skill.name}`, details: `${skill.id}\n${skill.sourcePackageName ?? ""}`.trim() });
+  }
+
+  async function onCreateEmptySkill(name: string) {
+    const skill = await createEmptySkill(name);
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(skill.id);
+    const [docs, files] = await Promise.all([listSkillDocs(skill.id), listSkillFiles(skill.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+    logNow({ category: "skills", ok: true, message: `Empty skill created: ${skill.name}`, details: skill.id });
+  }
+
+  async function onDeleteSkill(skillId: string) {
+    const target = skills.find((skill) => skill.id === skillId);
+    await deleteSkill(skillId);
+    const next = await listSkills();
+    setSkills(next);
+    const nextSelectedId = skillPanelSelectedId === skillId ? next[0]?.id ?? null : skillPanelSelectedId;
+    setSkillPanelSelectedId(nextSelectedId);
+    if (nextSelectedId) {
+      const [docs, files] = await Promise.all([listSkillDocs(nextSelectedId), listSkillFiles(nextSelectedId)]);
+      setSkillPanelDocs(docs);
+      setSkillPanelFiles(files);
+    } else {
+      setSkillPanelDocs([]);
+      setSkillPanelFiles([]);
+    }
+    logNow({ category: "skills", ok: true, message: `Skill deleted: ${target?.name ?? skillId}` });
+  }
+
+  async function onUpdateSkillMarkdown(skillId: string, markdown: string) {
+    const updated = await updateSkillMarkdown(skillId, markdown);
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(updated.id);
+    const [docs, files] = await Promise.all([listSkillDocs(updated.id), listSkillFiles(updated.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+    logNow({ category: "skills", ok: true, message: `Skill updated: ${updated.name}`, details: updated.id });
+  }
+
+  async function onUpsertSkillTextFile(skillId: string, path: string, kind: "reference" | "asset", content: string) {
+    const updated = await upsertSkillTextFile(skillId, { path, kind, content });
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(updated.id);
+    const [docs, files] = await Promise.all([listSkillDocs(updated.id), listSkillFiles(updated.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+    logNow({ category: "skills", ok: true, message: `Skill file saved: ${path}`, details: `${updated.name}\n${kind}` });
+  }
+
+  async function onDeleteSkillTextFile(skillId: string, path: string) {
+    const updated = await deleteSkillTextFile(skillId, path);
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(updated.id);
+    const [docs, files] = await Promise.all([listSkillDocs(updated.id), listSkillFiles(updated.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+    logNow({ category: "skills", ok: true, message: `Skill file deleted: ${path}`, details: updated.name });
+  }
+
+  async function onExportSkill(skillId: string) {
+    const target = skills.find((skill) => skill.id === skillId);
+    const blob = await exportSkillZip(skillId);
+    downloadFileBlob(`${target?.rootPath ?? skillId}.zip`, blob);
+    logNow({ category: "skills", ok: true, message: `Skill exported: ${target?.name ?? skillId}`, details: target?.rootPath ?? skillId });
+  }
+
   function onChangeMcpServers(next: McpServerConfig[]) {
     const prev = mcpServers;
     setMcpServers(next);
@@ -1523,7 +2287,7 @@ export default function App() {
                 }}
                 leaderName={mode === "leader_team" ? activeAgent?.name : null}
                 userName={userProfile.name}
-                modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal (with doc and tools)"}
+                modeLabel={mode === "leader_team" ? "goal-driven talking (deprecated)" : "normal"}
                 onExportRaw={exportRawHistory}
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
@@ -1554,8 +2318,8 @@ export default function App() {
               </button>
               <button className="cc-card" onClick={() => setConfigModal("mode")}>
                 <span className="cc-card-label">Mode</span>
-                <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven" : "normal (with doc and tools)"}</strong>
-                <span className="cc-card-hint">{mode === "leader_team" ? "Leader → Members" : "1:1 對話"}</span>
+                <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven (deprecated)" : "normal"}</strong>
+                <span className="cc-card-hint">{mode === "leader_team" ? "Legacy Leader → Members" : "1:1 對話"}</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("history")}>
                 <span className="cc-card-label">History & Retry</span>
@@ -1579,10 +2343,10 @@ export default function App() {
                 <strong className="cc-card-value">{mcpServers.length}</strong>
                 <span className="cc-card-hint">外部工具伺服器</span>
               </button>
-              <button className="cc-card cc-card-disabled" onClick={() => setConfigModal("skills")}>
+              <button className="cc-card" onClick={() => setConfigModal("skills")}>
                 <span className="cc-card-label">Skills</span>
-                <strong className="cc-card-value">Reserved</strong>
-                <span className="cc-card-hint">Coming Soon</span>
+                <strong className="cc-card-value">{skills.length}</strong>
+                <span className="cc-card-hint">Workflow layer</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("tools")}>
                 <span className="cc-card-label">Built-in Tools</span>
@@ -1620,7 +2384,7 @@ export default function App() {
             {configModal === "mode" && (
               <HelpModal title="Mode" onClose={() => setConfigModal(null)} width="min(420px, 92vw)">
                 <div style={{ display: "grid", gap: 8 }}>
-                  {([["one_to_one", "Normal (with doc and tools)", "一般一對一對話模式，會搭配 docs 與 tools"], ["leader_team", "Goal-driven Talking", "Leader 規劃任務，派給 member 協作"]] as const).map(([value, title, desc]) => (
+                  {([["one_to_one", "Normal", "一般一對一對話模式，可自由搭配skills、mcp and built-in tools、docs使用"], ["leader_team", "Goal-driven Talking (Deprecated)", "舊版 Leader 規劃任務、派給 member 協作模式，後續將逐步淘汰"]] as const).map(([value, title, desc]) => (
                     <button
                       key={value}
                       onClick={() => { setMode(value); setConfigModal(null); }}
@@ -1842,17 +2606,37 @@ export default function App() {
             )}
 
             {configModal === "skills" && (
-              <HelpModal title="Skills" onClose={() => setConfigModal(null)}>
-                <div className="chat-config-skill-placeholder">
-                  <div className="chat-config-skill-badge">Coming Soon</div>
-                  <div>未來這裡會放 skill 啟用、權限、來源與載入策略設定。</div>
-                </div>
+              <HelpModal title="Skills" onClose={() => setConfigModal(null)} width="min(900px, 96vw)">
+                <SkillsPanel
+                  skills={skills}
+                  selectedId={skillPanelSelectedId}
+                  selectedDocs={skillPanelDocs}
+                  selectedFiles={skillPanelFiles}
+                  agents={agents}
+                  activeAgentId={activeAgentId}
+                  executionMode={skillExecutionMode}
+                  verifyMax={skillVerifyMax}
+                  verifierAgentId={skillVerifierAgentId}
+                  builtInTools={allBuiltInTools}
+                  mcpToolCatalog={globalMcpToolCatalog}
+                  onChangeExecutionMode={setSkillExecutionMode}
+                  onChangeVerifyMax={(value) => setSkillVerifyMax(clampSkillVerifyMax(value))}
+                  onChangeVerifierAgentId={setSkillVerifierAgentId}
+                  onSelect={setSkillPanelSelectedId}
+                  onImport={onImportSkill}
+                  onCreateEmpty={onCreateEmptySkill}
+                  onDelete={onDeleteSkill}
+                  onExport={onExportSkill}
+                  onUpdateSkillMarkdown={onUpdateSkillMarkdown}
+                  onUpsertTextFile={onUpsertSkillTextFile}
+                  onDeleteTextFile={onDeleteSkillTextFile}
+                />
               </HelpModal>
             )}
 
             {configModal === "tools" && (
               <HelpModal title="Built-in Tools" onClose={() => setConfigModal(null)} width="min(820px, 96vw)">
-                <BuiltInToolsPanel tools={builtInTools} onChange={setBuiltInTools} />
+                <BuiltInToolsPanel systemTools={systemBuiltInTools} tools={builtInTools} onChange={setBuiltInTools} />
               </HelpModal>
             )}
           </div>
@@ -1882,7 +2666,8 @@ export default function App() {
                 }}
                 docs={docs}
                 mcpServers={mcpServers}
-                builtInTools={builtInTools}
+                builtInTools={allBuiltInTools}
+                skills={skills}
                 credentialProviders={credentialSlots}
                 resolveApiKey={resolveApiKeyForAgent}
               />
@@ -1974,7 +2759,7 @@ export default function App() {
               }}
               leaderName={mode === "leader_team" ? activeAgent?.name : null}
               userName={userProfile.name}
-              modeLabel={mode === "leader_team" ? "goal-driven talking" : "normal (with doc and tools)"}
+              modeLabel={mode === "leader_team" ? "goal-driven talking (deprecated)" : "normal"}
               onExportRaw={exportRawHistory}
               onExportSummary={exportSummaryHistory}
               onImportHistory={importHistoryFile}

@@ -1,7 +1,10 @@
 import { BuiltInToolConfig } from "../types";
 
 export type BuiltInToolHelpers = {
-  pick_best_agent_for_question?: (question: string) => Promise<string> | string;
+  system?: {
+    get_user_profile?: () => Promise<any> | any;
+    pick_best_agent_for_question?: (question: string) => Promise<string> | string;
+  };
 };
 
 export async function runBuiltInScriptTool(tool: Pick<BuiltInToolConfig, "code">, input: any, helpers: BuiltInToolHelpers = {}) {
@@ -10,7 +13,9 @@ export async function runBuiltInScriptTool(tool: Pick<BuiltInToolConfig, "code">
     "helpers",
     `
       "use strict";
-      const { pick_best_agent_for_question } = helpers;
+      const system = helpers.system ?? {};
+      const pick_best_agent_for_question = system.pick_best_agent_for_question;
+      const get_user_profile = system.get_user_profile;
       return (async () => {
         ${tool.code}
       })();
