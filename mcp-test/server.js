@@ -1,8 +1,10 @@
 const express = require("express");
 const cors = require("cors");
+const os = require("node:os");
 
 const app = express();
 const PORT = 3333;
+const HOST = "0.0.0.0";
 app.use(cors());
 app.use(express.json());
 
@@ -98,10 +100,20 @@ app.post("/mcp/rpc", (req, res) => {
   res.json({ id, error: "Unknown method" });
 });
 
-app.listen(PORT, () => {
-  const base = `http://127.0.0.1:${PORT}`;
-  console.log(`MCP SSE endpoint: ${base}/mcp/sse`);
-  console.log(`MCP RPC endpoint: ${base}/mcp/rpc`);
+function getWslIp() {
+  const values = Object.values(os.networkInterfaces()).flat().filter(Boolean);
+  return values.find((item) => item.family === "IPv4" && !item.internal)?.address || null;
+}
+
+app.listen(PORT, HOST, () => {
+  const localhostBase = `http://127.0.0.1:${PORT}`;
+  const wslIp = getWslIp();
+  console.log(`MCP SSE endpoint: ${localhostBase}/mcp/sse`);
+  console.log(`MCP RPC endpoint: ${localhostBase}/mcp/rpc`);
+  if (wslIp) {
+    console.log(`MCP SSE endpoint (WSL IP): http://${wslIp}:${PORT}/mcp/sse`);
+    console.log(`MCP RPC endpoint (WSL IP): http://${wslIp}:${PORT}/mcp/rpc`);
+  }
   console.log("Tools:");
   for (const tool of tools) {
     console.log(`- ${tool.name}${tool.description ? `: ${tool.description}` : ""}`);

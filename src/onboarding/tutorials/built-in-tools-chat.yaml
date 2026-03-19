@@ -1,0 +1,103 @@
+id: built-in-tools-chat
+title: "[3] 使用 Built-in Tools 完成工具對話"
+description: 建立一個自訂時間工具、啟用系統工具 get_user_profile，並透過兩段對話驗證工具真的有被呼叫。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識 Built-in Tools
+    checklistLabel: 認識 Built-in Tools
+    instructionTitle: 歡迎來到第三個案例：使用 Built-in Tools 完成工具對話
+    instructionBody: |
+      Built-in Tools 是在瀏覽器端執行的 JavaScript 工具，可以讓 agent 在對話過程中呼叫你定義好的能力。
+
+      這個案例會帶你完成兩種工具使用方式：
+      - 自訂工具：建立一個「教學用時間工具」，讓 agent 可以取得目前時間
+      - 系統工具：直接啟用 `get_user_profile`，讓 agent 能讀取你在 Profile 頁設定的使用者資訊
+
+      其中系統工具不需要你自己撰寫程式；只要在 Agent 權限中允許使用，就可以直接被呼叫。
+    actionLabel: 下一步
+    behavior: manual_info
+
+  - id: create-time-tool
+    title: 建立時間工具
+    checklistLabel: 建立教學用時間工具
+    instructionTitle: 第一步：建立一個取得目前時間的自訂工具
+    instructionBody: |
+      請前往 Chat Config 頁籤，按下 Built-in Tools 進入設定視窗。
+
+      建議先打開右上角的 help，從「範例：取得目前時間」直接複製程式內容。接著建立一個新工具，並使用以下設定：
+      - Tool name：教學用時間工具
+      - Description：取得目前瀏覽器時間與時區，適合回答現在幾點或目前時區等問題。
+      - Input schema：{}
+
+      JavaScript code 可以直接使用 help 裡的「取得目前時間」範例。完成後按下 Save。
+    completionLabel: 等待你建立教學用時間工具
+    tab: chat_config
+    targetId: chat-config-tools-card
+    behavior: create_tutorial_time_tool
+
+  - id: edit-user-profile
+    title: 編輯使用者資訊
+    checklistLabel: 填寫 Profile 資訊
+    instructionTitle: 第二步：填寫使用者 Profile，讓系統工具可以讀取
+    instructionBody: |
+      請前往 Profile 頁籤，至少填寫以下兩個欄位：
+      - Character name
+      - 自我描述
+
+      稍後我們會讓 agent 直接呼叫系統工具 `get_user_profile` 來讀取這些內容。這個系統工具不需要你另外建立；它是網站內建的，只要授權就能使用。
+    completionLabel: 等待你填寫 Profile 資訊
+    tab: profile
+    targetId: profile-name-input
+    behavior: fill_tutorial_user_profile
+
+  - id: enable-tool-access
+    title: 開啟 Agent 的工具權限
+    checklistLabel: 允許 Agent 使用 Built-in Tools
+    instructionTitle: 第三步：讓目前的 Agent 可以使用自訂工具與系統工具
+    instructionBody: |
+      請前往 Agents 頁籤，編輯剛剛建立的 Groq Agent。
+
+      在 Access Control 的 Built-in Tools 區塊中：
+      - 勾選 Built-in Tools
+      - 選擇 Custom selection
+      - 勾選「教學用時間工具」
+      - 勾選「[系統工具]允許存取使用者資訊(get_user_profile)」
+
+      儲存後，這個 Agent 才能在 normal 對話模式下呼叫這兩個工具。
+    completionLabel: 等待你開啟 Agent 的 Built-in Tools 權限
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_builtin_tool_access
+
+  - id: chat-time-tool
+    title: 用對話呼叫時間工具
+    checklistLabel: 用時間工具完成第一次工具對話
+    instructionTitle: 第四步：請用對話測試自訂時間工具
+    instructionBody: |
+      請前往 Chat 頁籤，送出這句話：
+      - 請使用工具告訴我現在幾點，並補上時區
+
+      這一步除了要等 agent 正常回覆，也請你展開下方的「查看 tool result」，確認工具真的有被呼叫。
+      只要有成功回覆、畫面正常，且你有打開 tool result，就算完成。
+    completionLabel: 等待 Agent 使用教學用時間工具並顯示 tool result
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_time_tool
+
+  - id: chat-user-profile-tool
+    title: 用對話呼叫系統工具
+    checklistLabel: 用 get_user_profile 完成第二次工具對話
+    instructionTitle: 第五步：請用對話測試系統工具 get_user_profile
+    instructionBody: |
+      接著再送出這句話：
+      - 請使用工具讀取我的個人資訊，並用一句話介紹我是誰
+
+      如果設定正確，agent 會使用系統工具 `get_user_profile` 讀取你在 Profile 頁填寫的內容。
+      這一步同樣要打開「查看 tool result」，確認工具調用結果有出現，才算完成。
+    actionLabel: 完成案例教學
+    completionLabel: 等待 Agent 使用 get_user_profile 並顯示 tool result
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_user_profile_tool

@@ -383,6 +383,7 @@ function Editor(props: {
               value={selectedProviderId}
               onChange={(e) => {
                 const value = e.target.value;
+                if (value === "__custom__") return;
                 const provider = providerOptions.find((entry) => entry.id === value);
                 if (!provider) return;
                 setA({
@@ -393,9 +394,13 @@ function Editor(props: {
               style={inp as any}
               data-tutorial-id="agent-provider-select"
             >
-              {providerOptions.length === 0 ? (
-                <option value="__custom__">No credential provider yet</option>
-              ) : null}
+              <option value="__custom__">
+                {providerOptions.length === 0
+                  ? "No credential provider yet"
+                  : a.endpoint?.trim()
+                  ? `Custom / Current (${a.endpoint.trim()})`
+                  : "Custom / Current endpoint"}
+              </option>
               {providerOptions.map((provider) => (
                 <option key={provider.id} value={provider.id}>
                   {provider.label}

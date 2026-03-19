@@ -192,7 +192,14 @@ export default function BuiltInToolsPanel(props: {
           such as <code>alert</code>, <code>window</code>, and <code>document</code>. Return a value if you want the model to
           receive structured tool output.
         </div>
-        <button type="button" onClick={() => setShowHelp(true)} title="Built-in Tools 使用說明" aria-label="Built-in Tools 使用說明" style={helpBtn}>
+        <button
+          type="button"
+          onClick={() => setShowHelp(true)}
+          title="Built-in Tools 使用說明"
+          aria-label="Built-in Tools 使用說明"
+          style={helpBtn}
+          data-tutorial-id="built-in-tools-help-button"
+        >
           ?
         </button>
       </div>
@@ -462,7 +469,7 @@ return {
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontWeight: 800 }}>使用者自訂工具</div>
-        <button type="button" onClick={addTool} style={btnSmall}>
+        <button type="button" onClick={addTool} style={btnSmall} data-tutorial-id="built-in-tools-add-button">
           + Add JS Tool
         </button>
       </div>
@@ -516,7 +523,7 @@ return {
           width="min(860px, calc(100vw - 48px))"
           footer={null}
         >
-          <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "grid", gap: 12 }} data-tutorial-id="built-in-tools-modal">
             <div>
               <label style={label}>Tool name</label>
               <input
@@ -608,7 +615,7 @@ return {
               Close
             </button>
             {editingTool.source !== "system" ? (
-              <button type="button" onClick={saveTool} style={btnPrimary}>
+              <button type="button" onClick={saveTool} style={btnPrimary} data-tutorial-id="built-in-tool-save-button">
                 Save
               </button>
             ) : null}

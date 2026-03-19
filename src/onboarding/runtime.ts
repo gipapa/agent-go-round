@@ -1,6 +1,7 @@
 import { saveBuiltInTools } from "../storage/builtInToolStore";
 import { listSkillFiles, listSkills, restoreSkillSnapshots } from "../storage/skillStore";
 import { normalizeCredentialUrl } from "../utils/credential";
+import { SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 import { AgentConfig } from "../types";
 import {
   TutorialEntryController,
@@ -13,6 +14,7 @@ import {
 
 export const TUTORIAL_DOC_NAME = "教學用DOC";
 export const TUTORIAL_MCP_NAME = "教學用MCP";
+export const TUTORIAL_TIME_TOOL_NAME = "教學用時間工具";
 
 function findGroqCredential(state: TutorialRuntimeState) {
   return state.credentials.find((entry) => entry.preset === "groq" && entry.apiKey.trim());
@@ -41,6 +43,54 @@ function findTutorialAgent(agents: AgentConfig[]) {
     return agent;
   }
   return null;
+}
+
+function findTutorialTimeTool(state: TutorialRuntimeState) {
+  return state.builtInTools.find((tool) => tool.name.trim() === TUTORIAL_TIME_TOOL_NAME) ?? null;
+}
+
+function findAssistantReplyAfterPrompt(history: TutorialRuntimeState["history"], prompt: string) {
+  const lastPromptIndex = [...history].reverse().findIndex((item) => item.role === "user" && item.content.trim() === prompt);
+  const actualPromptIndex = lastPromptIndex >= 0 ? history.length - 1 - lastPromptIndex : -1;
+  if (actualPromptIndex < 0) {
+    return { promptIndex: -1, assistantIndex: -1, assistant: null as TutorialRuntimeState["history"][number] | null };
+  }
+  const relativeAssistantIndex = history
+    .slice(actualPromptIndex + 1)
+    .findIndex((item) => item.role === "assistant" && item.content.trim().length > 0);
+  if (relativeAssistantIndex < 0) {
+    return { promptIndex: actualPromptIndex, assistantIndex: -1, assistant: null as TutorialRuntimeState["history"][number] | null };
+  }
+  const assistantIndex = actualPromptIndex + 1 + relativeAssistantIndex;
+  return {
+    promptIndex: actualPromptIndex,
+    assistantIndex,
+    assistant: history[assistantIndex] ?? null
+  };
+}
+
+function collectAdjacentToolMessages(history: TutorialRuntimeState["history"], index: number) {
+  const items: TutorialRuntimeState["history"] = [];
+
+  for (let i = index - 1; i >= 0; i--) {
+    const current = history[i];
+    if (current.role === "tool") {
+      items.unshift(current);
+      continue;
+    }
+    break;
+  }
+
+  for (let i = index + 1; i < history.length; i++) {
+    const current = history[i];
+    if (current.role === "tool") {
+      items.push(current);
+      continue;
+    }
+    break;
+  }
+
+  return items;
 }
 
 export async function captureTutorialWorkspaceSnapshot(state: TutorialRuntimeState): Promise<TutorialWorkspaceSnapshot> {
@@ -159,6 +209,94 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
           : "請送出「請用一句話自我介紹」，並確認回覆是否帶有喵喵叫的人設。"
       };
     }
+    case "create_tutorial_time_tool": {
+      const tool = findTutorialTimeTool(state);
+      const completed =
+        !!tool &&
+        tool.description.trim().length > 0 &&
+        tool.code.trim().length > 0 &&
+        /(new Date|toISOString|resolvedOptions\(\)\.timeZone)/.test(tool.code);
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="built-in-tools-modal"]')
+            ? "built-in-tools-add-button"
+            : step.targetId ?? "chat-config-tools-card",
+        canContinue: completed,
+        statusText: completed
+          ? `已建立工具：${tool?.name}`
+          : "請建立名稱為「教學用時間工具」的自訂工具，並使用 help 裡的時間範例程式。"
+      };
+    }
+    case "fill_tutorial_user_profile": {
+      const completed = state.userProfile.name.trim().length > 0 && state.userProfile.description.trim().length > 0;
+      return {
+        completed,
+        targetId: step.targetId ?? "profile-name-input",
+        canContinue: completed,
+        statusText: completed ? "Profile 已填寫完成。" : "請至少填寫 Character name 與 自我描述。"
+      };
+    }
+    case "enable_tutorial_builtin_tool_access": {
+      const agent = findTutorialAgentBase(state.agents);
+      const timeTool = findTutorialTimeTool(state);
+      const builtInEnabled = !!agent && agent.enableBuiltInTools === true;
+      const customSelection = !!agent && Array.isArray(agent.allowedBuiltInToolIds);
+      const hasTimeTool = !!timeTool && !!agent && !!agent.allowedBuiltInToolIds?.includes(timeTool.id);
+      const hasProfileTool = !!agent && !!agent.allowedBuiltInToolIds?.includes(SYSTEM_USER_PROFILE_TOOL_ID);
+      const completed = builtInEnabled && customSelection && hasTimeTool && hasProfileTool;
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? "目前 Agent 已允許使用教學用時間工具與 get_user_profile。"
+          : "請在 Agent 的 Built-in Tools 中勾選 Custom selection，並允許教學用時間工具與 get_user_profile。"
+      };
+    }
+    case "first_chat_time_tool": {
+      const targetPrompt = "請使用工具告訴我現在幾點，並補上時區";
+      const { assistantIndex, assistant } = findAssistantReplyAfterPrompt(state.history, targetPrompt);
+      const toolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
+      const toolUsed = toolMessages.some((item) => /Built-in tool -> 教學用時間工具/.test(item.content));
+      const opened = !!assistant && state.openedToolResultMessageIds.includes(assistant.id);
+      const completed = !!assistant && toolUsed && opened;
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: completed,
+        statusText: completed
+          ? "已成功使用教學用時間工具並展開 tool result。"
+          : assistant
+          ? !toolUsed
+            ? "已收到回覆，但還沒有看到教學用時間工具的調用結果；請確認 Agent 權限與工具描述。"
+            : "已收到回覆，請再展開「查看 tool result」完成驗證。"
+          : "請送出指定問題，等待 Agent 回覆，並展開「查看 tool result」。"
+      };
+    }
+    case "first_chat_user_profile_tool": {
+      const targetPrompt = "請使用工具讀取我的個人資訊，並用一句話介紹我是誰";
+      const { assistantIndex, assistant } = findAssistantReplyAfterPrompt(state.history, targetPrompt);
+      const toolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
+      const toolUsed = toolMessages.some((item) => /Built-in tool -> get_user_profile/.test(item.content));
+      const opened = !!assistant && state.openedToolResultMessageIds.includes(assistant.id);
+      const completed = !!assistant && toolUsed && opened;
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: completed,
+        statusText: completed
+          ? "已成功使用 get_user_profile 並展開 tool result。"
+          : assistant
+          ? !toolUsed
+            ? "已收到回覆，但還沒有看到 get_user_profile 的調用結果；請確認 Agent 權限與 Profile 是否已填寫。"
+            : "已收到回覆，請再展開「查看 tool result」完成驗證。"
+          : "請送出指定問題，等待 Agent 回覆，並展開「查看 tool result」。"
+      };
+    }
     default:
       return {
         completed: false,
@@ -182,9 +320,19 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       controller.setConfigModal(null);
       break;
     case "create_tutorial_doc":
+    case "create_tutorial_time_tool":
+    case "fill_tutorial_user_profile":
       controller.setConfigModal(null);
       break;
     case "enable_tutorial_doc_access": {
+      controller.setConfigModal(null);
+      const agent = findTutorialAgentBase(state.agents);
+      if (agent) {
+        controller.setActiveAgentId(agent.id);
+      }
+      break;
+    }
+    case "enable_tutorial_builtin_tool_access": {
       controller.setConfigModal(null);
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
@@ -213,6 +361,29 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       }
       if (state.currentChatInput.trim() !== "請用一句話自我介紹") {
         controller.setComposerSeed("請用一句話自我介紹");
+      }
+      break;
+    }
+    case "first_chat_time_tool": {
+      controller.setConfigModal(null);
+      controller.clearChat();
+      const agent = findTutorialAgentBase(state.agents);
+      if (agent) {
+        controller.setActiveAgentId(agent.id);
+      }
+      if (state.currentChatInput.trim() !== "請使用工具告訴我現在幾點，並補上時區") {
+        controller.setComposerSeed("請使用工具告訴我現在幾點，並補上時區");
+      }
+      break;
+    }
+    case "first_chat_user_profile_tool": {
+      controller.setConfigModal(null);
+      const agent = findTutorialAgentBase(state.agents);
+      if (agent) {
+        controller.setActiveAgentId(agent.id);
+      }
+      if (state.currentChatInput.trim() !== "請使用工具讀取我的個人資訊，並用一句話介紹我是誰") {
+        controller.setComposerSeed("請使用工具讀取我的個人資訊，並用一句話介紹我是誰");
       }
       break;
     }

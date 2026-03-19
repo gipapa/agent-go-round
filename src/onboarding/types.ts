@@ -11,7 +11,12 @@ export type TutorialStepBehaviorId =
   | "first_chat_joke"
   | "create_tutorial_doc"
   | "enable_tutorial_doc_access"
-  | "first_chat_doc_persona";
+  | "first_chat_doc_persona"
+  | "create_tutorial_time_tool"
+  | "fill_tutorial_user_profile"
+  | "enable_tutorial_builtin_tool_access"
+  | "first_chat_time_tool"
+  | "first_chat_user_profile_tool";
 
 export type TutorialStepDefinition = {
   id: string;
@@ -66,6 +71,12 @@ export type TutorialRuntimeState = {
   currentChatInput: string;
   builtInTools: BuiltInToolConfig[];
   docs: DocItem[];
+  userProfile: {
+    name: string;
+    description: string;
+    hasAvatar: boolean;
+  };
+  openedToolResultMessageIds: string[];
 };
 
 export type TutorialEntryController = {

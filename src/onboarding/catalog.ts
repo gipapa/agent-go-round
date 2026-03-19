@@ -2,6 +2,7 @@ import { parse } from "yaml";
 import { TutorialScenarioDefinition, TutorialStepBehaviorId, TutorialStepDefinition } from "./types";
 import docsPersonaChatRaw from "./tutorials/docs-persona-chat.yaml?raw";
 import firstAgentChatRaw from "./tutorials/first-agent-chat.yaml?raw";
+import builtInToolsChatRaw from "./tutorials/built-in-tools-chat.yaml?raw";
 
 type TutorialCatalogIssue = {
   scenarioId: string;
@@ -70,7 +71,8 @@ function safeParseScenario(raw: string, scenarioId: string) {
 
 export const tutorialCatalog: TutorialScenarioDefinition[] = [
   safeParseScenario(firstAgentChatRaw, "first-agent-chat"),
-  safeParseScenario(docsPersonaChatRaw, "docs-persona-chat")
+  safeParseScenario(docsPersonaChatRaw, "docs-persona-chat"),
+  safeParseScenario(builtInToolsChatRaw, "built-in-tools-chat")
 ].filter((scenario): scenario is TutorialScenarioDefinition => !!scenario);
 
 export function getTutorialScenario(id: string) {

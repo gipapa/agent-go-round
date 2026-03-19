@@ -1,0 +1,14 @@
+{
+  "name": "mcp-agent-browser-sse",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "agent-browser": "^0.21.2",
+    "cors": "^2.8.5",
+    "express": "^5.2.1"
+  }
+}

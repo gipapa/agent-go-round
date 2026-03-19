@@ -22,7 +22,9 @@ steps:
     instructionBody: |
       請前往 Chat Config 頁籤，按下 Credentials 以進入設定視窗。這裡集中管理模型或外部服務用到的憑證；相同 provider / endpoint 的多個 agent，可以共用同一組 key。
 
-      建議先使用 Groq：
+      LLM的服務提供商建議使用Groq，是個免費可以使用大部分開源模型的服務，且使用其專屬硬體可以很大程度的加速推論速度。
+      可以到 https://console.groq.com/keys 申請免費的api key測試使用。
+      使用方式：
       1. 登入 Groq Console
       2. 在首頁找到 API Keys
       3. 建立新的 API key

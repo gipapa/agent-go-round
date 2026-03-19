@@ -94,6 +94,7 @@ import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
 import { SYSTEM_AGENT_DIRECTORY_TOOL_ID, SYSTEM_BUILT_IN_TOOLS, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 import { normalizeCredentialUrl } from "../utils/credential";
+import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -546,6 +547,7 @@ export default function App() {
   const [showTutorialExitPrompt, setShowTutorialExitPrompt] = useState(false);
   const [tutorialUnavailableMessage, setTutorialUnavailableMessage] = useState<string | null>(null);
   const [tutorialComposerSeed, setTutorialComposerSeed] = useState<{ value: string; token: number } | null>(null);
+  const [tutorialOpenedToolResultMessageIds, setTutorialOpenedToolResultMessageIds] = useState<string[]>([]);
   const [logCollapsed, setLogCollapsed] = useState(true);
   const [logHeight, setLogHeight] = useState(160);
   const [logSort, setLogSort] = useState<{ key: LogSortKey; dir: "asc" | "desc" }>({ key: "ts", dir: "desc" });
@@ -576,9 +578,15 @@ export default function App() {
       history,
       currentChatInput: chatComposerDraft,
       builtInTools,
-      docs
+      docs,
+      userProfile: {
+        name: userName,
+        description: userDescription,
+        hasAvatar: !!userAvatarUrl
+      },
+      openedToolResultMessageIds: tutorialOpenedToolResultMessageIds
     }),
-    [agents, activeAgentId, modelCredentials, credentialTestResults, history, chatComposerDraft, builtInTools, docs]
+    [agents, activeAgentId, modelCredentials, credentialTestResults, history, chatComposerDraft, builtInTools, docs, userName, userDescription, userAvatarUrl, tutorialOpenedToolResultMessageIds]
   );
   const tutorialEvaluations = useMemo<TutorialStepEvaluation[]>(
     () => (tutorialScenario ? tutorialScenario.steps.map((step) => evaluateTutorialStep(step, tutorialRuntimeState)) : []),
@@ -801,7 +809,10 @@ export default function App() {
       setActiveTab,
       setConfigModal: (modal) => setConfigModal(modal),
       setActiveAgentId,
-      clearChat: () => setHistory([]),
+      clearChat: () => {
+        setHistory([]);
+        setTutorialOpenedToolResultMessageIds([]);
+      },
       setComposerSeed: (value) =>
         setTutorialComposerSeed({
           value,
@@ -1120,6 +1131,7 @@ export default function App() {
     setTutorialScenario(scenario);
     setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
     setTutorialStepIndex(0);
+    setTutorialOpenedToolResultMessageIds([]);
     setShowTutorialExitPrompt(false);
     setConfigModal(null);
     setIsChatFullscreen(false);
@@ -1142,6 +1154,7 @@ export default function App() {
     setTutorialScenarioIndex(tutorialScenarioIndex + 1);
     setTutorialStepIndex(0);
     setTutorialComposerSeed(null);
+    setTutorialOpenedToolResultMessageIds([]);
     setConfigModal(null);
     setIsChatFullscreen(false);
     logNow({ category: "tutorial", ok: true, message: `Tutorial case switched: ${nextScenario.title}` });
@@ -1169,6 +1182,7 @@ export default function App() {
     setTutorialScenarioIndex(null);
     setTutorialStepIndex(0);
     setTutorialComposerSeed(null);
+    setTutorialOpenedToolResultMessageIds([]);
     setShowTutorialExitPrompt(false);
     setConfigModal(null);
   }
@@ -2388,6 +2402,13 @@ export default function App() {
     logNow({ category: "skills", ok: true, message: `Skill file deleted: ${path}`, details: updated.name });
   }
 
+  async function onResetAppData() {
+    const confirmed = window.confirm("這會清空這個網站中 agent-go-round 儲存的所有資料，包含對話、Docs、Skills、Agents、Credentials、MCP 與 Built-in Tools。要繼續嗎？");
+    if (!confirmed) return;
+    await resetAgentGoRoundStorage();
+    window.location.reload();
+  }
+
   async function onExportSkill(skillId: string) {
     const target = skills.find((skill) => skill.id === skillId);
     const blob = await exportSkillZip(skillId);
@@ -2575,6 +2596,7 @@ export default function App() {
                 onSend={onSend}
                 onClear={() => {
                   setHistory([]);
+                  setTutorialOpenedToolResultMessageIds([]);
                   logNow({ category: "chat", message: "Chat cleared" });
                 }}
                 leaderName={mode === "leader_team" ? activeAgent?.name : null}
@@ -2587,6 +2609,11 @@ export default function App() {
                 onOpenFullscreen={() => setIsChatFullscreen(true)}
                 composerSeed={tutorialComposerSeed}
                 onDraftChange={setChatComposerDraft}
+                onOpenToolResult={(assistantMessageId) =>
+                  setTutorialOpenedToolResultMessageIds((current) =>
+                    current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
+                  )
+                }
               />
             </div>
           </div>
@@ -2642,7 +2669,7 @@ export default function App() {
                 <strong className="cc-card-value">{skills.length}</strong>
                 <span className="cc-card-hint">Workflow layer</span>
               </button>
-              <button className="cc-card" onClick={() => setConfigModal("tools")}>
+              <button className="cc-card" onClick={() => setConfigModal("tools")} data-tutorial-id="chat-config-tools-card">
                 <span className="cc-card-label">Built-in Tools</span>
                 <strong className="cc-card-value">{builtInTools.length}</strong>
                 <span className="cc-card-hint">Browser JS tools</span>
@@ -2850,6 +2877,21 @@ export default function App() {
                   <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.6 }}>
                     Default history is 10. Only the latest N messages are sent to the model.
                   </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: 8,
+                      paddingTop: 8,
+                      borderTop: "1px solid var(--border)"
+                    }}
+                  >
+                    <div style={{ fontSize: 12, opacity: 0.72, lineHeight: 1.6 }}>
+                      危險操作：清空這個網站中 agent-go-round 自己建立的 localStorage 與 IndexedDB 內容，不會清除其他網站的資料。
+                    </div>
+                    <button type="button" onClick={() => void onResetAppData()} style={{ ...dangerMiniBtn, justifySelf: "start", padding: "8px 12px" }}>
+                      清空所有本網站資料
+                    </button>
+                  </div>
                 </div>
               </HelpModal>
             )}
@@ -3016,6 +3058,7 @@ export default function App() {
                 value={userName}
                 onChange={(e) => setUserName(e.target.value)}
                 style={{ width: "100%", marginBottom: 14, ...selectStyle }}
+                data-tutorial-id="profile-name-input"
               />
 
               <label style={label}>自我描述</label>
@@ -3025,6 +3068,7 @@ export default function App() {
                 rows={4}
                 style={{ width: "100%", marginBottom: 14, ...selectStyle, resize: "vertical" }}
                 placeholder="例如：你是團隊 PM，偏好繁體中文、重視可執行的結論。"
+                data-tutorial-id="profile-description-input"
               />
 
               <label style={label}>大頭照</label>
@@ -3083,6 +3127,7 @@ export default function App() {
               onSend={onSend}
               onClear={() => {
                 setHistory([]);
+                setTutorialOpenedToolResultMessageIds([]);
                 logNow({ category: "chat", message: "Chat cleared" });
               }}
               leaderName={mode === "leader_team" ? activeAgent?.name : null}
@@ -3094,6 +3139,11 @@ export default function App() {
               isSummaryExporting={isSummaryExporting}
               fullscreen
               onCloseFullscreen={() => setIsChatFullscreen(false)}
+              onOpenToolResult={(assistantMessageId) =>
+                setTutorialOpenedToolResultMessageIds((current) =>
+                  current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
+                )
+              }
             />
           </div>
         </HelpModal>
@@ -3178,6 +3228,8 @@ export default function App() {
         )}
       </div>
 
+      </div>
+      )}
       {showTutorialExitPrompt && tutorialScenario ? (
         <HelpModal
           title={tutorialScenario.exitTitle}
@@ -3214,8 +3266,6 @@ export default function App() {
           <div style={{ fontSize: 13, lineHeight: 1.8, opacity: 0.92 }}>{tutorialUnavailableMessage}</div>
         </HelpModal>
       ) : null}
-      </div>
-      )}
     </div>
   );
 }

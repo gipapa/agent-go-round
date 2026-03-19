@@ -222,6 +222,7 @@ type ChatPanelProps = {
   onOpenFullscreen?: () => void;
   onCloseFullscreen?: () => void;
   composerSeed?: { value: string; token: number } | null;
+  onOpenToolResult?: (assistantMessageId: string) => void;
 };
 
 export default function ChatPanel(props: ChatPanelProps) {
@@ -383,7 +384,14 @@ export default function ChatPanel(props: ChatPanelProps) {
                   </details>
                 ) : null}
                 {m.role === "assistant" && toolMessages.length > 0 ? (
-                  <details className="chat-tool-details">
+                  <details
+                    className="chat-tool-details"
+                    onToggle={(event) => {
+                      if ((event.currentTarget as HTMLDetailsElement).open) {
+                        props.onOpenToolResult?.(m.id);
+                      }
+                    }}
+                  >
                     <summary>查看 tool result</summary>
                     <pre className="chat-tool-pre">{toolMessages.map((item) => item.content).join("\n\n---\n\n")}</pre>
                   </details>
