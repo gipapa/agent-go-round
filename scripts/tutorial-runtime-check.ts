@@ -51,6 +51,7 @@ function makeState(patch?: Partial<TutorialRuntimeState>): TutorialRuntimeState 
     credentialTestResults: {},
     history: [],
     currentChatInput: "",
+    historyMessageLimit: 10,
     builtInTools: [],
     docs: [],
     mcpServers: [],
@@ -165,11 +166,18 @@ async function assertSkillLoadExpectationUsesYamlValues() {
   assert.equal(result.completed, true);
 }
 
+async function assertHistoryLimitStepRequiresOne() {
+  const step = await getStep("agent-browser-mcp-chat", "set-history-limit");
+  assert.equal(evaluateTutorialStep(step, makeState({ historyMessageLimit: 10 })).completed, false);
+  assert.equal(evaluateTutorialStep(step, makeState({ historyMessageLimit: 1 })).completed, true);
+}
+
 async function main() {
   await assertAllAutomatedChatStepsAreYamlDriven();
   await assertApplyEntryUsesYamlSeed();
   await assertToolResultOpenIsRequired();
   await assertSkillLoadExpectationUsesYamlValues();
+  await assertHistoryLimitStepRequiresOne();
   console.log("tutorial-runtime-check: ok");
 }
 

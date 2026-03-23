@@ -318,6 +318,17 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
           : "請建立名稱為「教學用時間工具」的自訂工具，並使用 help 裡的時間範例程式。"
       };
     }
+    case "set_history_limit_to_one": {
+      const completed = state.historyMessageLimit === 1;
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-history-card",
+        canContinue: completed,
+        statusText: completed
+          ? "Messages sent to model 已改為 1，案例結束後會自動恢復原本設定。"
+          : "請前往 Chat Config > History & Retry，將 Messages sent to model 改成 1。"
+      };
+    }
     case "fill_tutorial_user_profile": {
       const completed = state.userProfile.name.trim().length > 0 && state.userProfile.description.trim().length > 0;
       return {
@@ -527,6 +538,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "create_groq_agent":
     case "create_tutorial_doc":
     case "create_tutorial_time_tool":
+    case "set_history_limit_to_one":
     case "fill_tutorial_user_profile":
       break;
     case "enable_tutorial_doc_access": {

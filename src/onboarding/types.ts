@@ -13,6 +13,7 @@ export type TutorialStepBehaviorId =
   | "enable_tutorial_doc_access"
   | "first_chat_doc_persona"
   | "create_tutorial_time_tool"
+  | "set_history_limit_to_one"
   | "fill_tutorial_user_profile"
   | "enable_tutorial_builtin_tool_access"
   | "first_chat_time_tool"
@@ -99,6 +100,7 @@ export type TutorialRuntimeState = {
   credentialTestResults: Record<string, CredentialTestResultLike | undefined>;
   history: ChatMessage[];
   currentChatInput: string;
+  historyMessageLimit: number;
   builtInTools: BuiltInToolConfig[];
   docs: DocItem[];
   mcpServers: { id: string; name: string; sseUrl: string }[];

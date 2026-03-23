@@ -23,6 +23,27 @@ steps:
     behavior: manual_info
     actionLabel: 下一步
 
+  - id: set-history-limit
+    title: 先把對話歷史縮到 1 則
+    checklistLabel: 將對話歷史改為 1
+    instructionTitle: 先把送給模型的歷史訊息數量改成 1
+    instructionBody: |
+      為了避免 skill 測試過程中的長對話把免費模型的 context 吃滿，請先前往 Chat Config 頁籤，打開 `History & Retry`。
+
+      請把：
+      - `Messages sent to model`
+
+      改成：
+      - `1`
+
+      這個案例裡每一段對話都是獨立驗證 skill 的不同能力，不需要依賴上一輪對話內容，所以改成 1 不會影響案例完成。
+      案例結束後，系統會自動把這個值恢復成你原本的設定。
+    tab: chat_config
+    targetId: chat-config-history-card
+    behavior: set_history_limit_to_one
+    completionLabel: 等待將 Messages sent to model 改成 1
+    actionLabel: 下一步
+
   - id: create_skill
     title: 建立教學用 Sequential Skill
     checklistLabel: 建立教學 skill

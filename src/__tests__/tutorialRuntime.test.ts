@@ -42,6 +42,7 @@ function makeState(patch?: Partial<TutorialRuntimeState>): TutorialRuntimeState 
     credentialTestResults: {},
     history: [],
     currentChatInput: "",
+    historyMessageLimit: 10,
     builtInTools: [],
     docs: [],
     mcpServers: [],
@@ -132,5 +133,11 @@ describe("tutorial YAML automation linkage", () => {
     });
     const result = evaluateTutorialStep(step, makeState({ history: [makeUser(prompt), assistant] }));
     expect(result.completed).toBe(true);
+  });
+
+  it("requires messages sent to model to be 1 for history limit tutorial steps", () => {
+    const step = getStep("built-in-tools-chat", "set-history-limit");
+    expect(evaluateTutorialStep(step, makeState({ historyMessageLimit: 10 })).completed).toBe(false);
+    expect(evaluateTutorialStep(step, makeState({ historyMessageLimit: 1 })).completed).toBe(true);
   });
 });

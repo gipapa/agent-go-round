@@ -585,6 +585,7 @@ export default function App() {
   const mcpCountRef = React.useRef(mcpServers.length);
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
+  const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
       agents,
@@ -594,6 +595,7 @@ export default function App() {
       credentialTestResults,
       history,
       currentChatInput: chatComposerDraft,
+      historyMessageLimit,
       builtInTools,
       docs,
       mcpServers,
@@ -613,6 +615,7 @@ export default function App() {
       credentialTestResults,
       history,
       chatComposerDraft,
+      historyMessageLimit,
       builtInTools,
       docs,
       mcpServers,
@@ -1153,6 +1156,18 @@ export default function App() {
     }
   }
 
+  function scenarioRequiresHistoryLimitOne(scenario: TutorialScenarioDefinition | null | undefined) {
+    return !!scenario?.steps.some((step) => step.behavior === "set_history_limit_to_one");
+  }
+
+  function restoreTutorialHistoryLimitIfNeeded() {
+    if (tutorialHistoryLimitRestoreRef.current === null) return tutorialHistoryLimitRestoreRef.current;
+    const original = tutorialHistoryLimitRestoreRef.current;
+    setHistoryMessageLimit(original);
+    tutorialHistoryLimitRestoreRef.current = null;
+    return original;
+  }
+
   async function startTutorial(scenarioId: string) {
     const scenario = getTutorialScenario(scenarioId);
     if (!scenario) {
@@ -1166,6 +1181,7 @@ export default function App() {
 
     const snapshot = await captureTutorialWorkspaceSnapshot(tutorialRuntimeState);
     tutorialSnapshotRef.current = snapshot;
+    tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(scenario) ? historyMessageLimit : null;
     tutorialStepKeyRef.current = "";
     setTutorialScenario(scenario);
     setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
@@ -1179,6 +1195,7 @@ export default function App() {
   }
 
   function moveToNextTutorialScenario() {
+    const restoredHistoryLimit = restoreTutorialHistoryLimitIfNeeded();
     if (tutorialScenarioIndex === null) {
       setShowTutorialExitPrompt(true);
       return;
@@ -1189,6 +1206,9 @@ export default function App() {
       return;
     }
     tutorialStepKeyRef.current = "";
+    tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(nextScenario)
+      ? restoredHistoryLimit ?? historyMessageLimit
+      : null;
     setTutorialScenario(nextScenario);
     setTutorialScenarioIndex(tutorialScenarioIndex + 1);
     setTutorialStepIndex(0);
@@ -1200,6 +1220,7 @@ export default function App() {
   }
 
   async function finishTutorial(keepWorkspaceChanges: boolean) {
+    restoreTutorialHistoryLimitIfNeeded();
     if (!keepWorkspaceChanges && tutorialSnapshotRef.current) {
       await restoreTutorialWorkspaceSnapshot(tutorialSnapshotRef.current);
       setBuiltInTools(tutorialSnapshotRef.current.builtInTools);
@@ -1216,6 +1237,7 @@ export default function App() {
     }
 
     tutorialSnapshotRef.current = null;
+    tutorialHistoryLimitRestoreRef.current = null;
     tutorialStepKeyRef.current = "";
     setTutorialScenario(null);
     setTutorialScenarioIndex(null);
@@ -2949,7 +2971,15 @@ export default function App() {
                 <div style={{ display: "grid", gap: 14 }}>
                   <div>
                     <label style={label}>Messages sent to model</label>
-                    <input type="number" min={1} max={200} value={historyMessageLimit} onChange={(e) => setHistoryMessageLimit(clampHistoryLimit(Number(e.target.value)))} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
+                    <input
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={historyMessageLimit}
+                      onChange={(e) => setHistoryMessageLimit(clampHistoryLimit(Number(e.target.value)))}
+                      style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }}
+                      data-tutorial-id="history-limit-input"
+                    />
                   </div>
                   <div>
                     <label style={label}>Delay (sec)</label>

@@ -615,6 +615,11 @@ return {
       );
       await clickByTutorialId("built-in-tool-save-button");
       return;
+    case "set_history_limit_to_one":
+      await clickByTutorialId("chat-config-history-card");
+      await waitForSelector('[data-tutorial-id="history-limit-input"]', 10000);
+      await setValueByTutorialId("history-limit-input", "1");
+      return;
     case "fill_tutorial_user_profile":
       await clickByTutorialId("tab-profile");
       await setValueByTutorialId("profile-name-input", "教學測試使用者");
