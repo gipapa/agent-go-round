@@ -120,6 +120,7 @@ async function assertApplyEntryUsesYamlSeed() {
     setActiveTab: (value) => calls.setActiveTab.push(value),
     setConfigModal: (value) => calls.setConfigModal.push(value),
     setActiveAgentId: (value) => calls.setActiveAgentId.push(value),
+    setSelectedAgentId: () => {},
     setSkillExecutionMode: (value) => calls.setSkillExecutionMode.push(value),
     setComposerSeed: (value) => calls.setComposerSeed.push(value),
     clearChat: () => calls.clearChat.push(true),

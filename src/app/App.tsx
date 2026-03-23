@@ -255,6 +255,31 @@ function clampHistoryLimit(value: number) {
   return Math.max(1, Math.min(200, Math.round(value)));
 }
 
+function findTutorialAgentBaseInList(agents: AgentConfig[]) {
+  return (
+    agents.find(
+      (agent) =>
+        agent.type === "openai_compat" &&
+        normalizeCredentialUrl(agent.endpoint) === "https://api.groq.com/openai/v1" &&
+        agent.model === "moonshotai/kimi-k2-instruct-0905"
+    ) ?? null
+  );
+}
+
+function findTutorialAgentInList(agents: AgentConfig[]) {
+  const agent = findTutorialAgentBaseInList(agents);
+  if (!agent) return null;
+  if (
+    agent.enableDocs === false &&
+    agent.enableMcp === false &&
+    agent.enableBuiltInTools === false &&
+    agent.enableSkills === false
+  ) {
+    return agent;
+  }
+  return null;
+}
+
 function normalizeImportedMessage(input: any): ChatMessage | null {
   if (!input || typeof input !== "object") return null;
   if (typeof input.role !== "string" || typeof input.content !== "string") return null;
@@ -496,6 +521,7 @@ export default function App() {
     initialUi.activeTab === "resources" ? "chat_config" : (initialUi.activeTab ?? "chat")
   );
   const [activeAgentId, setActiveAgentId] = useState<string>(() => initialUi.activeAgentId ?? agents[0]?.id ?? "");
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(() => initialUi.activeAgentId ?? agents[0]?.id ?? "");
   const activeAgent = useMemo(() => agents.find((a) => a.id === activeAgentId) ?? null, [agents, activeAgentId]);
 
   const [mode, setMode] = useState<OrchestratorMode>(() =>
@@ -632,6 +658,23 @@ export default function App() {
   );
   const currentTutorialStep = tutorialScenario?.steps[tutorialStepIndex] ?? null;
   const currentTutorialEvaluation = tutorialScenario ? tutorialEvaluations[tutorialStepIndex] ?? null : null;
+  const tutorialExpectedAgent = useMemo(() => {
+    const preset = currentTutorialStep?.automation?.activeAgentPreset;
+    if (preset === "tutorial_agent") return findTutorialAgentInList(agents);
+    if (preset === "tutorial_agent_base") return findTutorialAgentBaseInList(agents);
+    return null;
+  }, [currentTutorialStep, agents]);
+  const tutorialActiveAgentHint = useMemo(() => {
+    const preset = currentTutorialStep?.automation?.activeAgentPreset;
+    if (!preset) return null;
+    if (tutorialExpectedAgent) return `案例鎖定：${tutorialExpectedAgent.name}`;
+    return "案例鎖定：尚未找到教學用主要 Agent";
+  }, [currentTutorialStep, tutorialExpectedAgent]);
+  const tutorialActiveAgentWarning = useMemo(() => {
+    const preset = currentTutorialStep?.automation?.activeAgentPreset;
+    if (!preset || tutorialExpectedAgent) return null;
+    return "目前找不到這個案例需要的主要 Agent。若你略過案例 1 的建立 Agent，後續案例將無法完成。";
+  }, [currentTutorialStep, tutorialExpectedAgent]);
   const tutorialActive = !!tutorialScenario;
   const tutorialPreviewLocked = tutorialActive && tutorialStepIndex === 0;
   const tutorialShowLandingPreview = tutorialPreviewLocked && tutorialScenarioIndex === 0;
@@ -742,6 +785,12 @@ export default function App() {
   }, [agents, activeAgentId]);
 
   React.useEffect(() => {
+    if (!agents.some((a) => a.id === selectedAgentId)) {
+      setSelectedAgentId(activeAgentId || (agents[0]?.id ?? ""));
+    }
+  }, [agents, selectedAgentId, activeAgentId]);
+
+  React.useEffect(() => {
     saveUiState({
       activeTab,
       mode,
@@ -847,6 +896,7 @@ export default function App() {
       setActiveTab,
       setConfigModal: (modal) => setConfigModal(modal),
       setActiveAgentId,
+      setSelectedAgentId,
       setSkillExecutionMode,
       clearChat: () => {
         setHistory([]);
@@ -1269,6 +1319,7 @@ export default function App() {
       const next = loadAgents();
       setAgents(next);
       setActiveAgentId(a.id);
+      setSelectedAgentId(a.id);
       logNow({ category: "agents", agent: a.name, ok: true, message: "Agent saved", details: JSON.stringify(a, null, 2) });
     } catch (e: any) {
       logNow({ category: "agents", agent: a.name, ok: false, message: "Agent save failed", details: String(e?.message ?? e) });
@@ -1282,6 +1333,7 @@ export default function App() {
       const next = loadAgents();
       setAgents(next);
       setActiveAgentId(next[0]?.id ?? "");
+      setSelectedAgentId((current) => (current === id ? next[0]?.id ?? "" : current));
       logNow({ category: "agents", agent: target?.name, ok: true, message: "Agent deleted" });
     } catch (e: any) {
       logNow({ category: "agents", agent: target?.name, ok: false, message: "Agent delete failed", details: String(e?.message ?? e) });
@@ -2661,6 +2713,9 @@ export default function App() {
           scenario={tutorialScenario}
           currentStepIndex={tutorialStepIndex}
           evaluations={tutorialEvaluations}
+          activeAgentName={activeAgent?.name ?? "尚未選擇"}
+          lockedAgentLabel={tutorialActiveAgentHint}
+          activeAgentWarning={tutorialActiveAgentWarning}
           onAdvance={advanceTutorialStep}
           onSkip={skipTutorialScenario}
           onExit={() => setShowTutorialExitPrompt(true)}
@@ -2737,7 +2792,14 @@ export default function App() {
             </div>
 
             <div className="cc-dashboard-grid">
-              <button className="cc-card" onClick={() => setConfigModal("agent")} data-tutorial-id="chat-config-agent-card">
+              <button
+                className="cc-card"
+                onClick={() => {
+                  setSelectedAgentId(activeAgentId);
+                  setActiveTab("agents");
+                }}
+                data-tutorial-id="chat-config-agent-card"
+              >
                 <span className="cc-card-label">Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">{activeAgent?.type ?? ""}{activeAgent?.model ? ` · ${activeAgent.model}` : ""}</span>
@@ -2787,31 +2849,6 @@ export default function App() {
             </div>
 
             {/* ── Config modals ── */}
-            {configModal === "agent" && (
-              <HelpModal title="Active Agent" onClose={() => setConfigModal(null)} width="min(480px, 92vw)">
-                <div style={{ display: "grid", gap: 8 }}>
-                  {agents.map((a) => (
-                    <button
-                      key={a.id}
-                      onClick={() => { setActiveAgentId(a.id); setConfigModal(null); }}
-                      style={{
-                        textAlign: "left",
-                        padding: 14,
-                        borderRadius: 12,
-                        border: a.id === activeAgentId ? "1px solid var(--primary)" : "1px solid var(--border)",
-                        background: a.id === activeAgentId ? "rgba(91,123,255,0.12)" : "var(--bg-2)",
-                        color: "var(--text)",
-                        cursor: "pointer"
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>{a.name}</div>
-                      <div style={{ fontSize: 12, opacity: 0.7 }}>{a.type}{a.model ? ` · ${a.model}` : ""}</div>
-                    </button>
-                  ))}
-                </div>
-              </HelpModal>
-            )}
-
             {configModal === "mode" && (
               <HelpModal title="Mode" onClose={() => setConfigModal(null)} width="min(420px, 92vw)">
                 <div style={{ display: "grid", gap: 8 }}>
@@ -3139,7 +3176,12 @@ export default function App() {
               <AgentsPanel
                 agents={agents}
                 activeAgentId={activeAgentId}
-                onSelect={(id) => setActiveAgentId(id)}
+                selectedAgentId={selectedAgentId}
+                onSelect={setSelectedAgentId}
+                onSetMain={(id) => {
+                  setActiveAgentId(id);
+                  setSelectedAgentId(id);
+                }}
                 onSave={onSaveAgent}
                 onDelete={onDeleteAgent}
                 onDetect={async (a) => {

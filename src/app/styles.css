@@ -218,6 +218,46 @@ hr {
   color: var(--muted);
 }
 
+.tutorial-agent-panel {
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(91, 123, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 6px;
+}
+
+.tutorial-agent-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.tutorial-agent-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: #f1f4fa;
+}
+
+.tutorial-agent-locked {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #c9d3e5;
+}
+
+.tutorial-agent-warning {
+  margin-top: 2px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 153, 102, 0.12);
+  border: 1px solid rgba(255, 153, 102, 0.2);
+  color: #ffd6bf;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .tutorial-checklist {
   display: grid;
   gap: 10px;

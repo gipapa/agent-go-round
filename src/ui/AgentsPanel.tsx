@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AgentConfig, BuiltInToolConfig, DetectResult, DocItem, McpServerConfig, SkillConfig } from "../types";
 import { ModelCredentialEntry } from "../storage/settingsStore";
 import { generateId } from "../utils/id";
@@ -75,7 +75,9 @@ function formatModelOption(option: RemoteModelOption) {
 export default function AgentsPanel(props: {
   agents: AgentConfig[];
   activeAgentId: string;
+  selectedAgentId: string;
   onSelect: (id: string) => void;
+  onSetMain: (id: string) => void;
   onSave: (a: AgentConfig) => void;
   onDelete: (id: string) => void;
   onDetect: (a: AgentConfig) => Promise<DetectResult>;
@@ -90,6 +92,16 @@ export default function AgentsPanel(props: {
   const [detectResult, setDetectResult] = useState<{ agentName: string; result: DetectResult } | null>(null);
   const [detectingAgentId, setDetectingAgentId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (props.selectedAgentId && props.agents.some((agent) => agent.id === props.selectedAgentId)) return;
+    if (props.activeAgentId) {
+      props.onSelect(props.activeAgentId);
+      return;
+    }
+    const fallback = props.agents[0]?.id;
+    if (fallback) props.onSelect(fallback);
+  }, [props.selectedAgentId, props.activeAgentId, props.agents, props.onSelect]);
+
   return (
     <div>
         <div className="agents-toolbar" style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
@@ -102,6 +114,7 @@ export default function AgentsPanel(props: {
         <div style={{ display: "grid", gap: 8 }}>
           {props.agents.map((a) => {
             const isActive = a.id === props.activeAgentId;
+            const isSelected = a.id === props.selectedAgentId;
             return (
               <div
                 key={a.id}
@@ -112,10 +125,11 @@ export default function AgentsPanel(props: {
                   alignItems: "center",
                   padding: 12,
                   borderRadius: 14,
-                  border: isActive ? "1px solid #5b6bff" : "1px solid #222636",
-                  background: isActive ? "#13162a" : "#0f1118",
+                  border: isActive ? "1px solid #5b6bff" : isSelected ? "1px solid rgba(91,123,255,0.35)" : "1px solid #222636",
+                  background: isActive ? "#13162a" : isSelected ? "#111522" : "#0f1118",
                   color: "white"
                 }}
+                data-tutorial-id={isActive ? "agents-active-row" : undefined}
               >
                 <button
                   type="button"
@@ -143,9 +157,29 @@ export default function AgentsPanel(props: {
                 </div>
               </div>
                 </button>
-                {isActive ? (
+                {isSelected ? (
                   <div className="agents-actions" style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
-                    <button type="button" onClick={() => setDraft(a)} style={btnSmall} data-tutorial-id="agents-edit-active-button">
+                    <button
+                      type="button"
+                      onClick={() => props.onSetMain(a.id)}
+                      style={{
+                        ...btnSmall,
+                        borderColor: isActive ? "#5b6bff" : "#2a395f",
+                        background: isActive ? "rgba(91,123,255,0.18)" : "#141b2d",
+                        color: isActive ? "#dfe6ff" : "white",
+                        cursor: isActive ? "default" : "pointer"
+                      }}
+                      disabled={isActive}
+                      data-tutorial-id={isActive ? "agents-main-active-button" : "agents-set-main-button"}
+                    >
+                      Main
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDraft(a)}
+                      style={btnSmall}
+                      data-tutorial-id={isActive ? "agents-edit-active-button" : undefined}
+                    >
                       Edit
                     </button>
                     <button
@@ -163,6 +197,23 @@ export default function AgentsPanel(props: {
                     </button>
                     <button type="button" onClick={() => props.onDelete(a.id)} style={btnDangerSmall}>
                       Delete
+                    </button>
+                  </div>
+                ) : isActive ? (
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                    <button
+                      type="button"
+                      style={{
+                        ...btnSmall,
+                        borderColor: "#5b6bff",
+                        background: "rgba(91,123,255,0.18)",
+                        color: "#dfe6ff",
+                        cursor: "default"
+                      }}
+                      disabled
+                      data-tutorial-id="agents-main-active-button"
+                    >
+                      Main
                     </button>
                   </div>
                 ) : null}

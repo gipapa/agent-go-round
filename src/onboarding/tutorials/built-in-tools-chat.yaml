@@ -18,6 +18,8 @@ steps:
       其中系統工具不需要你自己撰寫程式；只要在 Agent 權限中允許使用，就可以直接被呼叫。
     actionLabel: 下一步
     behavior: manual_info
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: set-history-limit
     title: 先把對話歷史縮到 1 則
@@ -39,6 +41,8 @@ steps:
     targetId: chat-config-history-card
     behavior: set_history_limit_to_one
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: create-time-tool
     title: 建立時間工具
@@ -57,6 +61,8 @@ steps:
     tab: chat_config
     targetId: chat-config-tools-card
     behavior: create_tutorial_time_tool
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: edit-user-profile
     title: 編輯使用者資訊
@@ -72,6 +78,8 @@ steps:
     tab: profile
     targetId: profile-name-input
     behavior: fill_tutorial_user_profile
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: enable-tool-access
     title: 開啟 Agent 的工具權限
@@ -91,6 +99,8 @@ steps:
     tab: agents
     targetId: agents-edit-active-button
     behavior: enable_tutorial_builtin_tool_access
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: chat-time-tool
     title: 用對話呼叫時間工具

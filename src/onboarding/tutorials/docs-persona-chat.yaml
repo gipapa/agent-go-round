@@ -16,6 +16,8 @@ steps:
       這個案例會帶你建立一份人設文件，內容是「你是個說話結尾都會喵喵叫的助手」，再用一個簡單問題驗證 Agent 是否有吃到這份文件。
     actionLabel: 下一步
     behavior: manual_info
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: create-doc
     title: 建立教學文件
@@ -33,6 +35,8 @@ steps:
     tab: chat_config
     targetId: chat-config-docs-card
     behavior: create_tutorial_doc
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: enable-doc-access
     title: 讓 Agent 可以使用這份文件
@@ -50,6 +54,8 @@ steps:
     tab: agents
     targetId: agents-edit-active-button
     behavior: enable_tutorial_doc_access
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: chat-doc-persona
     title: 驗證文件內容是否生效

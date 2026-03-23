@@ -4,6 +4,9 @@ export default function TutorialGuide(props: {
   scenario: TutorialScenarioDefinition;
   currentStepIndex: number;
   evaluations: TutorialStepEvaluation[];
+  activeAgentName: string;
+  lockedAgentLabel?: string | null;
+  activeAgentWarning?: string | null;
   onAdvance: () => void;
   onSkip: () => void;
   onExit: () => void;
@@ -16,6 +19,13 @@ export default function TutorialGuide(props: {
       <div className="tutorial-sidebar-kicker">案例教學</div>
       <div className="tutorial-sidebar-title">{props.scenario.title}</div>
       <div className="tutorial-sidebar-copy">{props.scenario.description}</div>
+
+      <section className="tutorial-agent-panel" data-onboarding-surface="agent">
+        <div className="tutorial-agent-label">Active Agent</div>
+        <div className="tutorial-agent-name">{props.activeAgentName}</div>
+        {props.lockedAgentLabel ? <div className="tutorial-agent-locked">{props.lockedAgentLabel}</div> : null}
+        {props.activeAgentWarning ? <div className="tutorial-agent-warning">{props.activeAgentWarning}</div> : null}
+      </section>
 
       <div className="tutorial-checklist" data-onboarding-surface="checklist">
         {props.scenario.steps.map((item, index) => {

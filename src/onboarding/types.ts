@@ -117,6 +117,7 @@ export type TutorialEntryController = {
   setActiveTab: (tab: TutorialTab) => void;
   setConfigModal: (modal: TutorialConfigModal) => void;
   setActiveAgentId: (id: string) => void;
+  setSelectedAgentId: (id: string) => void;
   setSkillExecutionMode: (mode: "single_turn" | "multi_turn") => void;
   setComposerSeed: (value: string) => void;
   clearChat: () => void;

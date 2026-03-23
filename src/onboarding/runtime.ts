@@ -522,6 +522,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     const agent = findTutorialAgentByPreset(state, step.automation.activeAgentPreset);
     if (agent) {
       controller.setActiveAgentId(agent.id);
+      controller.setSelectedAgentId(agent.id);
     }
   }
 
@@ -545,6 +546,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
       }
       break;
     }
@@ -552,6 +554,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
       }
       break;
     }
@@ -572,6 +575,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
       }
       break;
     }
@@ -588,6 +592,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
       }
       break;
     }

@@ -22,6 +22,8 @@ steps:
       - assets/sequential-answer-template.md
     behavior: manual_info
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: set-history-limit
     title: 先把對話歷史縮到 1 則
@@ -43,6 +45,8 @@ steps:
     behavior: set_history_limit_to_one
     completionLabel: 等待將 Messages sent to model 改成 1
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: create_skill
     title: 建立教學用 Sequential Skill
@@ -63,6 +67,8 @@ steps:
     behavior: ensure_tutorial_sequential_skill
     completionLabel: 等待系統建立教學用 skill
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: fill_profile
     title: 填寫使用者資訊
@@ -81,6 +87,8 @@ steps:
     behavior: fill_tutorial_user_profile
     completionLabel: 等待填寫 Profile
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: enable_skill
     title: 讓 Agent 可以使用 skill
@@ -101,6 +109,8 @@ steps:
     behavior: enable_tutorial_skill_access
     completionLabel: 等待 Agent 開啟 skill 權限
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: tone_chat
     title: 用 skill 改變回覆語氣

@@ -86,6 +86,7 @@ describe("tutorial YAML automation linkage", () => {
       setActiveTab: vi.fn(),
       setConfigModal: vi.fn(),
       setActiveAgentId: vi.fn(),
+      setSelectedAgentId: vi.fn(),
       setSkillExecutionMode: vi.fn(),
       setComposerSeed: vi.fn(),
       clearChat: vi.fn(),

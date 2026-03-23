@@ -27,6 +27,8 @@ steps:
       2. Agent 有真的呼叫 browser tool
     behavior: manual_info
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: set-history-limit
     title: 先把對話歷史縮到 1 則
@@ -48,6 +50,8 @@ steps:
     behavior: set_history_limit_to_one
     completionLabel: 等待將 Messages sent to model 改成 1
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: register_mcp
     title: 註冊 agent-browser MCP
@@ -72,6 +76,8 @@ steps:
     behavior: register_tutorial_agent_browser_mcp
     completionLabel: 等待完成教學用MCP註冊
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: enable_mcp_access
     title: 讓 Agent 可以使用教學用MCP
@@ -91,6 +97,8 @@ steps:
     behavior: enable_tutorial_mcp_access
     completionLabel: 等待 Agent 開啟教學用MCP 權限
     actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: open_trending
     title: 用 browser_open 開啟 GitHub Trending
