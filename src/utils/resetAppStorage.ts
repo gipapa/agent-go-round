@@ -1,4 +1,4 @@
-const LOCAL_STORAGE_KEYS = [
+export const AGENT_GO_ROUND_LOCAL_STORAGE_KEYS = [
   "agr_ui_v1",
   "agr_mcp_v1",
   "agr_mcp_aliases_v1",
@@ -8,7 +8,7 @@ const LOCAL_STORAGE_KEYS = [
   "agr_built_in_tools_v1"
 ];
 
-const INDEXED_DB_TARGETS: Array<{ name: string; stores: string[] }> = [
+export const AGENT_GO_ROUND_INDEXED_DB_TARGETS: Array<{ name: string; stores: string[] }> = [
   { name: "agr_chat_db", stores: ["chat_state"] },
   { name: "agr_docs_db", stores: ["docs"] },
   { name: "agr_skills_db", stores: ["skills_meta", "skills_docs", "skills_files"] }
@@ -42,6 +42,6 @@ function clearDbStores(dbName: string, stores: string[]) {
 }
 
 export async function resetAgentGoRoundStorage() {
-  LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
-  await Promise.all(INDEXED_DB_TARGETS.map((target) => clearDbStores(target.name, target.stores)));
+  AGENT_GO_ROUND_LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+  await Promise.all(AGENT_GO_ROUND_INDEXED_DB_TARGETS.map((target) => clearDbStores(target.name, target.stores)));
 }

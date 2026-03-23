@@ -19,10 +19,10 @@ export default function LandingPage(props: {
         </p>
 
         <div className="landing-actions">
-          <button type="button" className="landing-primary-btn" onClick={props.onStart}>
+          <button type="button" className="landing-primary-btn" onClick={props.onStart} data-tutorial-id="landing-start">
             開始使用
           </button>
-          <button type="button" className="landing-secondary-btn" onClick={props.onStartTutorial}>
+          <button type="button" className="landing-secondary-btn" onClick={props.onStartTutorial} data-tutorial-id="landing-start-tutorial">
             使用案例教學
           </button>
         </div>

@@ -9,10 +9,11 @@ import {
   SkillAvailability,
   SkillConfig,
   SkillDocItem,
+  SkillFileItem,
   SkillSessionSnapshot
 } from "../types";
 import { generateId } from "../utils/id";
-import { resolveReferencedSkillDocs } from "./skillReferenceResolver";
+import { resolveReferencedSkillAssets, resolveReferencedSkillDocs } from "./skillReferenceResolver";
 
 export function pushSkillTrace(trace: ChatTraceEntry[], label: string, content: string) {
   const trimmed = content.trim();
@@ -127,6 +128,7 @@ export function buildSkillExecutionInput(userInput: string, skillInput: any) {
 export function loadSkillRuntime(args: {
   skill: SkillConfig;
   skillDocs: SkillDocItem[];
+  skillFiles: SkillFileItem[];
   agentDocs: DocItem[];
   availableMcpServers: McpServerConfig[];
   availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
@@ -136,6 +138,7 @@ export function loadSkillRuntime(args: {
 }) {
   const trace: ChatTraceEntry[] = [];
   const { referencedPaths, loadedReferences } = resolveReferencedSkillDocs(args.skill, args.skillDocs);
+  const { assetPaths, loadedAssets } = resolveReferencedSkillAssets(args.skill, args.skillFiles);
 
   const runtime: LoadedSkillRuntime = {
     skillId: args.skill.id,
@@ -144,6 +147,8 @@ export function loadSkillRuntime(args: {
     instructions: args.skill.workflow.instructions?.trim() ?? "",
     referencedPaths,
     loadedReferences: loadedReferences.map((doc) => ({ path: doc.path, content: doc.content })),
+    assetPaths,
+    loadedAssets: loadedAssets.map((file) => ({ path: file.path, content: file.content })),
     allowMcp: args.skill.workflow.allowMcp === true,
     allowBuiltInTools: args.skill.workflow.allowBuiltInTools === true,
     allowedMcpServerIds: args.skill.workflow.allowedMcpServerIds,
@@ -170,6 +175,18 @@ export function loadSkillRuntime(args: {
             .join("\n")}`
         : `SKILL.md 引用了 references，但未找到對應檔案\n${referencedPaths.map((path) => `- ${path}`).join("\n")}`
       : "SKILL.md 未引用任何 references/ 檔案"
+  );
+
+  pushSkillTrace(
+    trace,
+    "Skill assets",
+    assetPaths.length
+      ? loadedAssets.length
+        ? `SKILL.md 引用了 ${assetPaths.length} 個 assets\n已載入 ${loadedAssets.length} 個\n${loadedAssets
+            .map((file) => `- ${file.path}`)
+            .join("\n")}`
+        : `SKILL.md 引用了 assets，但未找到對應檔案\n${assetPaths.map((path) => `- ${path}`).join("\n")}`
+      : "SKILL.md 未引用任何 assets/ 檔案"
   );
 
   const scopeLines: string[] = [];
@@ -216,6 +233,10 @@ export function loadSkillRuntime(args: {
   if (loadedReferences.length > 0) {
     const refBlocks = loadedReferences.map((doc) => `[SKILL_DOC:${doc.path}]\n${doc.content}`).join("\n\n");
     systemParts.push(`Skill docs context:\n${refBlocks}`);
+  }
+  if (loadedAssets.length > 0) {
+    const assetBlocks = loadedAssets.map((file) => `[SKILL_ASSET:${file.path}]\n${file.content}`).join("\n\n");
+    systemParts.push(`Skill assets context:\n${assetBlocks}`);
   }
 
   return {

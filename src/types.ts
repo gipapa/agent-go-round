@@ -164,6 +164,8 @@ export type LoadedSkillRuntime = {
   instructions: string;
   referencedPaths: string[];
   loadedReferences: LoadedSkillReference[];
+  assetPaths: string[];
+  loadedAssets: LoadedSkillReference[];
   allowMcp: boolean;
   allowBuiltInTools: boolean;
   allowedMcpServerIds?: string[];

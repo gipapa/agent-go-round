@@ -73,3 +73,10 @@ steps:
     tab: chat
     targetId: chat-input
     behavior: first_chat_joke
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 告訴我一個笑話
+      activeAgentPreset: tutorial_agent
+      expect:
+        userPrompt: 告訴我一個笑話
+        requireAssistant: true

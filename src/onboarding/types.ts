@@ -1,4 +1,4 @@
-import { AgentConfig, BuiltInToolConfig, ChatMessage, DocItem, SkillConfig, SkillFileItem } from "../types";
+import { AgentConfig, BuiltInToolConfig, ChatMessage, DocItem, SkillConfig, SkillExecutionMode, SkillFileItem } from "../types";
 import { ModelCredentialEntry } from "../storage/settingsStore";
 
 export type TutorialTab = "chat" | "chat_config" | "agents" | "profile";
@@ -16,7 +16,17 @@ export type TutorialStepBehaviorId =
   | "fill_tutorial_user_profile"
   | "enable_tutorial_builtin_tool_access"
   | "first_chat_time_tool"
-  | "first_chat_user_profile_tool";
+  | "first_chat_user_profile_tool"
+  | "ensure_tutorial_sequential_skill"
+  | "enable_tutorial_skill_access"
+  | "first_chat_skill_tone"
+  | "first_chat_skill_user_profile"
+  | "first_chat_skill_references"
+  | "first_chat_skill_asset_template"
+  | "register_tutorial_agent_browser_mcp"
+  | "enable_tutorial_mcp_access"
+  | "first_chat_mcp_browser_open"
+  | "first_chat_mcp_browser_snapshot";
 
 export type TutorialStepDefinition = {
   id: string;
@@ -29,6 +39,25 @@ export type TutorialStepDefinition = {
   tab?: TutorialTab;
   targetId?: string;
   behavior: TutorialStepBehaviorId;
+  automation?: TutorialStepAutomation;
+};
+
+export type TutorialChatExpectation = {
+  userPrompt?: string;
+  requireAssistant?: boolean;
+  assistantContentIncludes?: string[];
+  successfulToolMessageIncludes?: string[];
+  requireOpenedToolResult?: boolean;
+  skillTraceIncludes?: string[];
+  skillLoadContainsAny?: string[];
+};
+
+export type TutorialStepAutomation = {
+  composerSeed?: string;
+  clearChatOnEnter?: boolean;
+  skillExecutionMode?: SkillExecutionMode;
+  activeAgentPreset?: "tutorial_agent" | "tutorial_agent_base";
+  expect?: TutorialChatExpectation;
 };
 
 export type TutorialScenarioDefinition = {
@@ -64,6 +93,7 @@ export type CredentialTestResultLike = {
 
 export type TutorialRuntimeState = {
   agents: AgentConfig[];
+  skills: SkillConfig[];
   activeAgentId: string;
   credentials: ModelCredentialEntry[];
   credentialTestResults: Record<string, CredentialTestResultLike | undefined>;
@@ -71,6 +101,8 @@ export type TutorialRuntimeState = {
   currentChatInput: string;
   builtInTools: BuiltInToolConfig[];
   docs: DocItem[];
+  mcpServers: { id: string; name: string; sseUrl: string }[];
+  mcpToolsByServer: Record<string, { name: string; description?: string }[]>;
   userProfile: {
     name: string;
     description: string;
@@ -83,6 +115,8 @@ export type TutorialEntryController = {
   setActiveTab: (tab: TutorialTab) => void;
   setConfigModal: (modal: TutorialConfigModal) => void;
   setActiveAgentId: (id: string) => void;
+  setSkillExecutionMode: (mode: "single_turn" | "multi_turn") => void;
   setComposerSeed: (value: string) => void;
   clearChat: () => void;
+  ensureTutorialSequentialSkill: () => void;
 };

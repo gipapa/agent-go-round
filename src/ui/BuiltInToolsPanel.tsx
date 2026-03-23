@@ -531,6 +531,7 @@ return {
                 onChange={(e) => toolDraft && setToolDraft({ ...toolDraft, name: e.target.value })}
                 style={inp}
                 disabled={editingTool.source === "system"}
+                data-tutorial-id="built-in-tool-name-input"
               />
               {duplicateName ? <div style={errorText}>Tool name must be unique.</div> : null}
               {reservedName ? <div style={errorText}>System tool names are reserved.</div> : null}
@@ -544,6 +545,7 @@ return {
                 rows={3}
                 style={{ ...inp, fontFamily: "inherit" }}
                 disabled={editingTool.source === "system"}
+                data-tutorial-id="built-in-tool-description-input"
               />
             </div>
 
@@ -565,6 +567,7 @@ return {
                 rows={6}
                 style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
                 disabled={editingTool.source === "system"}
+                data-tutorial-id="built-in-tool-schema-input"
               />
               {schemaError ? <div style={errorText}>{schemaError}</div> : null}
             </div>
@@ -577,6 +580,7 @@ return {
                 rows={12}
                 style={{ ...inp, fontFamily: 'Consolas, "SFMono-Regular", monospace' }}
                 disabled={editingTool.source === "system"}
+                data-tutorial-id="built-in-tool-code-input"
               />
             </div>
 

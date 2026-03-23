@@ -1,0 +1,199 @@
+id: sequential-skill-chat
+title: "[4] 使用 Sequential Thinking Skill 驗證單輪能力"
+description: 透過一個 skill 搭配多輪聊天，驗證單輪 skill 的語氣調整、工具使用、references 載入與 assets 模板輸出。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識單輪 Sequential Skill 案例
+    checklistLabel: 認識案例目標
+    instructionTitle: 單輪 skill 測試案例
+    instructionBody: |
+      這個案例會用一個 skill 搭配多次對話，驗證單輪 skill 的四種能力：
+      - 改變語氣：把回答變得更冷靜、有條理
+      - 使用工具：遇到「你知道我是誰嗎」這類問題時，呼叫 `get_user_profile`
+      - 使用 references：讀取 `advanced.md` 與 `examples.md` 來切換進階模式或引用範例
+      - 使用 assets：讀取模板檔，改變最後輸出的格式
+
+      這次不需要你自己逐段貼入 skill 檔案內容。系統會在下一步直接建立好：
+      - SKILL.md
+      - references/advanced.md
+      - references/examples.md
+      - assets/sequential-answer-template.md
+    behavior: manual_info
+    actionLabel: 下一步
+
+  - id: create_skill
+    title: 建立教學用 Sequential Skill
+    checklistLabel: 建立教學 skill
+    instructionTitle: 系統會自動建立 skill 檔案
+    instructionBody: |
+      我已經幫你切到 Chat Config 的 Skills 區域。
+
+      這一步會自動建立一個教學用 skill，內容會包含：
+      - 調整語氣的 SKILL.md
+      - 進階模式用的 `references/advanced.md`
+      - 實戰範例用的 `references/examples.md`
+      - 影響輸出模板的 `assets/sequential-answer-template.md`
+
+      當狀態顯示已建立 skill 後，就可以前往下一步。
+    tab: chat_config
+    targetId: chat-config-skills-card
+    behavior: ensure_tutorial_sequential_skill
+    completionLabel: 等待系統建立教學用 skill
+    actionLabel: 下一步
+
+  - id: fill_profile
+    title: 填寫使用者資訊
+    checklistLabel: 填寫 Profile
+    instructionTitle: 先填好使用者資訊，等等用 skill 讀取
+    instructionBody: |
+      這個 skill 其中一段測試會直接呼叫系統工具 `get_user_profile`。
+
+      請先到 Profile 頁，至少填寫：
+      - Character name
+      - 自我描述
+
+      這樣稍後問「你知道我是誰嗎?!?!?!」時，skill 才能透過工具讀到正確資料。
+    tab: profile
+    targetId: profile-name-input
+    behavior: fill_tutorial_user_profile
+    completionLabel: 等待填寫 Profile
+    actionLabel: 下一步
+
+  - id: enable_skill
+    title: 讓 Agent 可以使用 skill
+    checklistLabel: 開啟 Agent skill 權限
+    instructionTitle: 到 Agents 頁把這個 skill 授權給目前 Agent
+    instructionBody: |
+      請前往 Agents，編輯剛剛建立的 Groq Agent。
+
+      在 Access Control 裡：
+      1. 打開 Skills
+      2. 選擇 Custom selection
+      3. 勾選剛剛建立的 Sequential Thinking Tutorial Skill
+
+      提醒：當 Skills 啟用時，Docs / MCP / Built-in Tools 會被系統強制允許全部，暫時不能手動修改。
+      這也是為什麼 skill 可以在之後直接使用 `get_user_profile`。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_skill_access
+    completionLabel: 等待 Agent 開啟 skill 權限
+    actionLabel: 下一步
+
+  - id: tone_chat
+    title: 用 skill 改變回覆語氣
+    checklistLabel: 測試 skill 語氣調整
+    instructionTitle: 第一段對話，確認 skill 能改變回覆方式
+    instructionBody: |
+      我已經幫你切到 Chat 並填好測試問題。
+
+      這一題想測的是：同樣是解釋數學問題，skill 是否會把回答調整成更冷靜、更有條理、更適合逐步理解的語氣。
+
+      送出後，只要有正常回覆，且這一則 assistant 訊息帶有 skill trace，就算完成。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_tone
+    completionLabel: 等待 skill 完成第一則語氣調整回覆
+    actionLabel: 下一步
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 我現在有點慌，請冷靜又有條理地解釋為什麼 1+1=2。
+      activeAgentPreset: tutorial_agent_base
+      skillExecutionMode: single_turn
+      expect:
+        userPrompt: 我現在有點慌，請冷靜又有條理地解釋為什麼 1+1=2。
+        requireAssistant: true
+        skillLoadContainsAny:
+          - sequential-thinking
+          - Sequential Thinking Tutorial Skill
+          - sequential-thinking-tutorial-skill
+
+  - id: profile_tool_chat
+    title: 用 skill 呼叫使用者資訊工具
+    checklistLabel: 測試 skill 呼叫 get_user_profile
+    instructionTitle: 第二段對話，讓 skill 直接用系統工具讀取你的 Profile
+    instructionBody: |
+      這次會測：
+      - skill 有沒有正確判斷這題需要工具
+      - Agent 是否真的調用了 `get_user_profile`
+
+      請送出問題後，記得展開下方的「查看 tool result」。
+      只要有回覆、工具被呼叫，且你有打開 tool result，就算完成。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_user_profile
+    completionLabel: 等待 skill 使用 get_user_profile 並顯示 tool result
+    actionLabel: 下一步
+    automation:
+      composerSeed: 你知道我是誰嗎?!?!?!
+      activeAgentPreset: tutorial_agent_base
+      skillExecutionMode: single_turn
+      expect:
+        userPrompt: 你知道我是誰嗎?!?!?!
+        requireAssistant: true
+        successfulToolMessageIncludes:
+          - Built-in tool -> get_user_profile
+        requireOpenedToolResult: true
+
+  - id: references_chat
+    title: 用 references 切換進階模式並引用範例
+    checklistLabel: 測試 skill 載入 references
+    instructionTitle: 第三段對話，讓 skill 同時讀 advanced 與 examples
+    instructionBody: |
+      這次的問題會同時要求：
+      - 解釋什麼情況該 revise
+      - 解釋什麼情況該 branch
+      - 再給一個實戰範例
+
+      只要有正常回覆，而且這則訊息的 skill trace 顯示已載入：
+      - `references/advanced.md`
+      - `references/examples.md`
+      就算完成。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_references
+    completionLabel: 等待 skill 載入 advanced/examples references
+    actionLabel: 下一步
+    automation:
+      composerSeed: 請切換成進階模式，先說明什麼情況要 revise 或 branch，再給我一個實戰範例。
+      activeAgentPreset: tutorial_agent_base
+      skillExecutionMode: single_turn
+      expect:
+        userPrompt: 請切換成進階模式，先說明什麼情況要 revise 或 branch，再給我一個實戰範例。
+        requireAssistant: true
+        skillTraceIncludes:
+          - references/advanced.md
+          - references/examples.md
+
+  - id: asset_chat
+    title: 用 asset 模板改變輸出格式
+    checklistLabel: 測試 skill 載入 asset 模板
+    instructionTitle: 最後一段對話，讓 skill 用 assets 模板改變回答格式
+    instructionBody: |
+      最後這一題會要求 agent 用模板整理答案。
+
+      只要回覆裡明確出現這些模板區塊，就算完成：
+      - `【問題】`
+      - `【拆解】`
+      - `【最終回答】`
+
+      這也代表 skill 不只是改變語氣，還能透過 assets 中的模板檔調整輸出結構。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_asset_template
+    completionLabel: 等待 skill 使用 asset 模板完成格式化回覆
+    actionLabel: 完成案例教學
+    automation:
+      composerSeed: 請用模板整理：為什麼 1+1=2？
+      activeAgentPreset: tutorial_agent_base
+      skillExecutionMode: single_turn
+      expect:
+        userPrompt: 請用模板整理：為什麼 1+1=2？
+        requireAssistant: true
+        assistantContentIncludes:
+          - 【問題】
+          - 【拆解】
+          - 【最終回答】
+        skillTraceIncludes:
+          - assets/sequential-answer-template.md

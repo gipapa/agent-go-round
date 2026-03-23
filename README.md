@@ -96,9 +96,12 @@
 ### 2.1 Onboarding / 案例教學
 
 - 入口在首頁 `使用案例教學`
-- 目前提供兩個案例：
+- 目前提供五個案例：
   - `[1] 自訂 Agent 並完成第一次對話`
   - `[2] 建立 DOC 並驗證內容注入`
+  - `[3] 使用 Built-in Tools 完成工具對話`
+  - `[4] 使用 Sequential Thinking Skill 驗證單輪能力`
+  - `[5] 使用 agent-browser MCP 讀取 GitHub Trending`
 - 教學模式特性：
   - 左側固定 checklist 與系統提示
   - 右側保留真實可操作的 app 介面
@@ -115,13 +118,26 @@
 
 ```text
 src/onboarding/
-  catalog.ts         Tutorial catalog + safe YAML parsing
+  catalog.ts         Tutorial catalog + scenario wiring
+  catalogCore.ts     YAML parser / normalization
   runtime.ts         Step entry / validation / restore logic
   types.ts           Tutorial schema / runtime types
   tutorials/
     first-agent-chat.yaml
     docs-persona-chat.yaml
+    built-in-tools-chat.yaml
+    sequential-skill-chat.yaml
+    agent-browser-mcp-chat.yaml
 ```
+
+#### 案例也可同時當作 Test Case
+
+- onboarding 案例不是只有 UI 文案；預填對話、完成條件、工具 / skill 驗證條件也會跟同一份 YAML 連動
+- 同一份案例資料可以同時服務：
+  - 人類操作的導覽流程
+  - 本地 smoke check
+  - 真實瀏覽器端的 end-to-end 測試
+- 這樣如果 YAML、runtime 行為與 UI selector 不同步，測試會直接失敗，不會等到上線才發現教學壞掉
 
 ### 3. Docs
 
@@ -230,7 +246,50 @@ bash run.sh
 
 ## 測試與建置
 
-執行測試：
+教學案例 smoke check：
+
+```bash
+npm run test:tutorial
+```
+
+這個測試不會真的呼叫 LLM，主要確認：
+
+- tutorial YAML 與 runtime 的預填對話保持同步
+- 教學步驟完成條件能正確連動
+- 關鍵案例不會因為文案或 selector 漂移而失效
+
+真實教學案例測試：
+
+```bash
+npm run test:real_tutorial
+```
+
+這個測試會：
+
+- 讀取專案根目錄的 `.tutorial-test.local.json`
+- 自動啟動 `./run.sh -dev`
+- 自動啟動 `./mcp-test/run.sh -agent_browser`
+- 用真實瀏覽器跑完整個 onboarding 案例
+- 逐案例列印真實執行狀態與 assistant 回覆
+- 測試完成後自動清除本網站的 `localStorage` 與 `IndexedDB`
+
+`.tutorial-test.local.json` 範例：
+
+```json
+{
+  "provider": "groq",
+  "apiKey": "YOUR_GROQ_API_KEY",
+  "endpoint": "https://api.groq.com/openai/v1",
+  "model": "moonshotai/kimi-k2-instruct-0905"
+}
+```
+
+注意：
+
+- `test:real_tutorial` 目前是 `Groq-only`
+- 案例 5 只驗證 MCP / browser automation 流程能跑通，不驗證最終內容品質
+
+Vitest 全量測試：
 
 ```bash
 npm test
@@ -257,18 +316,36 @@ npm run deploy
 
 ## MCP 測試伺服器
 
-專案內附一個簡單的本機 MCP 測試 server：
+專案內附一個本機 MCP 測試環境：
 
 ```bash
 cd mcp-test
-bash run.sh
+bash run.sh -simple
 ```
 
-預設端點：
+提供三種模式：
+
+- `bash run.sh -simple`
+  - 啟動簡單 SSE MCP server
+  - 內含 `echo` 與 `time`
+- `bash run.sh -agent_browser`
+  - 自動 clone `vercel-labs/agent-browser`
+  - 安裝相依與本地瀏覽器執行環境
+  - 啟動 browser automation 的 SSE MCP server
+- `bash run.sh -uninstall`
+  - 清除這個專案在 `mcp-test` 目錄下建立的 node_modules / vendor / local browser home
+  - 不會刪除使用者原本系統上的 Chrome / Chromium
+
+常用端點：
 
 ```text
-http://127.0.0.1:3333/mcp/sse
-http://127.0.0.1:3333/mcp/rpc
+simple:
+  http://127.0.0.1:3333/mcp/sse
+  http://127.0.0.1:3333/mcp/rpc
+
+agent-browser:
+  http://127.0.0.1:3334/mcp/sse
+  http://127.0.0.1:3334/mcp/rpc
 ```
 
 如果你是在 Windows 瀏覽器 + WSL server 的環境中測試，通常應優先使用 WSL IP，而不是 `127.0.0.1`。

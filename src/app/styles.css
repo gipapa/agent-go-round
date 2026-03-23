@@ -315,6 +315,10 @@ hr {
   overflow: auto;
 }
 
+.tutorial-prompt-body-pre {
+  white-space: pre-wrap;
+}
+
 .tutorial-prompt-body p {
   margin: 0;
 }

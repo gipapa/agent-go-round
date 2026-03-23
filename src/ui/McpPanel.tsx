@@ -338,7 +338,7 @@ export default function McpPanel(props: {
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontWeight: 800 }}>Active MCP servers</div>
-        <button type="button" onClick={() => openEditor()} style={btnSmall}>
+        <button type="button" onClick={() => openEditor()} style={btnSmall} data-tutorial-id="mcp-add-button">
           + Add
         </button>
       </div>
@@ -384,11 +384,16 @@ export default function McpPanel(props: {
       </div>
 
       {editingServerId && serverDraft ? (
-        <HelpModal title={`Edit MCP: ${serverDraft.name}`} onClose={closeEditor} width="min(820px, calc(100vw - 48px))" footer={null}>
-          <div style={{ display: "grid", gap: 12 }}>
+        <HelpModal
+          title={`Edit MCP: ${serverDraft.name}`}
+          onClose={closeEditor}
+          width="min(820px, calc(100vw - 48px))"
+          footer={null}
+        >
+          <div style={{ display: "grid", gap: 12 }} data-tutorial-id="mcp-editor-modal">
             <div>
               <label style={label}>MCP Name</label>
-              <input value={serverDraft.name} onChange={(e) => updateDraft({ name: e.target.value })} style={inp} placeholder="MCP name" />
+              <input value={serverDraft.name} onChange={(e) => updateDraft({ name: e.target.value })} style={inp} placeholder="MCP name" data-tutorial-id="mcp-name-input" />
             </div>
 
             <div>
@@ -398,11 +403,12 @@ export default function McpPanel(props: {
                 onChange={(e) => updateDraft({ sseUrl: e.target.value })}
                 placeholder="https://your-mcp-server/mcp/sse"
                 style={inp}
+                data-tutorial-id="mcp-sse-url-input"
               />
             </div>
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={() => void connectAndListDraft()} style={btnPrimarySmall} disabled={isConnecting || !serverDraft.sseUrl.trim()}>
+              <button type="button" onClick={() => void connectAndListDraft()} style={btnPrimarySmall} disabled={isConnecting || !serverDraft.sseUrl.trim()} data-tutorial-id="mcp-connect-list-tools">
                 {isConnecting ? "Connecting..." : "Connect & List Tools"}
               </button>
               {serverDraft.sseUrl.trim() ? (
@@ -463,7 +469,7 @@ export default function McpPanel(props: {
             <button type="button" onClick={closeEditor} style={btnSmall}>
               Close
             </button>
-            <button type="button" onClick={saveDraft} style={btnPrimarySmall} disabled={!serverDraft.sseUrl.trim() || !draftValidated}>
+            <button type="button" onClick={saveDraft} style={btnPrimarySmall} disabled={!serverDraft.sseUrl.trim() || !draftValidated} data-tutorial-id="mcp-save-button">
               Save
             </button>
           </div>

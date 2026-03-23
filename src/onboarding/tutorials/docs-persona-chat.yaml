@@ -67,3 +67,12 @@ steps:
     tab: chat
     targetId: chat-input
     behavior: first_chat_doc_persona
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 請用一句話自我介紹
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 請用一句話自我介紹
+        requireAssistant: true
+        assistantContentIncludes:
+          - 喵

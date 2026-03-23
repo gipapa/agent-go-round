@@ -43,24 +43,20 @@ export default function TutorialGuide(props: {
       <section className="tutorial-prompt-inline" data-onboarding-surface="prompt">
         <div className="tutorial-prompt-step">Step {props.currentStepIndex + 1}</div>
         <div className="tutorial-prompt-title compact">{step.instructionTitle}</div>
-        <div className="tutorial-prompt-body compact">
-          {step.instructionBody.split(/\n{2,}/).map((block, index) => (
-            <p key={`${step.id}-block-${index}`}>{block}</p>
-          ))}
-        </div>
+        <div className="tutorial-prompt-body compact tutorial-prompt-body-pre">{step.instructionBody}</div>
         {evaluation?.statusText ? <div className="tutorial-prompt-status">{evaluation.statusText}</div> : null}
         <div className="tutorial-prompt-actions compact">
-          <button type="button" className="tutorial-next-btn" onClick={props.onAdvance} disabled={!evaluation?.canContinue}>
+          <button type="button" className="tutorial-next-btn" onClick={props.onAdvance} disabled={!evaluation?.canContinue} data-tutorial-id="tutorial-next">
             {step.actionLabel ?? (evaluation?.completed ? "下一步" : "等待完成")}
           </button>
         </div>
       </section>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button type="button" className="tutorial-exit-btn" onClick={props.onExit}>
+        <button type="button" className="tutorial-exit-btn" onClick={props.onExit} data-tutorial-id="tutorial-exit">
           離開教學
         </button>
-        <button type="button" className="tutorial-exit-link" onClick={props.onSkip}>
+        <button type="button" className="tutorial-exit-link" onClick={props.onSkip} data-tutorial-id="tutorial-skip-case">
           略過案例
         </button>
       </div>

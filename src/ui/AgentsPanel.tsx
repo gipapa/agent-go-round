@@ -346,7 +346,7 @@ function Editor(props: {
         <div style={{ fontWeight: 700, marginBottom: 2 }}>Profile</div>
 
         <label style={label}>Name</label>
-        <input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} style={inp} />
+        <input value={a.name} onChange={(e) => setA({ ...a, name: e.target.value })} style={inp} data-tutorial-id="agent-name-input" />
 
         <label style={label}>大頭照</label>
         <div className="agents-avatar-row" style={{ display: "flex", gap: 12, alignItems: "center", margin: "6px 0 14px" }}>
@@ -408,7 +408,7 @@ function Editor(props: {
               ))}
             </select>
             <label style={label}>Endpoint</label>
-            <input value={a.endpoint ?? ""} onChange={(e) => setA({ ...a, endpoint: e.target.value })} style={inp} />
+            <input value={a.endpoint ?? ""} onChange={(e) => setA({ ...a, endpoint: e.target.value })} style={inp} data-tutorial-id="agent-endpoint-input" />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
               <label style={label}>Model</label>
               <button type="button" onClick={() => void loadModels()} style={btnSmall} disabled={isLoadingModels} data-tutorial-id="agent-load-models">
@@ -427,6 +427,7 @@ function Editor(props: {
                 setA({ ...a, model: value });
               }}
               style={inp as any}
+              data-tutorial-id="agent-model-select"
             >
               <option value="__custom__">Custom model input</option>
               {remoteModels.map((model) => (
@@ -435,7 +436,15 @@ function Editor(props: {
                 </option>
               ))}
             </select>
-            {useCustomModel && <input value={a.model ?? ""} onChange={(e) => setA({ ...a, model: e.target.value })} style={inp} placeholder="Enter model id" />}
+            {useCustomModel && (
+              <input
+                value={a.model ?? ""}
+                onChange={(e) => setA({ ...a, model: e.target.value })}
+                style={inp}
+                placeholder="Enter model id"
+                data-tutorial-id="agent-model-custom-input"
+              />
+            )}
             {!useCustomModel && a.model ? (
               <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.6, marginTop: -4, marginBottom: 10 }}>
                 {formatModelOption(remoteModels.find((model) => model.id === a.model) ?? { id: a.model })}
@@ -512,7 +521,7 @@ function Editor(props: {
       <div style={{ marginTop: 12 }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Access Control</div>
         <div style={{ display: "grid", gap: 12 }}>
-          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }} data-tutorial-id="agent-access-skills-section">
             <label style={sectionToggleRow}>
               <input
                 type="checkbox"
@@ -524,6 +533,7 @@ function Editor(props: {
                     allowedSkillIds: e.target.checked ? undefined : []
                   })
                 }
+                data-tutorial-id="agent-access-skills-toggle"
               />
               <div>
                 <div style={sectionTitle}>Skills</div>
@@ -539,6 +549,7 @@ function Editor(props: {
                       name={`skills-mode-${a.id}`}
                       checked={allowAllSkills}
                       onChange={() => setA({ ...a, allowedSkillIds: undefined })}
+                      data-tutorial-id="agent-access-skills-all"
                     />
                     <span>All skills</span>
                   </label>
@@ -548,6 +559,7 @@ function Editor(props: {
                       name={`skills-mode-${a.id}`}
                       checked={!allowAllSkills}
                       onChange={() => setA({ ...a, allowedSkillIds: a.allowedSkillIds ?? [] })}
+                      data-tutorial-id="agent-access-skills-custom"
                     />
                     <span>Custom selection</span>
                   </label>
@@ -567,7 +579,7 @@ function Editor(props: {
             ) : null}
           </div>
 
-          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }} data-tutorial-id="agent-access-docs-section">
             <label style={sectionToggleRow}>
               <input
                 type="checkbox"
@@ -580,6 +592,7 @@ function Editor(props: {
                     allowedDocIds: e.target.checked ? undefined : a.allowedDocIds
                   })
                 }
+                data-tutorial-id="agent-access-docs-toggle"
               />
               <div>
                 <div style={sectionTitle}>Docs</div>
@@ -598,6 +611,7 @@ function Editor(props: {
                       checked={allowAllDocs}
                       disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedDocIds: undefined })}
+                      data-tutorial-id="agent-access-docs-all"
                     />
                     <span>All docs</span>
                   </label>
@@ -608,6 +622,7 @@ function Editor(props: {
                       checked={!allowAllDocs}
                       disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedDocIds: a.allowedDocIds ?? [] })}
+                      data-tutorial-id="agent-access-docs-custom"
                     />
                     <span>Custom selection</span>
                   </label>
@@ -627,7 +642,7 @@ function Editor(props: {
             ) : null}
           </div>
 
-          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }} data-tutorial-id="agent-access-mcp-section">
             <label style={sectionToggleRow}>
               <input
                 type="checkbox"
@@ -640,6 +655,7 @@ function Editor(props: {
                     allowedMcpServerIds: e.target.checked ? undefined : a.allowedMcpServerIds
                   })
                 }
+                data-tutorial-id="agent-access-mcp-toggle"
               />
               <div>
                 <div style={sectionTitle}>MCP Tools</div>
@@ -658,6 +674,7 @@ function Editor(props: {
                       checked={allowAllMcps}
                       disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedMcpServerIds: undefined })}
+                      data-tutorial-id="agent-access-mcp-all"
                     />
                     <span>All MCP servers</span>
                   </label>
@@ -668,6 +685,7 @@ function Editor(props: {
                       checked={!allowAllMcps}
                       disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedMcpServerIds: a.allowedMcpServerIds ?? [] })}
+                      data-tutorial-id="agent-access-mcp-custom"
                     />
                     <span>Custom selection</span>
                   </label>
@@ -692,7 +710,7 @@ function Editor(props: {
             ) : null}
           </div>
 
-          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
+          <div className="card" style={{ padding: 14, display: "grid", gap: 10 }} data-tutorial-id="agent-access-builtins-section">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
               <label style={{ ...sectionToggleRow, flex: 1 }}>
                 <input
@@ -706,13 +724,14 @@ function Editor(props: {
                       allowedBuiltInToolIds: e.target.checked ? undefined : []
                     })
                   }
+                  data-tutorial-id="agent-access-builtins-toggle"
                 />
                 <div>
                   <div style={sectionTitle}>Built-in Tools</div>
                   <div style={sectionHint}>
                     {accessLockedBySkills
                       ? "Skills 已啟用：Built-in Tools 已強制允許全部，且暫時不可修改。"
-                      : "勾選後預設可使用全部使用者自訂工具；若改成 Custom selection，則可逐一選擇系統工具與自訂工具。"}
+                      : "勾選後預設可使用全部 built-in tools；若改成 Custom selection，則可逐一選擇系統工具與自訂工具。"}
                   </div>
                 </div>
               </label>
@@ -736,8 +755,9 @@ function Editor(props: {
                       checked={allowAllBuiltIns}
                       disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedBuiltInToolIds: undefined })}
+                      data-tutorial-id="agent-access-builtins-all"
                     />
-                    <span>All custom JS tools</span>
+                    <span>All built-in tools</span>
                   </label>
                   <label style={checkRow}>
                     <input
@@ -746,6 +766,7 @@ function Editor(props: {
                       checked={!allowAllBuiltIns}
                       disabled={accessLockedBySkills}
                       onChange={() => setA({ ...a, allowedBuiltInToolIds: a.allowedBuiltInToolIds ?? [] })}
+                      data-tutorial-id="agent-access-builtins-custom"
                     />
                     <span>Custom selection</span>
                   </label>

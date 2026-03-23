@@ -73,6 +73,17 @@ import {
   TUTORIAL_DOC_NAME,
   TUTORIAL_MCP_NAME
 } from "../onboarding/runtime";
+import {
+  TUTORIAL_SEQUENTIAL_ADVANCED_CONTENT,
+  TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
+  TUTORIAL_SEQUENTIAL_ASSET_CONTENT,
+  TUTORIAL_SEQUENTIAL_ASSET_PATH,
+  TUTORIAL_SEQUENTIAL_EXAMPLES_CONTENT,
+  TUTORIAL_SEQUENTIAL_EXAMPLES_PATH,
+  TUTORIAL_SEQUENTIAL_SKILL_MARKDOWN,
+  TUTORIAL_SEQUENTIAL_SKILL_NAME,
+  TUTORIAL_SEQUENTIAL_SKILL_ROOT
+} from "../onboarding/tutorialSkillTemplate";
 import { TutorialScenarioDefinition, TutorialStepEvaluation, TutorialWorkspaceSnapshot } from "../onboarding/types";
 import {
   buildSkillDecisionCatalog,
@@ -93,6 +104,7 @@ import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
 import { SYSTEM_AGENT_DIRECTORY_TOOL_ID, SYSTEM_BUILT_IN_TOOLS, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
+import { buildToolResultPromptBlock } from "../utils/toolResultSummary";
 import { normalizeCredentialUrl } from "../utils/credential";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 
@@ -292,6 +304,10 @@ function downloadFileBlob(filename: string, blob: Blob) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function appendToolPromptSummary(input: string, summaryBlock: string) {
+  return `${input}\n\n請根據以下工具摘要完成回答：\n${summaryBlock}`;
 }
 
 function describeCredentialEndpoint(url: string) {
@@ -572,6 +588,7 @@ export default function App() {
   const tutorialRuntimeState = useMemo(
     () => ({
       agents,
+      skills,
       activeAgentId,
       credentials: modelCredentials,
       credentialTestResults,
@@ -579,6 +596,8 @@ export default function App() {
       currentChatInput: chatComposerDraft,
       builtInTools,
       docs,
+      mcpServers,
+      mcpToolsByServer,
       userProfile: {
         name: userName,
         description: userDescription,
@@ -586,7 +605,23 @@ export default function App() {
       },
       openedToolResultMessageIds: tutorialOpenedToolResultMessageIds
     }),
-    [agents, activeAgentId, modelCredentials, credentialTestResults, history, chatComposerDraft, builtInTools, docs, userName, userDescription, userAvatarUrl, tutorialOpenedToolResultMessageIds]
+    [
+      agents,
+      skills,
+      activeAgentId,
+      modelCredentials,
+      credentialTestResults,
+      history,
+      chatComposerDraft,
+      builtInTools,
+      docs,
+      mcpServers,
+      mcpToolsByServer,
+      userName,
+      userDescription,
+      userAvatarUrl,
+      tutorialOpenedToolResultMessageIds
+    ]
   );
   const tutorialEvaluations = useMemo<TutorialStepEvaluation[]>(
     () => (tutorialScenario ? tutorialScenario.steps.map((step) => evaluateTutorialStep(step, tutorialRuntimeState)) : []),
@@ -809,9 +844,13 @@ export default function App() {
       setActiveTab,
       setConfigModal: (modal) => setConfigModal(modal),
       setActiveAgentId,
+      setSkillExecutionMode,
       clearChat: () => {
         setHistory([]);
         setTutorialOpenedToolResultMessageIds([]);
+      },
+      ensureTutorialSequentialSkill: () => {
+        void ensureTutorialSequentialSkill();
       },
       setComposerSeed: (value) =>
         setTutorialComposerSeed({
@@ -972,7 +1011,7 @@ export default function App() {
     if (!activeAgent) return [];
     if (!isCategoryEnabled(activeAgent.enableBuiltInTools)) return [];
     if (!activeAgent.allowedBuiltInToolIds) {
-      return allBuiltInTools.filter((tool) => tool.source !== "system");
+      return allBuiltInTools;
     }
     const allowed = new Set(activeAgent.allowedBuiltInToolIds);
     return allBuiltInTools.filter((tool) => allowed.has(tool.id));
@@ -1521,7 +1560,12 @@ export default function App() {
           system: allowedSystemHelpers
         });
         const toolOutputText = stringifyAny(toolOutput);
-        const toolSummaryForQuestion = `工具執行結果：tool=${decision.tool}, result=${toolOutputText}`;
+        const toolSummaryForQuestion = buildToolResultPromptBlock({
+          kind: "builtin",
+          toolName: decision.tool,
+          input: decision.input ?? {},
+          output: toolOutput
+        });
         append(
           msg(
             "tool",
@@ -1537,7 +1581,7 @@ export default function App() {
           message: `Built-in tool call OK: ${decision.tool}`,
           details: toolOutputText
         });
-        return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+        return appendToolPromptSummary(args.input, toolSummaryForQuestion);
       } catch (e: any) {
         const briefError = String(e?.message ?? e);
         const toolSummaryForQuestion = `工具執行失敗：${decision.tool} 執行失敗（${briefError}）。`;
@@ -1584,7 +1628,13 @@ export default function App() {
         client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
         const toolOutput = await callTool(client, decision.tool, decision.input ?? {});
         const toolOutputText = stringifyAny(toolOutput);
-        toolSummaryForQuestion = `工具執行結果：server=${targetServer.name}, tool=${decision.tool}, result=${toolOutputText}`;
+        toolSummaryForQuestion = buildToolResultPromptBlock({
+          kind: "mcp",
+          serverName: targetServer.name,
+          toolName: decision.tool,
+          input: decision.input ?? {},
+          output: toolOutput
+        });
         logNow({
           category: "mcp",
           agent: targetServer.name,
@@ -1614,7 +1664,7 @@ export default function App() {
       }
     }
 
-    return toolSummaryForQuestion ? `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}` : args.input;
+    return toolSummaryForQuestion ? appendToolPromptSummary(args.input, toolSummaryForQuestion) : args.input;
   }
 
   async function prepareSkillExecution(args: {
@@ -1629,6 +1679,7 @@ export default function App() {
     const loaded = loadSkillRuntime({
       skill: args.skill,
       skillDocs: args.skill.workflow.useSkillDocs !== false ? await listSkillDocs(args.skill.id) : [],
+      skillFiles: await listSkillFiles(args.skill.id),
       agentDocs: docsForAgent,
       availableMcpServers: availableMcpServersForAgent,
       availableMcpTools: availableMcpToolsForAgent,
@@ -1662,7 +1713,8 @@ export default function App() {
       loaded.runtime.instructions ? `Skill workflow:\n${loaded.runtime.instructions}` : "",
       loaded.runtime.loadedReferences.length
         ? `Loaded references:\n${loaded.runtime.loadedReferences.map((doc) => `- ${doc.path}`).join("\n")}`
-        : ""
+        : "",
+      loaded.runtime.loadedAssets.length ? `Loaded assets:\n${loaded.runtime.loadedAssets.map((file) => `- ${file.path}`).join("\n")}` : ""
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -2416,6 +2468,42 @@ export default function App() {
     logNow({ category: "skills", ok: true, message: `Skill exported: ${target?.name ?? skillId}`, details: target?.rootPath ?? skillId });
   }
 
+  async function ensureTutorialSequentialSkill() {
+    const all = await listSkills();
+    let target =
+      all.find((skill) => skill.rootPath === TUTORIAL_SEQUENTIAL_SKILL_ROOT) ??
+      all.find((skill) => skill.name === TUTORIAL_SEQUENTIAL_SKILL_NAME) ??
+      null;
+
+    if (!target) {
+      target = await createEmptySkill(TUTORIAL_SEQUENTIAL_SKILL_NAME);
+    }
+
+    target = await updateSkillMarkdown(target.id, TUTORIAL_SEQUENTIAL_SKILL_MARKDOWN);
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
+      kind: "reference",
+      content: TUTORIAL_SEQUENTIAL_ADVANCED_CONTENT
+    });
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_SEQUENTIAL_EXAMPLES_PATH,
+      kind: "reference",
+      content: TUTORIAL_SEQUENTIAL_EXAMPLES_CONTENT
+    });
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_SEQUENTIAL_ASSET_PATH,
+      kind: "asset",
+      content: TUTORIAL_SEQUENTIAL_ASSET_CONTENT
+    });
+
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(target.id);
+    const [docs, files] = await Promise.all([listSkillDocs(target.id), listSkillFiles(target.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+  }
+
   function onChangeMcpServers(next: McpServerConfig[]) {
     const prev = mcpServers;
     setMcpServers(next);
@@ -2659,12 +2747,12 @@ export default function App() {
                 <strong className="cc-card-value">{docs.length}</strong>
                 <span className="cc-card-hint">IndexedDB 文件庫</span>
               </button>
-              <button className="cc-card" onClick={() => setConfigModal("mcp")}>
+              <button className="cc-card" onClick={() => setConfigModal("mcp")} data-tutorial-id="chat-config-mcp-card">
                 <span className="cc-card-label">MCP (SSE)</span>
                 <strong className="cc-card-value">{mcpServers.length}</strong>
                 <span className="cc-card-hint">外部工具伺服器</span>
               </button>
-              <button className="cc-card" onClick={() => setConfigModal("skills")}>
+              <button className="cc-card" onClick={() => setConfigModal("skills")} data-tutorial-id="chat-config-skills-card">
                 <span className="cc-card-label">Skills</span>
                 <strong className="cc-card-value">{skills.length}</strong>
                 <span className="cc-card-hint">Workflow layer</span>
@@ -2774,6 +2862,7 @@ export default function App() {
                             onChange={(e) => updateCredential(slot.id, { label: e.target.value })}
                             style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
                             placeholder="Credential label"
+                            data-tutorial-id={slot.preset === "groq" ? "credential-groq-label-input" : undefined}
                           />
                         </div>
 
@@ -2791,6 +2880,7 @@ export default function App() {
                               ...selectStyle
                             }}
                             placeholder="https://api.example.com/v1"
+                            data-tutorial-id={slot.preset === "groq" ? "credential-groq-endpoint-input" : undefined}
                           />
                         </div>
 
@@ -2805,6 +2895,7 @@ export default function App() {
                               }}
                               style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
                               placeholder="Enter API key"
+                              data-tutorial-id={slot.preset === "groq" ? "credential-groq-api-key" : undefined}
                             />
                             <button
                               type="button"
@@ -2888,7 +2979,7 @@ export default function App() {
                     <div style={{ fontSize: 12, opacity: 0.72, lineHeight: 1.6 }}>
                       危險操作：清空這個網站中 agent-go-round 自己建立的 localStorage 與 IndexedDB 內容，不會清除其他網站的資料。
                     </div>
-                    <button type="button" onClick={() => void onResetAppData()} style={{ ...dangerMiniBtn, justifySelf: "start", padding: "8px 12px" }}>
+                    <button type="button" onClick={() => void onResetAppData()} style={{ ...dangerMiniBtn, justifySelf: "start", padding: "8px 12px" }} data-tutorial-id="history-reset-all-data">
                       清空所有本網站資料
                     </button>
                   </div>

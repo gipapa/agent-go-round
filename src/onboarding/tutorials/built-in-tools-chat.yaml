@@ -85,6 +85,16 @@ steps:
     tab: chat
     targetId: chat-input
     behavior: first_chat_time_tool
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 請使用工具告訴我現在幾點，並補上時區
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 請使用工具告訴我現在幾點，並補上時區
+        requireAssistant: true
+        successfulToolMessageIncludes:
+          - Built-in tool -> 教學用時間工具
+        requireOpenedToolResult: true
 
   - id: chat-user-profile-tool
     title: 用對話呼叫系統工具
@@ -101,3 +111,12 @@ steps:
     tab: chat
     targetId: chat-input
     behavior: first_chat_user_profile_tool
+    automation:
+      composerSeed: 請使用工具讀取我的個人資訊，並用一句話介紹我是誰
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 請使用工具讀取我的個人資訊，並用一句話介紹我是誰
+        requireAssistant: true
+        successfulToolMessageIncludes:
+          - Built-in tool -> get_user_profile
+        requireOpenedToolResult: true

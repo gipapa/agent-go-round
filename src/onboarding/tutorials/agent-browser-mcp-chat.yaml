@@ -1,0 +1,131 @@
+id: agent-browser-mcp-chat
+title: "[5] 使用 agent-browser MCP 讀取 GitHub Trending"
+description: 註冊本地端 agent-browser SSE MCP 服務，授權 Agent 使用後，透過兩段對話完成開頁與讀取資料。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識 agent-browser MCP 案例
+    checklistLabel: 認識案例目標
+    instructionTitle: agent-browser MCP 測試案例
+    instructionBody: |
+      這個案例會帶你完成：
+      - 註冊本地端的 agent-browser MCP SSE 服務
+      - 讓目前的 Agent 取得這個 MCP 的使用權限
+      - 先用 `browser_open` 開啟 GitHub Trending
+      - 再用 `browser_snapshot` 讀取頁面，整理前十個熱門 repo
+
+      注意：
+      - 這個案例需要本地端執行程式，建議使用 Windows 的 WSL、Linux、或 macOS 環境
+      - 你可以 clone 整個專案：https://github.com/gipapa/agent-go-round
+      - 在專案內執行：
+        `./mcp-test/run.sh -agent_browser`
+      - 啟動後，腳本會印出可用的 SSE URL；若瀏覽器在 Windows、MCP 在 WSL，請優先使用 WSL IP，不要只用 `127.0.0.1`
+
+      前面的 clone 與本地執行不列入教學驗證；這個案例只驗證：
+      1. 你有成功註冊 MCP 工具
+      2. Agent 有真的呼叫 browser tool
+    behavior: manual_info
+    actionLabel: 下一步
+
+  - id: register_mcp
+    title: 註冊 agent-browser MCP
+    checklistLabel: 註冊教學用MCP
+    instructionTitle: 請先把 agent-browser MCP 註冊到系統中
+    instructionBody: |
+      請前往 Chat Config 頁籤，按下 MCP 進入設定視窗。
+
+      請新增一筆 MCP，建議名稱使用：
+      - `教學用MCP`
+
+      SSE URL 請填入你剛剛在本地端啟動 `./mcp-test/run.sh -agent_browser` 後看到的位址，例如：
+      - `http://127.0.0.1:3334/mcp/sse`
+      - 或 WSL IP 版本：`http://172.xx.xx.xx:3334/mcp/sse`
+
+      接著請按下：
+      - `Connect & List Tools`
+      - 確認列表中至少出現 `browser_open` 與 `browser_snapshot`
+      - 最後按 `Save`
+    tab: chat_config
+    targetId: chat-config-mcp-card
+    behavior: register_tutorial_agent_browser_mcp
+    completionLabel: 等待完成教學用MCP註冊
+    actionLabel: 下一步
+
+  - id: enable_mcp_access
+    title: 讓 Agent 可以使用教學用MCP
+    checklistLabel: 開啟 Agent MCP 權限
+    instructionTitle: 到 Agents 頁把教學用MCP 授權給目前 Agent
+    instructionBody: |
+      請前往 Agents，編輯目前的 Agent。
+
+      在 Access Control 裡：
+      1. 打開 `MCP Tools`
+      2. 若你選擇 `All` 也可以
+      3. 若你選擇 `Custom selection`，請至少勾選 `教學用MCP`
+
+      完成後按下 `Save`。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_mcp_access
+    completionLabel: 等待 Agent 開啟教學用MCP 權限
+    actionLabel: 下一步
+
+  - id: open_trending
+    title: 用 browser_open 開啟 GitHub Trending
+    checklistLabel: 使用 browser_open 開啟 GitHub Trending
+    instructionTitle: 第一段對話：先開啟目標頁面
+    instructionBody: |
+      我已經幫你切到 Chat，並填好測試問題。
+
+      這一題的目標是要求 Agent 明確使用：
+      - `browser_open`
+
+      來開啟：
+      - `https://github.com/trending`
+
+      只要送出後有正常回覆，且 tool result 顯示真的呼叫了 `browser_open`，就算完成。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_mcp_browser_open
+    completionLabel: 等待 Agent 使用 browser_open 開啟 GitHub Trending
+    actionLabel: 下一步
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，不要只口頭描述你要做什麼。
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，不要只口頭描述你要做什麼。
+        requireAssistant: true
+        successfulToolMessageIncludes:
+          - MCP 教學用MCP -> browser_open
+
+  - id: snapshot_trending
+    title: 用 browser_snapshot 讀取前十個熱門 repo
+    checklistLabel: 使用 browser_snapshot 讀取前十個熱門 repo
+    instructionTitle: 第二段對話：讀取目前頁面內容
+    instructionBody: |
+      這一題的目標是要求 Agent 明確使用：
+      - `browser_snapshot`
+
+      來讀取剛剛已開啟的 GitHub Trending 頁面，並整理前十個熱門 repo。
+      提醒：repo 名稱會出現在頁面的 `<main>` 區塊，也就是 `Trending` 清單所在位置。
+
+      這一步不驗證 repo 名稱內容是否正確；只驗證：
+      - 有正常回覆
+      - Agent 真的呼叫了 `browser_snapshot`
+      - 你有展開 `查看 tool result`
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_mcp_browser_snapshot
+    completionLabel: 等待 Agent 使用 browser_snapshot 並展開 tool result
+    actionLabel: 完成案例教學
+    automation:
+      composerSeed: 請明確使用 MCP 工具 browser_snapshot 讀取目前瀏覽器頁面，整理出 GitHub Trending 前十個熱門 repo 名稱。
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 請明確使用 MCP 工具 browser_snapshot 讀取目前瀏覽器頁面，整理出 GitHub Trending 前十個熱門 repo 名稱。
+        requireAssistant: true
+        successfulToolMessageIncludes:
+          - MCP 教學用MCP -> browser_snapshot
+        requireOpenedToolResult: true

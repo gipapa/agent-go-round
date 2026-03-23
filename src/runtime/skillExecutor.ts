@@ -51,6 +51,9 @@ export function buildSkillVerifyPrompt(args: {
     args.runtime.loadedReferences.length
       ? `Loaded skill references:\n${args.runtime.loadedReferences.map((doc) => `- ${doc.path}`).join("\n")}`
       : "Loaded skill references: none",
+    args.runtime.loadedAssets.length
+      ? `Loaded skill assets:\n${args.runtime.loadedAssets.map((file) => `- ${file.path}`).join("\n")}`
+      : "Loaded skill assets: none",
     "",
     `Verification round: ${args.round}`,
     "",

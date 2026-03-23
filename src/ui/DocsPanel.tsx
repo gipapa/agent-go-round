@@ -149,6 +149,7 @@ export default function DocsPanel(props: {
                 value={docDraft?.title ?? ""}
                 onChange={(e) => docDraft && setDocDraft({ ...docDraft, title: e.target.value })}
                 style={inp}
+                data-tutorial-id="docs-title-input"
               />
             </div>
             <div>
@@ -158,6 +159,7 @@ export default function DocsPanel(props: {
                 onChange={(e) => docDraft && setDocDraft({ ...docDraft, content: e.target.value })}
                 rows={14}
                 style={{ ...inp, fontFamily: "inherit", resize: "vertical" }}
+                data-tutorial-id="docs-content-input"
               />
             </div>
           </div>
@@ -165,7 +167,7 @@ export default function DocsPanel(props: {
             <button type="button" onClick={closeEditor} style={btnSmall}>
               Close
             </button>
-            <button type="button" onClick={() => void saveDoc()} style={btnPrimary}>
+            <button type="button" onClick={() => void saveDoc()} style={btnPrimary} data-tutorial-id="docs-save-button">
               Save
             </button>
           </div>

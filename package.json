@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "vite build && gh-pages -d dist",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:tutorial": "tsx scripts/tutorial-runtime-check.ts",
+    "test:real_tutorial": "tsx scripts/real-tutorial-runner.ts"
   },
   "dependencies": {
     "jszip": "^3.10.1",
@@ -22,6 +24,7 @@
     "@vitejs/plugin-react": "^4.3.1",
     "gh-pages": "^6.3.0",
     "jsdom": "^27.0.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.6.3",
     "vite": "^6.0.0",
     "vitest": "^3.2.4"

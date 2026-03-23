@@ -4,7 +4,15 @@ import { normalizeCredentialUrl } from "../utils/credential";
 import { SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 import { AgentConfig } from "../types";
 import {
+  TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
+  TUTORIAL_SEQUENTIAL_ASSET_PATH,
+  TUTORIAL_SEQUENTIAL_EXAMPLES_PATH,
+  TUTORIAL_SEQUENTIAL_SKILL_NAME,
+  TUTORIAL_SEQUENTIAL_SKILL_ROOT
+} from "./tutorialSkillTemplate";
+import {
   TutorialEntryController,
+  TutorialChatExpectation,
   TutorialRuntimeState,
   TutorialScenarioDefinition,
   TutorialStepDefinition,
@@ -47,6 +55,38 @@ function findTutorialAgent(agents: AgentConfig[]) {
 
 function findTutorialTimeTool(state: TutorialRuntimeState) {
   return state.builtInTools.find((tool) => tool.name.trim() === TUTORIAL_TIME_TOOL_NAME) ?? null;
+}
+
+function findTutorialSequentialSkill(state: TutorialRuntimeState) {
+  return (
+    state.skills.find((skill) => skill.rootPath === TUTORIAL_SEQUENTIAL_SKILL_ROOT) ??
+    state.skills.find((skill) => skill.name === TUTORIAL_SEQUENTIAL_SKILL_NAME) ??
+    null
+  );
+}
+
+function findTutorialMcpServer(state: TutorialRuntimeState) {
+  return state.mcpServers.find((server) => server.name === TUTORIAL_MCP_NAME) ?? null;
+}
+
+function findTutorialAgentByPreset(state: TutorialRuntimeState, preset?: "tutorial_agent" | "tutorial_agent_base") {
+  if (preset === "tutorial_agent") return findTutorialAgent(state.agents);
+  if (preset === "tutorial_agent_base") return findTutorialAgentBase(state.agents);
+  return null;
+}
+
+function hasSkillTracePath(assistant: TutorialRuntimeState["history"][number] | null, path: string) {
+  return !!assistant?.skillTrace?.some((entry) => entry.content.includes(path));
+}
+
+function hasSkillLoaded(
+  assistant: TutorialRuntimeState["history"][number] | null,
+  identifiers: Array<string | null | undefined>
+) {
+  const values = identifiers.map((item) => item?.trim()).filter((item): item is string => !!item);
+  return !!assistant?.skillTrace?.some(
+    (entry) => entry.label === "Skill load" && values.some((value) => entry.content.includes(value))
+  );
 }
 
 function findAssistantReplyAfterPrompt(history: TutorialRuntimeState["history"], prompt: string) {
@@ -93,6 +133,70 @@ function collectAdjacentToolMessages(history: TutorialRuntimeState["history"], i
   return items;
 }
 
+function toolMessageSucceeded(message: TutorialRuntimeState["history"][number] | null | undefined) {
+  if (!message || message.role !== "tool") return false;
+  return !/工具執行失敗/.test(message.content);
+}
+
+function buildGenericTutorialPendingStatus(step: TutorialStepDefinition, issues: string[]) {
+  if (issues.length === 0) return step.completionLabel ?? "等待完成本步驟。";
+  return issues.join(" ");
+}
+
+function evaluateAutomationChatStep(step: TutorialStepDefinition, state: TutorialRuntimeState): TutorialStepEvaluation {
+  const automation = step.automation;
+  const expect = automation?.expect as TutorialChatExpectation | undefined;
+  const prompt = expect?.userPrompt?.trim() || automation?.composerSeed?.trim() || "";
+  const { assistantIndex, assistant } = prompt
+    ? findAssistantReplyAfterPrompt(state.history, prompt)
+    : { assistantIndex: -1, assistant: null as TutorialRuntimeState["history"][number] | null };
+  const toolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
+  const issues: string[] = [];
+
+  if ((expect?.requireAssistant ?? true) && !assistant) {
+    issues.push(step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。");
+  }
+
+  if (assistant && expect?.assistantContentIncludes?.length) {
+    const missing = expect.assistantContentIncludes.filter((token) => !assistant.content.includes(token));
+    if (missing.length) {
+      issues.push(`已收到回覆，但還缺少這些內容：${missing.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.successfulToolMessageIncludes?.length) {
+    const missing = expect.successfulToolMessageIncludes.filter((token) => {
+      const matched = toolMessages.find((item) => item.content.includes(token));
+      return !toolMessageSucceeded(matched);
+    });
+    if (missing.length) {
+      issues.push(`已收到回覆，但還沒有看到成功的工具調用：${missing.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.requireOpenedToolResult && !state.openedToolResultMessageIds.includes(assistant.id)) {
+    issues.push("已收到回覆，請再展開「查看 tool result」完成驗證。");
+  }
+
+  if (assistant && expect?.skillTraceIncludes?.length) {
+    const missing = expect.skillTraceIncludes.filter((path) => !hasSkillTracePath(assistant, path));
+    if (missing.length) {
+      issues.push(`已收到回覆，但 skill trace 尚未顯示：${missing.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.skillLoadContainsAny?.length && !hasSkillLoaded(assistant, expect.skillLoadContainsAny)) {
+    issues.push("已收到回覆，但還沒有看到這個案例預期的 skill load 紀錄。");
+  }
+
+  return {
+    completed: issues.length === 0 && (!expect || expect.requireAssistant === false || !!assistant),
+    targetId: step.targetId ?? "chat-input",
+    canContinue: issues.length === 0 && (!expect || expect.requireAssistant === false || !!assistant),
+    statusText: issues.length === 0 ? `${step.checklistLabel} 已完成。` : buildGenericTutorialPendingStatus(step, issues)
+  };
+}
+
 export async function captureTutorialWorkspaceSnapshot(state: TutorialRuntimeState): Promise<TutorialWorkspaceSnapshot> {
   const skills = await listSkills();
   const snapshots = await Promise.all(
@@ -113,6 +217,10 @@ export async function restoreTutorialWorkspaceSnapshot(snapshot: TutorialWorkspa
 }
 
 export function evaluateTutorialStep(step: TutorialStepDefinition, state: TutorialRuntimeState): TutorialStepEvaluation {
+  if (step.automation?.expect) {
+    return evaluateAutomationChatStep(step, state);
+  }
+
   switch (step.behavior) {
     case "manual_info":
       return {
@@ -146,17 +254,11 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "first_chat_joke": {
-      const lastPromptIndex = [...state.history].reverse().findIndex((item) => item.role === "user" && item.content.trim() === "告訴我一個笑話");
-      const actualIndex = lastPromptIndex >= 0 ? state.history.length - 1 - lastPromptIndex : -1;
-      const replied =
-        actualIndex >= 0
-          ? state.history.slice(actualIndex + 1).some((item) => item.role === "assistant" && item.content.trim().length > 0)
-          : false;
       return {
-        completed: replied,
+        completed: false,
         targetId: step.targetId ?? "chat-input",
-        canContinue: replied,
-        statusText: replied ? "Agent 已完成第一次回覆。" : "送出「告訴我一個笑話」，並等待 Agent 完成回覆。"
+        canContinue: false,
+        statusText: step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。"
       };
     }
     case "create_tutorial_doc": {
@@ -190,23 +292,11 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "first_chat_doc_persona": {
-      const targetPrompt = "請用一句話自我介紹";
-      const lastPromptIndex = [...state.history].reverse().findIndex((item) => item.role === "user" && item.content.trim() === targetPrompt);
-      const actualIndex = lastPromptIndex >= 0 ? state.history.length - 1 - lastPromptIndex : -1;
-      const assistantReply =
-        actualIndex >= 0
-          ? state.history.slice(actualIndex + 1).find((item) => item.role === "assistant" && item.content.trim().length > 0)
-          : undefined;
-      const completed = !!assistantReply && /喵/.test(assistantReply.content);
       return {
-        completed,
+        completed: false,
         targetId: step.targetId ?? "chat-input",
-        canContinue: completed,
-        statusText: completed
-          ? "Agent 已根據文件內容完成回覆。"
-          : assistantReply
-          ? "已收到回覆，但還看不出文件注入效果；請確認 Docs 已開啟，並重新測試。"
-          : "請送出「請用一句話自我介紹」，並確認回覆是否帶有喵喵叫的人設。"
+        canContinue: false,
+        statusText: step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。"
       };
     }
     case "create_tutorial_time_tool": {
@@ -258,43 +348,142 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "first_chat_time_tool": {
-      const targetPrompt = "請使用工具告訴我現在幾點，並補上時區";
-      const { assistantIndex, assistant } = findAssistantReplyAfterPrompt(state.history, targetPrompt);
-      const toolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
-      const toolUsed = toolMessages.some((item) => /Built-in tool -> 教學用時間工具/.test(item.content));
-      const opened = !!assistant && state.openedToolResultMessageIds.includes(assistant.id);
-      const completed = !!assistant && toolUsed && opened;
       return {
-        completed,
+        completed: false,
         targetId: step.targetId ?? "chat-input",
-        canContinue: completed,
-        statusText: completed
-          ? "已成功使用教學用時間工具並展開 tool result。"
-          : assistant
-          ? !toolUsed
-            ? "已收到回覆，但還沒有看到教學用時間工具的調用結果；請確認 Agent 權限與工具描述。"
-            : "已收到回覆，請再展開「查看 tool result」完成驗證。"
-          : "請送出指定問題，等待 Agent 回覆，並展開「查看 tool result」。"
+        canContinue: false,
+        statusText: step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。"
       };
     }
     case "first_chat_user_profile_tool": {
-      const targetPrompt = "請使用工具讀取我的個人資訊，並用一句話介紹我是誰";
-      const { assistantIndex, assistant } = findAssistantReplyAfterPrompt(state.history, targetPrompt);
-      const toolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
-      const toolUsed = toolMessages.some((item) => /Built-in tool -> get_user_profile/.test(item.content));
-      const opened = !!assistant && state.openedToolResultMessageIds.includes(assistant.id);
-      const completed = !!assistant && toolUsed && opened;
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。"
+      };
+    }
+    case "ensure_tutorial_sequential_skill": {
+      const skill = findTutorialSequentialSkill(state);
+      const completed =
+        !!skill &&
+        skill.docCount >= 2 &&
+        skill.assetCount >= 1 &&
+        skill.skillMarkdown.includes(TUTORIAL_SEQUENTIAL_ADVANCED_PATH) &&
+        skill.skillMarkdown.includes(TUTORIAL_SEQUENTIAL_EXAMPLES_PATH) &&
+        skill.skillMarkdown.includes(TUTORIAL_SEQUENTIAL_ASSET_PATH);
       return {
         completed,
-        targetId: step.targetId ?? "chat-input",
+        targetId: step.targetId ?? "chat-config-skills-card",
         canContinue: completed,
         statusText: completed
-          ? "已成功使用 get_user_profile 並展開 tool result。"
-          : assistant
-          ? !toolUsed
-            ? "已收到回覆，但還沒有看到 get_user_profile 的調用結果；請確認 Agent 權限與 Profile 是否已填寫。"
-            : "已收到回覆，請再展開「查看 tool result」完成驗證。"
-          : "請送出指定問題，等待 Agent 回覆，並展開「查看 tool result」。"
+          ? `已建立教學 skill：${skill?.name}`
+          : "系統正在建立教學用 sequential-thinking skill，完成後即可前往下一步。"
+      };
+    }
+    case "enable_tutorial_skill_access": {
+      const agent = findTutorialAgentBase(state.agents);
+      const skill = findTutorialSequentialSkill(state);
+      const completed =
+        !!agent &&
+        !!skill &&
+        agent.enableSkills === true &&
+        (agent.allowedSkillIds === undefined || agent.allowedSkillIds.includes(skill.id));
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? `目前 Agent 已允許使用 skill：${skill?.name}`
+          : "請到 Agents 頁編輯剛剛的 Agent，開啟 Skills，並允許使用這個教學 skill。"
+      };
+    }
+    case "first_chat_skill_tone": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，確認 Agent 會以較冷靜、有條理的方式回覆。"
+      };
+    }
+    case "first_chat_skill_user_profile": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，等待回覆，並展開「查看 tool result」。"
+      };
+    }
+    case "first_chat_skill_references": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，讓 skill 同時使用 advanced 與 examples references。"
+      };
+    }
+    case "first_chat_skill_asset_template": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，並確認回覆帶有模板區塊（例如【問題】、【拆解】、【最終回答】）。"
+      };
+    }
+    case "register_tutorial_agent_browser_mcp": {
+      const server = findTutorialMcpServer(state);
+      const toolNames = server ? (state.mcpToolsByServer[server.id] ?? []).map((tool) => tool.name) : [];
+      const hasRequiredTools = toolNames.includes("browser_open") && toolNames.includes("browser_snapshot");
+      const completed = !!server && hasRequiredTools;
+      const editorOpen = typeof document !== "undefined" && document.querySelector('[data-tutorial-id="mcp-editor-modal"]');
+      return {
+        completed,
+        targetId: editorOpen ? "mcp-editor-modal" : step.targetId ?? "chat-config-mcp-card",
+        canContinue: completed,
+        statusText: completed
+          ? `已完成教學用MCP註冊：${server?.name}`
+          : server
+          ? "已建立教學用MCP，但還需要 Connect & List Tools，並確認有 browser_open 與 browser_snapshot。"
+          : "請建立名稱為「教學用MCP」的 MCP 項目，填入 SSE URL，Connect & List Tools 後再按 Save。"
+      };
+    }
+    case "enable_tutorial_mcp_access": {
+      const agent = findTutorialAgentBase(state.agents);
+      const server = findTutorialMcpServer(state);
+      const completed =
+        !!agent &&
+        !!server &&
+        agent.enableMcp === true &&
+        (agent.allowedMcpServerIds === undefined || agent.allowedMcpServerIds.includes(server.id));
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? "目前 Agent 已允許使用教學用MCP。"
+          : "請到 Agents 頁編輯目前 Agent，打開 MCP 權限，並允許使用教學用MCP。"
+      };
+    }
+    case "first_chat_mcp_browser_open": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，讓 Agent 明確使用 browser_open 開啟 GitHub Trending。"
+      };
+    }
+    case "first_chat_mcp_browser_snapshot": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，讓 Agent 使用 browser_snapshot 讀取目前頁面，並展開 tool result。"
       };
     }
     default:
@@ -312,20 +501,35 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     controller.setActiveTab(step.tab);
   }
 
+  controller.setConfigModal(null);
+
+  if (step.automation?.skillExecutionMode) {
+    controller.setSkillExecutionMode(step.automation.skillExecutionMode);
+  }
+
+  if (step.automation?.activeAgentPreset) {
+    const agent = findTutorialAgentByPreset(state, step.automation.activeAgentPreset);
+    if (agent) {
+      controller.setActiveAgentId(agent.id);
+    }
+  }
+
+  if (step.automation?.clearChatOnEnter) {
+    controller.clearChat();
+  }
+
+  if (step.automation?.composerSeed && state.currentChatInput.trim() !== step.automation.composerSeed.trim()) {
+    controller.setComposerSeed(step.automation.composerSeed);
+  }
+
   switch (step.behavior) {
     case "setup_groq_credential":
-      controller.setConfigModal(null);
-      break;
     case "create_groq_agent":
-      controller.setConfigModal(null);
-      break;
     case "create_tutorial_doc":
     case "create_tutorial_time_tool":
     case "fill_tutorial_user_profile":
-      controller.setConfigModal(null);
       break;
     case "enable_tutorial_doc_access": {
-      controller.setConfigModal(null);
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
@@ -333,60 +537,51 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       break;
     }
     case "enable_tutorial_builtin_tool_access": {
-      controller.setConfigModal(null);
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
       }
       break;
     }
-    case "first_chat_joke": {
-      controller.setConfigModal(null);
-      controller.clearChat();
-      const agent = findTutorialAgent(state.agents);
-      if (agent) {
-        controller.setActiveAgentId(agent.id);
-      }
-      if (state.currentChatInput.trim() !== "告訴我一個笑話") {
-        controller.setComposerSeed("告訴我一個笑話");
-      }
+    case "first_chat_joke":
+    case "first_chat_doc_persona":
+    case "first_chat_time_tool":
+    case "first_chat_user_profile_tool":
+      break;
+    case "ensure_tutorial_sequential_skill": {
+      controller.setActiveTab("chat_config");
+      controller.setSkillExecutionMode("single_turn");
+      controller.ensureTutorialSequentialSkill();
       break;
     }
-    case "first_chat_doc_persona": {
-      controller.setConfigModal(null);
-      controller.clearChat();
+    case "enable_tutorial_skill_access": {
+      controller.setActiveTab("agents");
+      controller.setSkillExecutionMode("single_turn");
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
       }
-      if (state.currentChatInput.trim() !== "請用一句話自我介紹") {
-        controller.setComposerSeed("請用一句話自我介紹");
-      }
       break;
     }
-    case "first_chat_time_tool": {
-      controller.setConfigModal(null);
-      controller.clearChat();
+    case "first_chat_skill_tone":
+    case "first_chat_skill_user_profile":
+    case "first_chat_skill_references":
+    case "first_chat_skill_asset_template":
+      break;
+    case "register_tutorial_agent_browser_mcp":
+      controller.setActiveTab("chat_config");
+      break;
+    case "enable_tutorial_mcp_access": {
+      controller.setActiveTab("agents");
       const agent = findTutorialAgentBase(state.agents);
       if (agent) {
         controller.setActiveAgentId(agent.id);
       }
-      if (state.currentChatInput.trim() !== "請使用工具告訴我現在幾點，並補上時區") {
-        controller.setComposerSeed("請使用工具告訴我現在幾點，並補上時區");
-      }
       break;
     }
-    case "first_chat_user_profile_tool": {
-      controller.setConfigModal(null);
-      const agent = findTutorialAgentBase(state.agents);
-      if (agent) {
-        controller.setActiveAgentId(agent.id);
-      }
-      if (state.currentChatInput.trim() !== "請使用工具讀取我的個人資訊，並用一句話介紹我是誰") {
-        controller.setComposerSeed("請使用工具讀取我的個人資訊，並用一句話介紹我是誰");
-      }
+    case "first_chat_mcp_browser_open":
+    case "first_chat_mcp_browser_snapshot":
       break;
-    }
     default:
       break;
   }
