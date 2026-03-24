@@ -12,8 +12,8 @@ steps:
       Built-in Tools 是在瀏覽器端執行的 JavaScript 工具，可以讓 agent 在對話過程中呼叫你定義好的能力。
 
       這個案例會帶你完成兩種工具使用方式：
-      - 自訂工具：建立一個「教學用時間工具」，讓 agent 可以取得目前時間
-      - 系統工具：直接啟用 `get_user_profile`，讓 agent 能讀取你在 Profile 頁設定的使用者資訊
+      - 自訂工具：讓 agent 可以取得目前時間
+      - 系統工具：讓 agent 能讀取你在 Profile 頁設定的使用者資訊
 
       其中系統工具不需要你自己撰寫程式；只要在 Agent 權限中允許使用，就可以直接被呼叫。
     actionLabel: 下一步

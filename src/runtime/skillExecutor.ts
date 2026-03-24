@@ -10,14 +10,21 @@ export function clampSkillVerifyMax(value: number) {
   return Math.max(0, Math.min(5, Math.round(value)));
 }
 
+export function clampSkillToolLoopMax(value: number) {
+  if (!Number.isFinite(value)) return 6;
+  return Math.max(0, Math.min(12, Math.round(value)));
+}
+
 export function buildSkillExecutionModeTrace(args: {
   mode: SkillExecutionMode;
   verifyMax: number;
+  toolLoopMax?: number;
   verifierName?: string;
 }) {
   const lines = [
     `執行模式：${args.mode === "multi_turn" ? "多輪 skill refine" : "單輪 skill"}`,
     args.mode === "multi_turn" ? `最多 verify 次數：${args.verifyMax}` : "單輪模式不做結果 refine。",
+    args.mode === "multi_turn" ? `每輪最多工具步數：${args.toolLoopMax ?? 0}` : "",
     args.mode === "multi_turn" && args.verifierName ? `Verifier：${args.verifierName}` : ""
   ].filter(Boolean);
   return lines.join("\n");
@@ -26,6 +33,7 @@ export function buildSkillExecutionModeTrace(args: {
 export function pushSkillExecutionModeTrace(trace: ChatTraceEntry[], args: {
   mode: SkillExecutionMode;
   verifyMax: number;
+  toolLoopMax?: number;
   verifierName?: string;
 }) {
   pushSkillTrace(trace, "Skill executor", buildSkillExecutionModeTrace(args));

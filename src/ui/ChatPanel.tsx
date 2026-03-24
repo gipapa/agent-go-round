@@ -152,6 +152,95 @@ function SkillTraceBlock(props: { label: string; content: string }) {
   );
 }
 
+function formatSkillPhaseLabel(phase?: ChatMessage["skillPhase"]) {
+  switch (phase) {
+    case "skill_load":
+      return "載入 skill";
+    case "bootstrap_plan":
+      return "建立 todo";
+    case "observe":
+      return "觀察";
+    case "plan_next_step":
+      return "規劃下一步";
+    case "act":
+      return "執行操作";
+    case "sync_state":
+      return "同步狀態";
+    case "completion_gate":
+      return "完成檢查";
+    case "manual_gate":
+      return "等待使用者";
+    case "verify_refine":
+      return "驗證與修正";
+    case "final_answer":
+      return "整理最終回覆";
+    default:
+      return "進行中";
+  }
+}
+
+function formatTodoStatus(status: NonNullable<ChatMessage["skillTodo"]>[number]["status"]) {
+  switch (status) {
+    case "completed":
+      return "已完成";
+    case "in_progress":
+      return "進行中";
+    case "blocked":
+      return "阻塞";
+    default:
+      return "待處理";
+  }
+}
+
+function SkillTodoPanel(props: {
+  goal?: string;
+  phase?: ChatMessage["skillPhase"];
+  todo: NonNullable<ChatMessage["skillTodo"]>;
+}) {
+  const activeItem = props.todo.find((item) => item.status === "in_progress");
+  const blockedItems = props.todo.filter((item) => item.status === "blocked");
+
+  return (
+    <div className="chat-skill-todo">
+      <div className="chat-skill-todo-header">
+        <div className="chat-skill-todo-title">Multi-turn Todo</div>
+        <div className="chat-skill-todo-phase">{formatSkillPhaseLabel(props.phase)}</div>
+      </div>
+      {props.goal ? (
+        <div className="chat-skill-todo-goal">
+          <span className="chat-skill-todo-goal-label">目標</span>
+          <div className="chat-skill-todo-goal-text">{props.goal}</div>
+        </div>
+      ) : null}
+      {activeItem ? (
+        <div className="chat-skill-todo-focus">
+          <span className="chat-skill-todo-goal-label">目前進行中</span>
+          <div className="chat-skill-todo-focus-text">{activeItem.label}</div>
+        </div>
+      ) : null}
+      {blockedItems.length ? (
+        <div className="chat-skill-todo-focus blocked">
+          <span className="chat-skill-todo-goal-label">目前阻塞</span>
+          <div className="chat-skill-todo-focus-text">
+            {blockedItems.map((item) => [item.label, item.reason].filter(Boolean).join("：")).join(" / ")}
+          </div>
+        </div>
+      ) : null}
+      <div className="chat-skill-todo-list">
+        {props.todo.map((item) => (
+          <div key={item.id} className={`chat-skill-todo-item ${item.status}`}>
+            <div className="chat-skill-todo-item-main">
+              <span className={`chat-skill-todo-badge ${item.status}`}>{formatTodoStatus(item.status)}</span>
+              <span className="chat-skill-todo-item-label">{item.label}</span>
+            </div>
+            {item.reason ? <div className="chat-skill-todo-item-reason">{item.reason}</div> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CodeBlockCard(props: { content: string; language?: string }) {
   const [collapsed, setCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -372,6 +461,9 @@ export default function ChatPanel(props: ChatPanelProps) {
                     <summary>查看思考過程</summary>
                     <pre className="chat-tool-pre">{thoughts.join("\n\n")}</pre>
                   </details>
+                ) : null}
+                {m.role === "assistant" && m.skillTodo && m.skillTodo.length > 0 ? (
+                  <SkillTodoPanel goal={m.skillGoal} phase={m.skillPhase} todo={m.skillTodo} />
                 ) : null}
                 {m.role === "assistant" && m.skillTrace && m.skillTrace.length > 0 ? (
                   <details className="chat-tool-details">

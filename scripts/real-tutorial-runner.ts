@@ -17,7 +17,8 @@ const TUTORIAL_FILES = [
   "docs-persona-chat.yaml",
   "built-in-tools-chat.yaml",
   "sequential-skill-chat.yaml",
-  "agent-browser-mcp-chat.yaml"
+  "agent-browser-mcp-chat.yaml",
+  "chatgpt-browser-skill.yaml"
 ];
 
 const APP_URL = "http://127.0.0.1:5566/";
@@ -25,7 +26,9 @@ const MCP_SSE_URL = "http://127.0.0.1:3334/mcp/sse";
 const MCP_RPC_URL = "http://127.0.0.1:3334/mcp/rpc";
 const AGENT_BROWSER_SESSION = `agr_real_tutorial_${Date.now()}`;
 const LOCALHOST_GROQ_ENDPOINT = "https://api.groq.com/openai/v1";
+const MODEL_COOLDOWN_MS = 12000;
 const execFile = promisify(execFileCallback);
+const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
 
 type RealTutorialConfig = {
   provider: string;
@@ -138,15 +141,27 @@ function dumpProcessLogs(proc: ManagedProcess | null) {
   }
 }
 
-async function waitFor(check: () => Promise<boolean>, timeoutMs: number, label: string) {
+async function waitFor(
+  check: () => Promise<boolean>,
+  timeoutMs: number,
+  label: string,
+  onTick?: (elapsedMs: number) => Promise<void> | void,
+  tickIntervalMs = 30000
+) {
   const started = Date.now();
   let lastError: string | null = null;
+  let lastTick = 0;
   while (Date.now() - started < timeoutMs) {
     try {
       if (await check()) return;
       lastError = null;
     } catch (error: any) {
       lastError = String(error?.message ?? error);
+    }
+    const elapsed = Date.now() - started;
+    if (onTick && elapsed - lastTick >= tickIntervalMs) {
+      lastTick = elapsed;
+      await onTick(elapsed);
     }
     await sleep(500);
   }
@@ -310,6 +325,21 @@ async function clickByTutorialId(id: string) {
   if (!ok) throw new Error(`找不到 data-tutorial-id="${id}"`);
 }
 
+async function clickTopTab(labelText: string) {
+  const ok = await browserEval<boolean>(`
+    (() => {
+      const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+      const wanted = normalize(${literal(labelText)});
+      const buttons = Array.from(document.querySelectorAll(".tab-btn"));
+      const target = buttons.find((button) => normalize(button.textContent).includes(wanted));
+      if (!(target instanceof HTMLElement)) return false;
+      target.click();
+      return true;
+    })()
+  `);
+  if (!ok) throw new Error(`找不到 tab：${labelText}`);
+}
+
 async function setValueByTutorialId(id: string, value: string) {
   const ok = await browserEval<boolean>(`
     (() => {
@@ -423,7 +453,19 @@ async function waitForTutorialNextEnabled(timeoutMs: number, step: TutorialStepD
         return !next.disabled;
       },
       timeoutMs,
-      `等待步驟完成：${step.id}`
+      `等待步驟完成：${step.id}`,
+      step.automation?.skillExecutionMode === "multi_turn"
+        ? async (elapsedMs) => {
+            const statusText = await getPromptStatusText().catch(() => "");
+            const assistant = await getLatestAssistantText().catch(() => "");
+            const todo = await getLatestSkillTodoText().catch(() => "");
+            console.log(
+              `[wait:${step.id}] ${Math.round(elapsedMs / 1000)}s status=${statusText || "(empty)"} assistant=${truncateForLog(
+                assistant
+              )} todo=${truncateForLog(todo)}`
+            );
+          }
+        : undefined
     );
   } catch (error: any) {
     const statusText = await getPromptStatusText().catch(() => "");
@@ -472,11 +514,64 @@ async function getLatestAssistantText() {
   `);
 }
 
+async function getLatestSkillTodoText() {
+  return browserEval<string>(`
+    (() => {
+      const items = Array.from(document.querySelectorAll(".chat-skill-todo"));
+      const target = items.at(-1);
+      return target ? String(target.textContent || "").replace(/\\s+/g, " ").trim() : "";
+    })()
+  `);
+}
+
+async function getLatestSkillTraceText() {
+  return browserEval<string>(`
+    (() => {
+      const items = Array.from(document.querySelectorAll(".chat-tool-details"));
+      const target = items.findLast((item) => String(item.textContent || "").includes("查看 skill 流程紀錄"));
+      if (!(target instanceof HTMLDetailsElement)) return "";
+      if (!target.open) {
+        target.open = true;
+        target.dispatchEvent(new Event("toggle", { bubbles: false }));
+      }
+      return String(target.textContent || "").replace(/\\s+/g, " ").trim();
+    })()
+  `);
+}
+
+async function getLatestLogText(limit = 12) {
+  return browserEval<string>(`
+    (() => {
+      const rows = Array.from(document.querySelectorAll(".log-entry"));
+      return rows
+        .slice(0, ${limit})
+        .map((row) => String(row.textContent || "").replace(/\\s+/g, " ").trim())
+        .filter(Boolean)
+        .join("\\n");
+    })()
+  `);
+}
+
 async function getToolResultSummaryCount() {
   return browserEval<number>(`
     (() => {
       const summaries = Array.from(document.querySelectorAll("details > summary"));
       return summaries.filter((item) => String(item.textContent || "").includes("查看 tool result")).length;
+    })()
+  `);
+}
+
+async function getLatestToolResultText() {
+  return browserEval<string>(`
+    (() => {
+      const details = Array.from(document.querySelectorAll("details.chat-tool-details"));
+      const target = details.findLast((item) => String(item.textContent || "").includes("查看 tool result"));
+      if (!(target instanceof HTMLDetailsElement)) return "";
+      if (!target.open) {
+        target.open = true;
+        target.dispatchEvent(new Event("toggle", { bubbles: false }));
+      }
+      return String(target.textContent || "").replace(/\\s+/g, " ").trim();
     })()
   `);
 }
@@ -525,14 +620,35 @@ async function reloadPage() {
   await browserEval(`window.location.reload()`);
 }
 
-async function waitForChatReply(timeoutMs: number) {
+function truncateForLog(text: string, max = 180) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, Math.max(0, max - 1))}…`;
+}
+
+async function waitForChatReply(timeoutMs: number, step?: TutorialStepDefinition) {
   await waitFor(
     async () => {
       const text = await getLatestAssistantText();
-      return text.trim().length > 0;
+      const normalized = text.trim();
+      return normalized.length > 0 && normalized !== "...";
     },
     timeoutMs,
-    "等待 assistant 回覆"
+    "等待 assistant 回覆",
+    step?.automation?.skillExecutionMode === "multi_turn"
+      ? async (elapsedMs) => {
+          const statusText = await getPromptStatusText().catch(() => "");
+          const assistant = await getLatestAssistantText().catch(() => "");
+          const todo = await getLatestSkillTodoText().catch(() => "");
+          const trace = await getLatestSkillTraceText().catch(() => "");
+          const logs = await getLatestLogText(6).catch(() => "");
+          const toolResults = await getLatestToolResultText().catch(() => "");
+          console.log(
+            `[reply:${step.id}] ${Math.round(elapsedMs / 1000)}s status=${statusText || "(empty)"} assistant=${truncateForLog(
+              assistant
+            )} todo=${truncateForLog(todo)} trace=${truncateForLog(trace, 240)} tool=${truncateForLog(toolResults, 240)} logs=${truncateForLog(logs, 240)}`
+          );
+        }
+      : undefined
   );
 }
 
@@ -543,6 +659,10 @@ async function clickTutorialNext() {
     throw new Error(`目前無法前往下一步：${statusText || "教學步驟尚未完成"}`);
   }
   await clickByTutorialId("tutorial-next");
+}
+
+async function clickTutorialSkipCase() {
+  await clickByTutorialId("tutorial-skip-case");
 }
 
 async function performStepAction(step: TutorialStepDefinition, config: RealTutorialConfig) {
@@ -636,6 +756,8 @@ return {
       return;
     case "ensure_tutorial_sequential_skill":
       return;
+    case "ensure_tutorial_chatgpt_browser_skill":
+      return;
     case "enable_tutorial_skill_access":
       await clickByTutorialId("agents-edit-active-button");
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
@@ -646,6 +768,13 @@ return {
       } catch {
         await clickLabelContaining('[data-tutorial-id="agent-access-skills-section"]', "Sequential Thinking Tutorial Skill");
       }
+      await clickByTutorialId("agent-save-button");
+      return;
+    case "enable_tutorial_chatgpt_browser_skill_access":
+      await clickByTutorialId("agents-edit-active-button");
+      await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
+      await setCheckboxByTutorialId("agent-access-skills-toggle", true);
+      await clickByTutorialId("agent-access-skills-all");
       await clickByTutorialId("agent-save-button");
       return;
     case "register_tutorial_agent_browser_mcp":
@@ -685,8 +814,12 @@ return {
     case "first_chat_skill_user_profile":
     case "first_chat_skill_references":
     case "first_chat_skill_asset_template":
+    case "first_chat_skill_chatgpt_ask":
     case "first_chat_mcp_browser_open":
     case "first_chat_mcp_browser_snapshot": {
+      const isMultiTurn = step.automation?.skillExecutionMode === "multi_turn";
+      const replyTimeout = isMultiTurn ? 600000 : 180000;
+      const toolSummaryTimeout = isMultiTurn ? 180000 : 30000;
       await clickByTutorialId("tab-chat");
       const prompt = step.automation?.composerSeed ?? "";
       const previousToolResultCount = step.automation?.expect?.requireOpenedToolResult ? await getToolResultSummaryCount() : 0;
@@ -704,7 +837,7 @@ return {
         );
       }
       await clickByTutorialId("chat-send");
-      await waitForChatReply(180000);
+      await waitForChatReply(replyTimeout, step);
       if (step.automation?.expect?.requireOpenedToolResult) {
         await waitFor(
           () =>
@@ -715,7 +848,7 @@ return {
                 return count > ${previousToolResultCount};
               })()
             `),
-          30000,
+          toolSummaryTimeout,
           "等待 tool result summary"
         );
         await clickLastSummary("查看 tool result");
@@ -744,16 +877,34 @@ async function executeScenario(scenario: TutorialScenarioDefinition, isLastScena
       await performStepAction(step, realConfig);
     }
 
-    await waitForTutorialNextEnabled(180000, step);
+    const nextTimeout = step.automation?.skillExecutionMode === "multi_turn" ? 600000 : 180000;
+    await waitForTutorialNextEnabled(nextTimeout, step);
 
     let assistantReply = "";
+    let skillTodoText = "";
+    let skillTraceText = "";
     if (step.automation?.expect?.requireAssistant) {
       assistantReply = await getLatestAssistantText();
+    }
+    if (step.automation?.expect?.requireSkillTodo) {
+      skillTodoText = await getLatestSkillTodoText();
+      skillTraceText = await getLatestSkillTraceText();
     }
 
     console.log(`[o] ${scenario.title} / ${step.checklistLabel}`);
     if (assistantReply) {
       console.log(`    回覆：\n${indentBlock(assistantReply, "    ")}`);
+    }
+    if (skillTodoText) {
+      console.log(`    Todo：\n${indentBlock(skillTodoText, "    ")}`);
+    }
+    if (skillTraceText) {
+      console.log(`    Skill trace：\n${indentBlock(skillTraceText, "    ")}`);
+    }
+
+    if (step.automation?.expect?.requireAssistant) {
+      console.log(`    [cooldown] 等待 ${Math.round(MODEL_COOLDOWN_MS / 1000)} 秒，避免免費模型 TPM 過載`);
+      await sleep(MODEL_COOLDOWN_MS);
     }
 
     if (!isLastStep) {
@@ -765,6 +916,19 @@ async function executeScenario(scenario: TutorialScenarioDefinition, isLastScena
       await clickTutorialNext();
     }
   }
+}
+
+async function bootstrapScenarioOnly(targetScenarioId: string) {
+  if (targetScenarioId !== "chatgpt-browser-skill") return;
+  console.log("[bootstrap] 為案例 6 建立最小前置資源 ...");
+  await clickTutorialNext();
+  await waitForCurrentStep("setup-credentials", 10000);
+  await performStepAction({ id: "bootstrap-credential", behavior: "setup_groq_credential", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
+  await clickTopTab("Agents");
+  await performStepAction({ id: "bootstrap-agent", behavior: "create_groq_agent", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
+  await clickTopTab("Chat Config");
+  await performStepAction({ id: "bootstrap-mcp", behavior: "register_tutorial_agent_browser_mcp", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
+  console.log("[bootstrap] 案例 6 前置資源已建立。");
 }
 
 function indentBlock(text: string, prefix: string) {
@@ -801,8 +965,21 @@ async function main() {
 
     await clickByTutorialId("landing-start-tutorial");
 
-    for (let i = 0; i < scenarios.length; i += 1) {
-      await executeScenario(scenarios[i], i === scenarios.length - 1);
+    if (REAL_TUTORIAL_ONLY) {
+      await bootstrapScenarioOnly(REAL_TUTORIAL_ONLY);
+      const targetIndex = scenarios.findIndex((scenario) => scenario.id === REAL_TUTORIAL_ONLY);
+      if (targetIndex < 0) {
+        throw new Error(`找不到指定案例：${REAL_TUTORIAL_ONLY}`);
+      }
+      for (let i = 0; i < targetIndex; i += 1) {
+        await clickTutorialSkipCase();
+        await sleep(250);
+      }
+      await executeScenario(scenarios[targetIndex], true);
+    } else {
+      for (let i = 0; i < scenarios.length; i += 1) {
+        await executeScenario(scenarios[i], i === scenarios.length - 1);
+      }
     }
 
     console.log("\n[o] 所有案例皆已完成。開始清除測試資料 ...");
@@ -810,6 +987,23 @@ async function main() {
     console.log("[o] 已清除本網站 localStorage 與 IndexedDB 測試資料。");
   } catch (error: any) {
     console.error(`\n[x] real tutorial 測試失敗：${String(error?.message ?? error)}`);
+    try {
+      const stepId = await getCurrentStepId();
+      const statusText = await getPromptStatusText();
+      const assistantText = await getLatestAssistantText();
+      const skillTodoText = await getLatestSkillTodoText();
+      const skillTraceText = await getLatestSkillTraceText();
+      const logText = await getLatestLogText();
+      console.error("\n[real-tutorial] browser diagnostics");
+      if (stepId) console.error(`current step: ${stepId}`);
+      if (statusText) console.error(`prompt status: ${statusText}`);
+      if (assistantText) console.error(`latest assistant:\n${assistantText}`);
+      if (skillTodoText) console.error(`latest todo:\n${skillTodoText}`);
+      if (skillTraceText) console.error(`latest skill trace:\n${skillTraceText}`);
+      if (logText) console.error(`latest log rows:\n${logText}`);
+    } catch (diagnosticError: any) {
+      console.error(`\n[real-tutorial] failed to collect browser diagnostics: ${String(diagnosticError?.message ?? diagnosticError)}`);
+    }
     dumpProcessLogs(devProc);
     dumpProcessLogs(mcpProc);
     throw error;

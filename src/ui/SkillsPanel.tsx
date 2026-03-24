@@ -43,11 +43,13 @@ export default function SkillsPanel(props: {
   activeAgentId: string;
   executionMode: SkillExecutionMode;
   verifyMax: number;
+  toolLoopMax: number;
   verifierAgentId: string;
   builtInTools: BuiltInToolConfig[];
   mcpToolCatalog: Array<{ server: McpServerConfig; tools: McpTool[] }>;
   onChangeExecutionMode: (mode: SkillExecutionMode) => void;
   onChangeVerifyMax: (value: number) => void;
+  onChangeToolLoopMax: (value: number) => void;
   onChangeVerifierAgentId: (value: string) => void;
   onSelect: (id: string | null) => void;
   onImport: (file: File) => Promise<void>;
@@ -238,7 +240,7 @@ export default function SkillsPanel(props: {
             <div style={{ fontWeight: 800, marginBottom: 4 }}>Skill Runtime</div>
             <div style={{ fontSize: 12, opacity: 0.74, lineHeight: 1.7 }}>
               切換 skill 的單輪 / 多輪執行架構。單輪模式不做結果 refine，較輕量、延遲低，適合語氣修正、回答框架、輕量 docs 或 tool 輔助；
-              多輪模式會在 skill 回答後追加 verify / refine 回合，較適合需要檢查正確性、補充證據或重新調用工具的情境，但會更慢、耗用更多 token。
+              多輪模式會先跑多步工具流程，再追加 verify / refine 回合，較適合需要檢查正確性、補充證據、瀏覽器操作或重新調用工具的情境，但會更慢、耗用更多 token。
             </div>
           </div>
           <button
@@ -273,12 +275,23 @@ export default function SkillsPanel(props: {
 
         <div style={{ fontSize: 12, lineHeight: 1.7, opacity: 0.84 }}>
           {props.executionMode === "multi_turn"
-            ? `目前使用多輪 skill。系統會先跑 skill workflow，再由 verifier（目前：${verifierAgentName}）檢查回答是否符合 skill 指示、是否需要補強證據或工具使用，最多 refine ${props.verifyMax} 次。`
+            ? `目前使用多輪 skill。系統會先執行最多 ${props.toolLoopMax} 步工具流程，再由 verifier（目前：${verifierAgentName}）檢查回答是否符合 skill 指示、是否需要補強證據或追加工具使用，最多 refine ${props.verifyMax} 次。`
             : "目前使用單輪 skill。系統會載入 skill instructions / references，必要時搭配 docs、MCP、built-in tools，但不會在最終回答後自動驗證或重答。"}
         </div>
 
         {props.executionMode === "multi_turn" ? (
           <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+            <div>
+              <label style={labelLike}>工具步數上限</label>
+              <input
+                type="number"
+                min={0}
+                max={12}
+                value={props.toolLoopMax}
+                onChange={(e) => props.onChangeToolLoopMax(Number(e.target.value))}
+                style={inputLike}
+              />
+            </div>
             <div>
               <label style={labelLike}>Verify 次數</label>
               <input

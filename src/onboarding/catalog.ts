@@ -5,6 +5,7 @@ import firstAgentChatRaw from "./tutorials/first-agent-chat.yaml?raw";
 import builtInToolsChatRaw from "./tutorials/built-in-tools-chat.yaml?raw";
 import sequentialSkillChatRaw from "./tutorials/sequential-skill-chat.yaml?raw";
 import agentBrowserMcpChatRaw from "./tutorials/agent-browser-mcp-chat.yaml?raw";
+import chatgptBrowserSkillRaw from "./tutorials/chatgpt-browser-skill.yaml?raw";
 
 type TutorialCatalogIssue = {
   scenarioId: string;
@@ -30,7 +31,8 @@ export const tutorialCatalog: TutorialScenarioDefinition[] = [
   safeParseScenario(docsPersonaChatRaw, "docs-persona-chat"),
   safeParseScenario(builtInToolsChatRaw, "built-in-tools-chat"),
   safeParseScenario(sequentialSkillChatRaw, "sequential-skill-chat"),
-  safeParseScenario(agentBrowserMcpChatRaw, "agent-browser-mcp-chat")
+  safeParseScenario(agentBrowserMcpChatRaw, "agent-browser-mcp-chat"),
+  safeParseScenario(chatgptBrowserSkillRaw, "chatgpt-browser-skill")
 ].filter((scenario): scenario is TutorialScenarioDefinition => !!scenario);
 
 export function getTutorialScenario(id: string) {

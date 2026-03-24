@@ -199,6 +199,13 @@ hr {
   z-index: 10;
 }
 
+.tutorial-sidebar-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .tutorial-sidebar-kicker {
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -218,44 +225,45 @@ hr {
   color: var(--muted);
 }
 
-.tutorial-agent-panel {
-  padding: 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(91, 123, 255, 0.16);
+.tutorial-agent-chip {
+  flex: 0 1 170px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(91, 123, 255, 0.18);
   background: rgba(255, 255, 255, 0.03);
   display: grid;
-  gap: 6px;
+  gap: 2px;
 }
 
-.tutorial-agent-label {
-  font-size: 11px;
+.tutorial-agent-chip-label {
+  font-size: 10px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--accent);
   font-weight: 800;
 }
 
-.tutorial-agent-name {
-  font-size: 15px;
+.tutorial-agent-chip-name {
+  min-width: 0;
+  font-size: 12px;
   font-weight: 800;
   color: #f1f4fa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tutorial-agent-locked {
+.tutorial-agent-inline-note {
+  display: grid;
+  gap: 4px;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.55;
   color: #c9d3e5;
 }
 
-.tutorial-agent-warning {
-  margin-top: 2px;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(255, 153, 102, 0.12);
-  border: 1px solid rgba(255, 153, 102, 0.2);
+.tutorial-agent-inline-warning {
   color: #ffd6bf;
-  font-size: 12px;
-  line-height: 1.7;
 }
 
 .tutorial-checklist {
@@ -1384,6 +1392,145 @@ hr {
   cursor: pointer;
 }
 
+.chat-skill-todo {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(91, 123, 255, 0.18);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(10, 18, 32, 0.82), rgba(12, 18, 30, 0.72));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.chat-skill-todo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.chat-skill-todo-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(157, 178, 255, 0.92);
+}
+
+.chat-skill-todo-phase {
+  border: 1px solid rgba(91, 123, 255, 0.18);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(225, 233, 255, 0.88);
+  background: rgba(91, 123, 255, 0.08);
+}
+
+.chat-skill-todo-goal,
+.chat-skill-todo-focus {
+  margin-bottom: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.chat-skill-todo-focus.blocked {
+  border-color: rgba(244, 114, 182, 0.22);
+  background: rgba(244, 114, 182, 0.06);
+}
+
+.chat-skill-todo-goal-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(158, 172, 201, 0.88);
+}
+
+.chat-skill-todo-goal-text,
+.chat-skill-todo-focus-text {
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(232, 236, 243, 0.92);
+  white-space: pre-wrap;
+}
+
+.chat-skill-todo-list {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-skill-todo-item {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.chat-skill-todo-item.in_progress {
+  border-color: rgba(91, 123, 255, 0.24);
+  background: rgba(91, 123, 255, 0.08);
+}
+
+.chat-skill-todo-item.completed {
+  border-color: rgba(74, 222, 128, 0.2);
+  background: rgba(74, 222, 128, 0.06);
+}
+
+.chat-skill-todo-item.blocked {
+  border-color: rgba(244, 114, 182, 0.24);
+  background: rgba(244, 114, 182, 0.06);
+}
+
+.chat-skill-todo-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-skill-todo-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(236, 240, 247, 0.92);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-skill-todo-badge.in_progress {
+  background: rgba(91, 123, 255, 0.18);
+}
+
+.chat-skill-todo-badge.completed {
+  background: rgba(74, 222, 128, 0.18);
+}
+
+.chat-skill-todo-badge.blocked {
+  background: rgba(244, 114, 182, 0.18);
+}
+
+.chat-skill-todo-item-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(232, 236, 243, 0.95);
+}
+
+.chat-skill-todo-item-reason {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(189, 199, 221, 0.86);
+  white-space: pre-wrap;
+}
+
 .chat-composer {
   display: grid;
   grid-template-columns: 1fr 110px;
@@ -1996,6 +2143,19 @@ hr {
 
   .tutorial-sidebar {
     padding: 16px;
+  }
+
+  .tutorial-sidebar-topline {
+    align-items: stretch;
+  }
+
+  .tutorial-agent-chip {
+    flex-basis: 138px;
+    padding: 7px 9px;
+  }
+
+  .tutorial-agent-chip-name {
+    font-size: 11px;
   }
 
   .tutorial-prompt-actions {

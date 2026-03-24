@@ -12,7 +12,8 @@ const TUTORIAL_FILES = [
   "docs-persona-chat.yaml",
   "built-in-tools-chat.yaml",
   "sequential-skill-chat.yaml",
-  "agent-browser-mcp-chat.yaml"
+  "agent-browser-mcp-chat.yaml",
+  "chatgpt-browser-skill.yaml"
 ];
 
 function makeTutorialAgentBase(overrides?: Partial<AgentConfig>): AgentConfig {
@@ -112,9 +113,14 @@ async function assertApplyEntryUsesYamlSeed() {
     setConfigModal: [],
     setActiveAgentId: [],
     setSkillExecutionMode: [],
+    setSkillVerifyMax: [],
+    setSkillToolLoopMax: [],
+    setRetryDelaySec: [],
+    setRetryMax: [],
     setComposerSeed: [],
     clearChat: [],
-    ensureTutorialSequentialSkill: []
+    ensureTutorialSequentialSkill: [],
+    ensureTutorialChatgptBrowserSkill: []
   };
   const controller: TutorialEntryController = {
     setActiveTab: (value) => calls.setActiveTab.push(value),
@@ -122,9 +128,15 @@ async function assertApplyEntryUsesYamlSeed() {
     setActiveAgentId: (value) => calls.setActiveAgentId.push(value),
     setSelectedAgentId: () => {},
     setSkillExecutionMode: (value) => calls.setSkillExecutionMode.push(value),
+    setSkillVerifyMax: (value) => calls.setSkillVerifyMax.push(value),
+    setSkillToolLoopMax: (value) => calls.setSkillToolLoopMax.push(value),
+    setRetryDelaySec: (value) => calls.setRetryDelaySec.push(value),
+    setRetryMax: (value) => calls.setRetryMax.push(value),
     setComposerSeed: (value) => calls.setComposerSeed.push(value),
     clearChat: () => calls.clearChat.push(true),
-    ensureTutorialSequentialSkill: () => calls.ensureTutorialSequentialSkill.push(true)
+    ensureTutorialAgentBrowserMcpTools: () => {},
+    ensureTutorialSequentialSkill: () => calls.ensureTutorialSequentialSkill.push(true),
+    ensureTutorialChatgptBrowserSkill: () => calls.ensureTutorialChatgptBrowserSkill.push(true)
   };
 
   applyTutorialStepEntry(
@@ -173,12 +185,25 @@ async function assertHistoryLimitStepRequiresOne() {
   assert.equal(evaluateTutorialStep(step, makeState({ historyMessageLimit: 1 })).completed, true);
 }
 
+async function assertChatgptBrowserSkillAutomationExists() {
+  const step = await getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+  assert.equal(step.automation?.skillExecutionMode, "multi_turn");
+  assert.equal(step.automation?.skillToolLoopMax, 8);
+  assert.equal(step.automation?.skillVerifyMax, 2);
+  assert.equal(step.automation?.retryDelaySec, 10);
+  assert.equal(step.automation?.retryMax, 10);
+  assert.equal(step.automation?.composerSeed, "請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」");
+  assert.equal(step.automation?.expect?.requireSkillTodo, true);
+  assert.equal(step.automation?.expect?.requireSkillTodoProgress, true);
+}
+
 async function main() {
   await assertAllAutomatedChatStepsAreYamlDriven();
   await assertApplyEntryUsesYamlSeed();
   await assertToolResultOpenIsRequired();
   await assertSkillLoadExpectationUsesYamlValues();
   await assertHistoryLimitStepRequiresOne();
+  await assertChatgptBrowserSkillAutomationExists();
   console.log("tutorial-runtime-check: ok");
 }
 

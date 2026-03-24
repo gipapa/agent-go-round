@@ -1,9 +1,13 @@
 import { saveBuiltInTools } from "../storage/builtInToolStore";
 import { listSkillFiles, listSkills, restoreSkillSnapshots } from "../storage/skillStore";
 import { normalizeCredentialUrl } from "../utils/credential";
-import { SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
+import { SYSTEM_REQUEST_CONFIRMATION_TOOL_ID, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 import { AgentConfig } from "../types";
 import {
+  TUTORIAL_CHATGPT_BROWSER_ASSET_PATH,
+  TUTORIAL_CHATGPT_BROWSER_REFERENCE_PATH,
+  TUTORIAL_CHATGPT_BROWSER_SKILL_NAME,
+  TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT,
   TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
   TUTORIAL_SEQUENTIAL_ASSET_PATH,
   TUTORIAL_SEQUENTIAL_EXAMPLES_PATH,
@@ -61,6 +65,14 @@ function findTutorialSequentialSkill(state: TutorialRuntimeState) {
   return (
     state.skills.find((skill) => skill.rootPath === TUTORIAL_SEQUENTIAL_SKILL_ROOT) ??
     state.skills.find((skill) => skill.name === TUTORIAL_SEQUENTIAL_SKILL_NAME) ??
+    null
+  );
+}
+
+function findTutorialChatgptBrowserSkill(state: TutorialRuntimeState) {
+  return (
+    state.skills.find((skill) => skill.rootPath === TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT) ??
+    state.skills.find((skill) => skill.name === TUTORIAL_CHATGPT_BROWSER_SKILL_NAME) ??
     null
   );
 }
@@ -164,6 +176,13 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     }
   }
 
+  if (assistant && expect?.assistantContentIncludesAny?.length) {
+    const matched = expect.assistantContentIncludesAny.some((token) => assistant.content.includes(token));
+    if (!matched) {
+      issues.push(`已收到回覆，但還沒有出現這些預期內容中的任一項：${expect.assistantContentIncludesAny.join("、")}。`);
+    }
+  }
+
   if (assistant && expect?.successfulToolMessageIncludes?.length) {
     const missing = expect.successfulToolMessageIncludes.filter((token) => {
       const matched = toolMessages.find((item) => item.content.includes(token));
@@ -171,6 +190,16 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     });
     if (missing.length) {
       issues.push(`已收到回覆，但還沒有看到成功的工具調用：${missing.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.successfulToolMessageIncludesAny?.length) {
+    const matched = expect.successfulToolMessageIncludesAny.some((token) => {
+      const item = toolMessages.find((entry) => entry.content.includes(token));
+      return toolMessageSucceeded(item);
+    });
+    if (!matched) {
+      issues.push(`已收到回覆，但還沒有看到這些成功工具調用中的任一項：${expect.successfulToolMessageIncludesAny.join("、")}。`);
     }
   }
 
@@ -185,8 +214,27 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     }
   }
 
+  if (assistant && expect?.skillTraceIncludesAny?.length) {
+    const matched = expect.skillTraceIncludesAny.some((path) => hasSkillTracePath(assistant, path));
+    if (!matched) {
+      issues.push(`已收到回覆，但 skill trace 還沒有出現這些內容中的任一項：${expect.skillTraceIncludesAny.join("、")}。`);
+    }
+  }
+
   if (assistant && expect?.skillLoadContainsAny?.length && !hasSkillLoaded(assistant, expect.skillLoadContainsAny)) {
     issues.push("已收到回覆，但還沒有看到這個案例預期的 skill load 紀錄。");
+  }
+
+  if (assistant && expect?.requireSkillTodo && !(assistant.skillTodo && assistant.skillTodo.length > 0)) {
+    issues.push("已收到回覆，但還沒有看到 multi-turn todo 面板資料。");
+  }
+
+  if (
+    assistant &&
+    expect?.requireSkillTodoProgress &&
+    !(assistant.skillTodo && assistant.skillTodo.some((item) => item.status !== "pending"))
+  ) {
+    issues.push("已收到回覆，但 multi-turn todo 尚未出現進度變化。");
   }
 
   return {
@@ -392,6 +440,23 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
           : "系統正在建立教學用 sequential-thinking skill，完成後即可前往下一步。"
       };
     }
+    case "ensure_tutorial_chatgpt_browser_skill": {
+      const skill = findTutorialChatgptBrowserSkill(state);
+      const completed =
+        !!skill &&
+        skill.docCount >= 1 &&
+        skill.assetCount >= 1 &&
+        skill.skillMarkdown.includes(TUTORIAL_CHATGPT_BROWSER_REFERENCE_PATH) &&
+        skill.skillMarkdown.includes(TUTORIAL_CHATGPT_BROWSER_ASSET_PATH);
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-skills-card",
+        canContinue: completed,
+        statusText: completed
+          ? `已建立教學 skill：${skill?.name}`
+          : "系統正在建立教學用 ChatGPT browser multi-turn skill，完成後即可前往下一步。"
+      };
+    }
     case "enable_tutorial_skill_access": {
       const agent = findTutorialAgentBase(state.agents);
       const skill = findTutorialSequentialSkill(state);
@@ -410,6 +475,33 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         statusText: completed
           ? `目前 Agent 已允許使用 skill：${skill?.name}`
           : "請到 Agents 頁編輯剛剛的 Agent，開啟 Skills，並允許使用這個教學 skill。"
+      };
+    }
+    case "enable_tutorial_chatgpt_browser_skill_access": {
+      const agent = findTutorialAgentBase(state.agents);
+      const skill = findTutorialChatgptBrowserSkill(state);
+      const builtInReady =
+        !!agent &&
+        agent.enableBuiltInTools === true &&
+        (agent.allowedBuiltInToolIds === undefined || agent.allowedBuiltInToolIds.includes(SYSTEM_REQUEST_CONFIRMATION_TOOL_ID));
+      const mcpReady = !!agent && agent.enableMcp === true;
+      const completed =
+        !!agent &&
+        !!skill &&
+        agent.enableSkills === true &&
+        (agent.allowedSkillIds === undefined || agent.allowedSkillIds.includes(skill.id)) &&
+        builtInReady &&
+        mcpReady;
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? `目前 Agent 已允許使用 skill：${skill?.name}，且可使用所需的 MCP / Built-in Tools。`
+          : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許使用這個 ChatGPT browser multi-turn skill；啟用 Skills 後，MCP 與 Built-in Tools 應維持允許全部。"
       };
     }
     case "first_chat_skill_tone": {
@@ -442,6 +534,22 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
         statusText: step.completionLabel ?? "請送出指定問題，並確認回覆帶有模板區塊（例如【問題】、【拆解】、【最終回答】）。"
+      };
+    }
+    case "first_chat_skill_chatgpt_open": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 使用 browser_open 打開 ChatGPT。"
+      };
+    }
+    case "first_chat_skill_chatgpt_ask": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 完成輸入、送出並讀取 ChatGPT 回應。"
       };
     }
     case "register_tutorial_agent_browser_mcp": {
@@ -517,6 +625,18 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
   if (step.automation?.skillExecutionMode) {
     controller.setSkillExecutionMode(step.automation.skillExecutionMode);
   }
+  if (typeof step.automation?.skillVerifyMax === "number") {
+    controller.setSkillVerifyMax(step.automation.skillVerifyMax);
+  }
+  if (typeof step.automation?.skillToolLoopMax === "number") {
+    controller.setSkillToolLoopMax(step.automation.skillToolLoopMax);
+  }
+  if (typeof step.automation?.retryDelaySec === "number") {
+    controller.setRetryDelaySec(step.automation.retryDelaySec);
+  }
+  if (typeof step.automation?.retryMax === "number") {
+    controller.setRetryMax(step.automation.retryMax);
+  }
 
   if (step.automation?.activeAgentPreset) {
     const agent = findTutorialAgentByPreset(state, step.automation.activeAgentPreset);
@@ -569,6 +689,13 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       controller.ensureTutorialSequentialSkill();
       break;
     }
+    case "ensure_tutorial_chatgpt_browser_skill": {
+      controller.setActiveTab("chat_config");
+      controller.setSkillExecutionMode("multi_turn");
+      controller.ensureTutorialChatgptBrowserSkill();
+      controller.ensureTutorialAgentBrowserMcpTools();
+      break;
+    }
     case "enable_tutorial_skill_access": {
       controller.setActiveTab("agents");
       controller.setSkillExecutionMode("single_turn");
@@ -584,8 +711,24 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "first_chat_skill_references":
     case "first_chat_skill_asset_template":
       break;
+    case "enable_tutorial_chatgpt_browser_skill_access": {
+      controller.setActiveTab("agents");
+      controller.setSkillExecutionMode("multi_turn");
+      const agent = findTutorialAgentBase(state.agents);
+      if (agent) {
+        controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
+      }
+      controller.ensureTutorialAgentBrowserMcpTools();
+      break;
+    }
+    case "first_chat_skill_chatgpt_open":
+    case "first_chat_skill_chatgpt_ask":
+      controller.ensureTutorialAgentBrowserMcpTools();
+      break;
     case "register_tutorial_agent_browser_mcp":
       controller.setActiveTab("chat_config");
+      controller.ensureTutorialAgentBrowserMcpTools();
       break;
     case "enable_tutorial_mcp_access": {
       controller.setActiveTab("agents");
@@ -594,10 +737,12 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
         controller.setActiveAgentId(agent.id);
         controller.setSelectedAgentId(agent.id);
       }
+      controller.ensureTutorialAgentBrowserMcpTools();
       break;
     }
     case "first_chat_mcp_browser_open":
     case "first_chat_mcp_browser_snapshot":
+      controller.ensureTutorialAgentBrowserMcpTools();
       break;
     default:
       break;

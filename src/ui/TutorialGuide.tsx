@@ -16,16 +16,21 @@ export default function TutorialGuide(props: {
 
   return (
     <aside className="tutorial-sidebar" data-onboarding-surface="sidebar">
-      <div className="tutorial-sidebar-kicker">案例教學</div>
+      <div className="tutorial-sidebar-topline">
+        <div className="tutorial-sidebar-kicker">案例教學</div>
+        <div className="tutorial-agent-chip" data-onboarding-surface="agent">
+          <span className="tutorial-agent-chip-label">Active Agent</span>
+          <span className="tutorial-agent-chip-name">{props.activeAgentName}</span>
+        </div>
+      </div>
       <div className="tutorial-sidebar-title">{props.scenario.title}</div>
       <div className="tutorial-sidebar-copy">{props.scenario.description}</div>
-
-      <section className="tutorial-agent-panel" data-onboarding-surface="agent">
-        <div className="tutorial-agent-label">Active Agent</div>
-        <div className="tutorial-agent-name">{props.activeAgentName}</div>
-        {props.lockedAgentLabel ? <div className="tutorial-agent-locked">{props.lockedAgentLabel}</div> : null}
-        {props.activeAgentWarning ? <div className="tutorial-agent-warning">{props.activeAgentWarning}</div> : null}
-      </section>
+      {props.lockedAgentLabel || props.activeAgentWarning ? (
+        <div className="tutorial-agent-inline-note">
+          {props.lockedAgentLabel ? <span>{props.lockedAgentLabel}</span> : null}
+          {props.activeAgentWarning ? <span className="tutorial-agent-inline-warning">{props.activeAgentWarning}</span> : null}
+        </div>
+      ) : null}
 
       <div className="tutorial-checklist" data-onboarding-surface="checklist">
         {props.scenario.steps.map((item, index) => {
@@ -66,7 +71,7 @@ export default function TutorialGuide(props: {
         <button type="button" className="tutorial-exit-btn" onClick={props.onExit} data-tutorial-id="tutorial-exit">
           離開教學
         </button>
-        <button type="button" className="tutorial-exit-link" onClick={props.onSkip} data-tutorial-id="tutorial-skip-case">
+        <button type="button" className="tutorial-exit-btn" onClick={props.onSkip} data-tutorial-id="tutorial-skip-case">
           略過案例
         </button>
       </div>

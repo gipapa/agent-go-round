@@ -152,7 +152,8 @@ export function loadSkillRuntime(args: {
     allowMcp: args.skill.workflow.allowMcp === true,
     allowBuiltInTools: args.skill.workflow.allowBuiltInTools === true,
     allowedMcpServerIds: args.skill.workflow.allowedMcpServerIds,
-    allowedBuiltInToolIds: args.skill.workflow.allowedBuiltInToolIds
+    allowedBuiltInToolIds: args.skill.workflow.allowedBuiltInToolIds,
+    bootstrapAction: args.skill.workflow.bootstrapAction
   };
 
   pushSkillTrace(
@@ -208,6 +209,18 @@ export function loadSkillRuntime(args: {
   }
   if (scopeLines.length) {
     pushSkillTrace(trace, "Skill scope", scopeLines.join("\n"));
+  }
+  if (runtime.bootstrapAction) {
+    pushSkillTrace(
+      trace,
+      "Skill bootstrap",
+      [
+        `預設第一步工具：${runtime.bootstrapAction.toolKind}/${runtime.bootstrapAction.toolName}`,
+        runtime.bootstrapAction.reason ? `原因：${runtime.bootstrapAction.reason}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
   }
 
   const systemParts: string[] = [];

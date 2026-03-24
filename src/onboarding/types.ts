@@ -27,7 +27,11 @@ export type TutorialStepBehaviorId =
   | "register_tutorial_agent_browser_mcp"
   | "enable_tutorial_mcp_access"
   | "first_chat_mcp_browser_open"
-  | "first_chat_mcp_browser_snapshot";
+  | "first_chat_mcp_browser_snapshot"
+  | "ensure_tutorial_chatgpt_browser_skill"
+  | "enable_tutorial_chatgpt_browser_skill_access"
+  | "first_chat_skill_chatgpt_open"
+  | "first_chat_skill_chatgpt_ask";
 
 export type TutorialStepDefinition = {
   id: string;
@@ -47,16 +51,25 @@ export type TutorialChatExpectation = {
   userPrompt?: string;
   requireAssistant?: boolean;
   assistantContentIncludes?: string[];
+  assistantContentIncludesAny?: string[];
   successfulToolMessageIncludes?: string[];
+  successfulToolMessageIncludesAny?: string[];
   requireOpenedToolResult?: boolean;
   skillTraceIncludes?: string[];
+  skillTraceIncludesAny?: string[];
   skillLoadContainsAny?: string[];
+  requireSkillTodo?: boolean;
+  requireSkillTodoProgress?: boolean;
 };
 
 export type TutorialStepAutomation = {
   composerSeed?: string;
   clearChatOnEnter?: boolean;
   skillExecutionMode?: SkillExecutionMode;
+  skillVerifyMax?: number;
+  skillToolLoopMax?: number;
+  retryDelaySec?: number;
+  retryMax?: number;
   activeAgentPreset?: "tutorial_agent" | "tutorial_agent_base";
   expect?: TutorialChatExpectation;
 };
@@ -119,7 +132,13 @@ export type TutorialEntryController = {
   setActiveAgentId: (id: string) => void;
   setSelectedAgentId: (id: string) => void;
   setSkillExecutionMode: (mode: "single_turn" | "multi_turn") => void;
+  setSkillVerifyMax: (value: number) => void;
+  setSkillToolLoopMax: (value: number) => void;
+  setRetryDelaySec: (value: number) => void;
+  setRetryMax: (value: number) => void;
   setComposerSeed: (value: string) => void;
   clearChat: () => void;
+  ensureTutorialAgentBrowserMcpTools: () => void;
   ensureTutorialSequentialSkill: () => void;
+  ensureTutorialChatgptBrowserSkill: () => void;
 };

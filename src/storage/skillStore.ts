@@ -55,6 +55,22 @@ function normalizeStringArray(value: unknown): string[] | undefined {
 
 function normalizeWorkflow(value: unknown): SkillWorkflowPolicy {
   const input = value && typeof value === "object" ? (value as Partial<SkillWorkflowPolicy>) : {};
+  const bootstrapAction =
+    input.bootstrapAction &&
+    typeof input.bootstrapAction === "object" &&
+    (input.bootstrapAction.toolKind === "mcp" || input.bootstrapAction.toolKind === "builtin") &&
+    typeof input.bootstrapAction.toolName === "string" &&
+    input.bootstrapAction.toolName.trim()
+      ? {
+          toolKind: input.bootstrapAction.toolKind,
+          toolName: input.bootstrapAction.toolName.trim(),
+          input: input.bootstrapAction.input,
+          reason:
+            typeof input.bootstrapAction.reason === "string" && input.bootstrapAction.reason.trim()
+              ? input.bootstrapAction.reason.trim()
+              : undefined
+        }
+      : undefined;
   return {
     instructions: typeof input.instructions === "string" ? input.instructions : "",
     useSkillDocs: input.useSkillDocs !== false,
@@ -62,7 +78,8 @@ function normalizeWorkflow(value: unknown): SkillWorkflowPolicy {
     allowMcp: input.allowMcp === true,
     allowBuiltInTools: input.allowBuiltInTools === true,
     allowedMcpServerIds: normalizeStringArray(input.allowedMcpServerIds),
-    allowedBuiltInToolIds: normalizeStringArray(input.allowedBuiltInToolIds)
+    allowedBuiltInToolIds: normalizeStringArray(input.allowedBuiltInToolIds),
+    bootstrapAction
   };
 }
 

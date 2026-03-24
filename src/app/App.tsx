@@ -7,6 +7,11 @@ import {
   LoadedSkillRuntime,
   OrchestratorMode,
   SkillExecutionMode,
+  SkillStepDecision,
+  SkillCompletionDecision,
+  SkillPhase,
+  SkillRunState,
+  SkillTodoItem,
   DocItem,
   McpServerConfig,
   McpTool,
@@ -53,7 +58,7 @@ import { runOneToOne } from "../orchestrators/oneToOne";
 // Deprecated legacy orchestrator. Multi-turn skill refine uses its own executor and does not reuse leaderTeam.
 import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
 import { McpSseClient } from "../mcp/sseClient";
-import { callTool } from "../mcp/toolRegistry";
+import { callTool, listTools } from "../mcp/toolRegistry";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
@@ -74,6 +79,13 @@ import {
   TUTORIAL_MCP_NAME
 } from "../onboarding/runtime";
 import {
+  TUTORIAL_CHATGPT_BROWSER_ASSET_CONTENT,
+  TUTORIAL_CHATGPT_BROWSER_ASSET_PATH,
+  TUTORIAL_CHATGPT_BROWSER_REFERENCE_CONTENT,
+  TUTORIAL_CHATGPT_BROWSER_REFERENCE_PATH,
+  TUTORIAL_CHATGPT_BROWSER_SKILL_MARKDOWN,
+  TUTORIAL_CHATGPT_BROWSER_SKILL_NAME,
+  TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT,
   TUTORIAL_SEQUENTIAL_ADVANCED_CONTENT,
   TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
   TUTORIAL_SEQUENTIAL_ASSET_CONTENT,
@@ -96,15 +108,30 @@ import {
 import {
   buildSkillRefinementInput,
   buildSkillVerifyPrompt,
+  clampSkillToolLoopMax,
   clampSkillVerifyMax,
   normalizeSkillVerifyDecision,
   pushSkillExecutionModeTrace
 } from "../runtime/skillExecutor";
+import {
+  buildBootstrapPlanPrompt,
+  buildCompletionGatePrompt,
+  buildPlannerStepPrompt,
+  normalizeSkillCompletionDecision,
+  normalizeSkillStepDecision
+} from "../runtime/skillPlanner";
+import { runMultiTurnSkillRuntime } from "../runtime/multiTurnSkillRuntime";
+import { bootstrapTodoList, summarizeTodo } from "../runtime/skillTodo";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
-import { SYSTEM_AGENT_DIRECTORY_TOOL_ID, SYSTEM_BUILT_IN_TOOLS, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
-import { buildToolResultPromptBlock } from "../utils/toolResultSummary";
+import {
+  SYSTEM_AGENT_DIRECTORY_TOOL_ID,
+  SYSTEM_BUILT_IN_TOOLS,
+  SYSTEM_REQUEST_CONFIRMATION_TOOL_ID,
+  SYSTEM_USER_PROFILE_TOOL_ID
+} from "../utils/systemBuiltInTools";
+import { buildToolResultPromptBlock, ToolPromptDetailMode } from "../utils/toolResultSummary";
 import { normalizeCredentialUrl } from "../utils/credential";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 
@@ -149,6 +176,42 @@ type ToolEntry =
       kind: "builtin";
       tool: BuiltInToolConfig;
     };
+
+function normalizeToolDecisionAgainstAvailableTools(args: {
+  decision: ToolDecision;
+  availableBuiltinTools: BuiltInToolConfig[];
+  availableMcpServers: McpServerConfig[];
+  availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+}) {
+  if (args.decision.type === "no_tool" || args.decision.type === "builtin_tool_call") {
+    return args.decision;
+  }
+
+  const decision = args.decision;
+  const matchingBuiltIn = args.availableBuiltinTools.find((tool) => tool.name === decision.tool) ?? null;
+  if (!matchingBuiltIn) {
+    return decision;
+  }
+
+  const matchingServer = decision.serverId
+    ? args.availableMcpServers.find((server) => server.id === decision.serverId) ?? null
+    : null;
+  const matchingMcpTool = decision.serverId
+    ? args.availableMcpTools
+        .find((entry) => entry.server.id === decision.serverId)
+        ?.tools.find((tool) => tool.name === decision.tool) ?? null
+    : null;
+
+  if (matchingServer && matchingMcpTool) {
+    return decision;
+  }
+
+  return {
+    type: "builtin_tool_call" as const,
+    tool: decision.tool,
+    input: decision.input
+  };
+}
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
   | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
@@ -198,6 +261,11 @@ function normalizeSkillDecision(obj: any): SkillDecision | null {
     return { type: "skill_call", skillId: obj.skillId.trim(), input: obj.input };
   }
   return null;
+}
+
+function normalizeSkillBootstrapTodo(obj: any): string[] | null {
+  if (!obj || typeof obj !== "object" || !Array.isArray(obj.todo)) return null;
+  return obj.todo.filter((item: unknown) => typeof item === "string" && item.trim()).map((item: string) => item.trim()).slice(0, 7);
 }
 
 function stringifyAny(v: any): string {
@@ -289,6 +357,44 @@ function normalizeImportedMessage(input: any): ChatMessage | null {
         .filter((entry: any) => entry && typeof entry.label === "string" && typeof entry.content === "string")
         .map((entry: any) => ({ label: entry.label, content: entry.content } satisfies ChatTraceEntry))
     : undefined;
+  const skillTodo = Array.isArray(input.skillTodo)
+    ? input.skillTodo
+        .filter(
+          (item: any) =>
+            item &&
+            typeof item.id === "string" &&
+            typeof item.label === "string" &&
+            ["pending", "in_progress", "completed", "blocked"].includes(item.status) &&
+            ["skill", "planner", "system"].includes(item.source)
+        )
+        .map(
+          (item: any) =>
+            ({
+              id: item.id,
+              label: item.label,
+              status: item.status,
+              source: item.source,
+              reason: typeof item.reason === "string" ? item.reason : undefined,
+              updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now()
+            }) satisfies SkillTodoItem
+        )
+    : undefined;
+  const skillPhase =
+    typeof input.skillPhase === "string" &&
+    [
+      "skill_load",
+      "bootstrap_plan",
+      "observe",
+      "plan_next_step",
+      "act",
+      "sync_state",
+      "completion_gate",
+      "manual_gate",
+      "final_answer",
+      "verify_refine"
+    ].includes(input.skillPhase)
+      ? (input.skillPhase as SkillPhase)
+      : undefined;
   return {
     id: typeof input.id === "string" ? input.id : generateId(),
     role: input.role,
@@ -300,6 +406,9 @@ function normalizeImportedMessage(input: any): ChatMessage | null {
     isStreaming: input.isStreaming === true,
     hideWhileStreaming: input.hideWhileStreaming === true,
     skillTrace: skillTrace?.length ? skillTrace : undefined,
+    skillGoal: typeof input.skillGoal === "string" && input.skillGoal.trim() ? input.skillGoal : undefined,
+    skillTodo: skillTodo?.length ? skillTodo : undefined,
+    skillPhase,
     ts: typeof input.ts === "number" ? input.ts : Date.now()
   };
 }
@@ -331,8 +440,203 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const TOOL_SUMMARY_MARKERS = ["\n\n請根據以下工具摘要完成回答：\n", "\n\n請將以下工具資訊一起納入回答：\n"];
+
+function stripPreviousToolPromptSummaries(input: string) {
+  let next = input;
+  for (const marker of TOOL_SUMMARY_MARKERS) {
+    const index = next.indexOf(marker);
+    if (index !== -1) {
+      next = next.slice(0, index).trimEnd();
+    }
+  }
+  return next;
+}
+
 function appendToolPromptSummary(input: string, summaryBlock: string) {
-  return `${input}\n\n請根據以下工具摘要完成回答：\n${summaryBlock}`;
+  const base = stripPreviousToolPromptSummaries(input);
+  return `${base}\n\n請根據以下工具摘要完成回答：\n${summaryBlock}\n\n請從目前已建立的頁面、session、工具結果或上下文繼續下一步，不要無理由重複上一個工具動作。若已成功打開頁面，優先觀察、讀取、填寫、點擊或等待，而不是再次打開同一個網址。`;
+}
+
+type ToolIntent = "observe" | "state_change" | "control";
+
+function compactSupportText(text: string, maxChars: number) {
+  const normalized = text.replace(/\r/g, "").trim();
+  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function buildCompactSkillDecisionContext(args: {
+  instructions?: string;
+  references: Array<{ path: string; content: string }>;
+  assets: Array<{ path: string; content: string }>;
+}) {
+  const sections: string[] = [];
+
+  if (args.instructions?.trim()) {
+    sections.push(`Skill workflow:\n${compactSupportText(args.instructions, 900)}`);
+  }
+
+  if (args.references.length) {
+    sections.push(
+      `Loaded references:\n${args.references
+        .slice(0, 2)
+        .map((doc) => `[${doc.path}]\n${compactSupportText(doc.content, 320)}`)
+        .join("\n\n")}`
+    );
+  }
+
+  if (args.assets.length) {
+    sections.push(
+      `Loaded assets:\n${args.assets
+        .slice(0, 2)
+        .map((file) => `[${file.path}]\n${compactSupportText(file.content, 240)}`)
+        .join("\n\n")}`
+    );
+  }
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function filterPreparedToolScopeByIntent(
+  prepared: PreparedSkillExecution,
+  allowedIntents: Set<ToolIntent>
+): {
+  toolEntries: ToolEntry[];
+  scopedBuiltInTools: BuiltInToolConfig[];
+  scopedMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+} {
+  const scopedBuiltInTools = prepared.scopedBuiltInTools.filter((tool) => allowedIntents.has(classifyBuiltInToolIntent(tool)));
+  const scopedMcpTools = prepared.scopedMcpTools
+    .map((entry) => ({
+      server: entry.server,
+      tools: entry.tools.filter((tool) => allowedIntents.has(classifyMcpToolIntent(tool)))
+    }))
+    .filter((entry) => entry.tools.length > 0);
+  const toolEntries: ToolEntry[] = [
+    ...scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
+    ...scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
+  ];
+  return { toolEntries, scopedBuiltInTools, scopedMcpTools };
+}
+
+function formatToolScopeSummary(toolEntries: ToolEntry[]) {
+  if (!toolEntries.length) return "沒有可用工具";
+  return toolEntries
+    .map((entry) =>
+      entry.kind === "mcp"
+        ? `MCP:${entry.server.name}/${entry.tool.name} [${classifyMcpToolIntent(entry.tool)}]`
+        : `Built-in:${entry.tool.name} [${classifyBuiltInToolIntent(entry.tool)}]`
+    )
+    .join("\n");
+}
+
+function formatSkillPhaseStatus(phase: SkillPhase) {
+  switch (phase) {
+    case "skill_load":
+      return "正在載入 skill…";
+    case "bootstrap_plan":
+      return "正在建立多輪 todo…";
+    case "observe":
+      return "正在觀察目前狀態…";
+    case "plan_next_step":
+      return "正在規劃下一步…";
+    case "act":
+      return "正在執行下一步操作…";
+    case "sync_state":
+      return "正在同步 skill 狀態…";
+    case "completion_gate":
+      return "正在檢查任務是否完成…";
+    case "manual_gate":
+      return "正在等待使用者確認…";
+    case "verify_refine":
+      return "正在驗證與修正結果…";
+    case "final_answer":
+    default:
+      return "正在整理最終回覆…";
+  }
+}
+
+type ToolAugmentationResult = {
+  input: string;
+  status: "no_entries" | "decision_failed" | "no_tool" | "tool_called";
+  toolLabel?: string;
+  detail?: string;
+  actionSignature?: string;
+  toolIntent?: ToolIntent;
+  observationSignature?: string;
+  decisionSummary?: string;
+  toolOutput?: any;
+};
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  return `{${Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`)
+    .join(",")}}`;
+}
+
+function normalizeToolInputForSignature(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeToolInputForSignature(item));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const normalizedEntries = Object.entries(value as Record<string, unknown>)
+    .filter(([key, entryValue]) => {
+      if (entryValue === undefined || entryValue === null || entryValue === "" || entryValue === false) return false;
+      if (key === "session" || key === "timestamp" || key === "requestId") return false;
+      return true;
+    })
+    .map(([key, entryValue]) => [key, normalizeToolInputForSignature(entryValue)]);
+
+  return Object.fromEntries(normalizedEntries);
+}
+
+function buildToolActionSignature(args: {
+  kind: "builtin" | "mcp";
+  toolName: string;
+  serverId?: string;
+  input?: unknown;
+}) {
+  return `${args.kind}:${args.serverId ?? ""}:${args.toolName}:${stableStringify(normalizeToolInputForSignature(args.input ?? {}))}`;
+}
+
+function hashString(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function buildObservationSignature(output: unknown) {
+  return hashString(stableStringify(normalizeToolInputForSignature(output ?? {})));
+}
+
+function classifyToolIntentFromText(name: string, description?: string): ToolIntent {
+  const haystack = `${name} ${description ?? ""}`.toLowerCase();
+  const controlHints = ["confirm", "approval", "consent", "request", "ask user", "prompt user", "manual"];
+  const observeHints = ["snapshot", "get ", "get_", "read", "inspect", "list", "query", "text", "content", "url", "status", "state", "screenshot"];
+  const stateChangeHints = ["open", "click", "fill", "type", "write", "submit", "wait", "close", "navigate", "press"];
+
+  if (controlHints.some((hint) => haystack.includes(hint))) return "control";
+  if (observeHints.some((hint) => haystack.includes(hint))) return "observe";
+  if (stateChangeHints.some((hint) => haystack.includes(hint))) return "state_change";
+  return "state_change";
+}
+
+function classifyBuiltInToolIntent(tool: BuiltInToolConfig): ToolIntent {
+  return classifyToolIntentFromText(tool.name, tool.description);
+}
+
+function classifyMcpToolIntent(tool: McpTool): ToolIntent {
+  return classifyToolIntentFromText(tool.name, tool.description);
 }
 
 function describeCredentialEndpoint(url: string) {
@@ -531,6 +835,7 @@ export default function App() {
     initialUi.skillExecutionMode === "multi_turn" ? "multi_turn" : "single_turn"
   );
   const [skillVerifyMax, setSkillVerifyMax] = useState<number>(() => clampSkillVerifyMax(initialUi.skillVerifyMax ?? 1));
+  const [skillToolLoopMax, setSkillToolLoopMax] = useState<number>(() => clampSkillToolLoopMax(initialUi.skillToolLoopMax ?? 6));
   const [skillVerifierAgentId, setSkillVerifierAgentId] = useState<string>(() => initialUi.skillVerifierAgentId ?? "");
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [chatComposerDraft, setChatComposerDraft] = useState("");
@@ -612,6 +917,7 @@ export default function App() {
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
+  const tutorialRetryRestoreRef = React.useRef<{ delaySec: number; max: number } | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
       agents,
@@ -796,6 +1102,7 @@ export default function App() {
       mode,
       skillExecutionMode,
       skillVerifyMax,
+      skillToolLoopMax,
       skillVerifierAgentId,
       activeAgentId,
       memberAgentIds,
@@ -807,7 +1114,7 @@ export default function App() {
       userAvatarUrl,
       userDescription
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillVerifierAgentId, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -898,12 +1205,24 @@ export default function App() {
       setActiveAgentId,
       setSelectedAgentId,
       setSkillExecutionMode,
+      setSkillVerifyMax: (value) => setSkillVerifyMax(clampSkillVerifyMax(value)),
+      setSkillToolLoopMax: (value) => setSkillToolLoopMax(clampSkillToolLoopMax(value)),
+      setRetryDelaySec: (value) => setRetryDelaySec(Math.max(0, Math.min(30, Math.round(value)))),
+      setRetryMax: (value) => setRetryMax(Math.max(0, Math.min(20, Math.round(value)))),
       clearChat: () => {
         setHistory([]);
         setTutorialOpenedToolResultMessageIds([]);
       },
+      ensureTutorialAgentBrowserMcpTools: () => {
+        const tutorialServer = mcpServers.find((server) => server.name === TUTORIAL_MCP_NAME);
+        if (!tutorialServer) return;
+        void ensureMcpToolsLoadedForServers([tutorialServer]);
+      },
       ensureTutorialSequentialSkill: () => {
         void ensureTutorialSequentialSkill();
+      },
+      ensureTutorialChatgptBrowserSkill: () => {
+        void ensureTutorialChatgptBrowserSkill();
       },
       setComposerSeed: (value) =>
         setTutorialComposerSeed({
@@ -1051,15 +1370,6 @@ export default function App() {
     return mcpServers.filter((s) => allowed.has(s.id));
   }, [activeAgent, mcpServers]);
 
-  const availableMcpToolsForAgent = useMemo(() => {
-    return availableMcpServersForAgent
-      .map((server) => ({
-        server,
-        tools: mcpToolsByServer[server.id] ?? []
-      }))
-      .filter((entry) => entry.tools.length > 0);
-  }, [availableMcpServersForAgent, mcpToolsByServer]);
-
   const availableBuiltinToolsForAgent = useMemo(() => {
     if (!activeAgent) return [];
     if (!isCategoryEnabled(activeAgent.enableBuiltInTools)) return [];
@@ -1075,14 +1385,6 @@ export default function App() {
   const configuredSkillVerifierAgent = useMemo(
     () => (skillVerifierAgentId ? agents.find((agent) => agent.id === skillVerifierAgentId) ?? null : null),
     [agents, skillVerifierAgentId]
-  );
-
-  const availableToolsForAgent = useMemo<ToolEntry[]>(
-    () => [
-      ...availableMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
-      ...availableBuiltinToolsForAgent.map((tool) => ({ kind: "builtin" as const, tool }))
-    ],
-    [availableMcpToolsForAgent, availableBuiltinToolsForAgent]
   );
 
   const credentialSlots = useMemo(() => modelCredentials.slice().sort((a, b) => a.label.localeCompare(b.label)), [modelCredentials]);
@@ -1106,6 +1408,64 @@ export default function App() {
 
   function resolveSkillVerifierAgent(active: AgentConfig) {
     return hydrateAgentCredentials(configuredSkillVerifierAgent ?? active);
+  }
+
+  async function ensureMcpToolsLoadedForServers(
+    servers: McpServerConfig[],
+    options?: { onStatus?: (text: string) => void }
+  ) {
+    const unknownServers = servers.filter((server) => !Object.prototype.hasOwnProperty.call(mcpToolsByServer, server.id));
+    if (!unknownServers.length) {
+      return servers
+        .map((server) => ({ server, tools: mcpToolsByServer[server.id] ?? [] }))
+        .filter((entry) => entry.tools.length > 0);
+    }
+
+    options?.onStatus?.("正在同步 MCP 工具清單中…");
+
+    const loadedEntries = await Promise.all(
+      unknownServers.map(async (server) => {
+        try {
+          const client = new McpSseClient(server);
+          client.connect((text) => pushLog({ category: "mcp", agent: server.name, message: text }));
+          const tools = await listTools(client);
+          logNow({
+            category: "mcp",
+            agent: server.name,
+            ok: true,
+            message: `Auto-loaded MCP tools: ${tools.length}`,
+            details: tools.map((tool) => tool.name).join("\n") || "(no tools)"
+          });
+          return { serverId: server.id, tools };
+        } catch (error: any) {
+          logNow({
+            category: "mcp",
+            agent: server.name,
+            ok: false,
+            message: "Auto-load MCP tools failed",
+            details: String(error?.message ?? error)
+          });
+          return null;
+        }
+      })
+    );
+
+    const loadedMap = loadedEntries.reduce<Record<string, McpTool[]>>((acc, entry) => {
+      if (!entry) return acc;
+      acc[entry.serverId] = entry.tools;
+      return acc;
+    }, {});
+
+    if (Object.keys(loadedMap).length > 0) {
+      setMcpToolsByServer((prev) => ({ ...prev, ...loadedMap }));
+    }
+
+    return servers
+      .map((server) => ({
+        server,
+        tools: loadedMap[server.id] ?? mcpToolsByServer[server.id] ?? []
+      }))
+      .filter((entry) => entry.tools.length > 0);
   }
 
   function addCredential(preset: "openai" | "groq" | "custom") {
@@ -1210,11 +1570,26 @@ export default function App() {
     return !!scenario?.steps.some((step) => step.behavior === "set_history_limit_to_one");
   }
 
+  function scenarioRequiresRetryOverride(scenario: TutorialScenarioDefinition | null | undefined) {
+    return !!scenario?.steps.some(
+      (step) => typeof step.automation?.retryDelaySec === "number" || typeof step.automation?.retryMax === "number"
+    );
+  }
+
   function restoreTutorialHistoryLimitIfNeeded() {
     if (tutorialHistoryLimitRestoreRef.current === null) return tutorialHistoryLimitRestoreRef.current;
     const original = tutorialHistoryLimitRestoreRef.current;
     setHistoryMessageLimit(original);
     tutorialHistoryLimitRestoreRef.current = null;
+    return original;
+  }
+
+  function restoreTutorialRetryIfNeeded() {
+    if (tutorialRetryRestoreRef.current === null) return tutorialRetryRestoreRef.current;
+    const original = tutorialRetryRestoreRef.current;
+    setRetryDelaySec(original.delaySec);
+    setRetryMax(original.max);
+    tutorialRetryRestoreRef.current = null;
     return original;
   }
 
@@ -1232,6 +1607,7 @@ export default function App() {
     const snapshot = await captureTutorialWorkspaceSnapshot(tutorialRuntimeState);
     tutorialSnapshotRef.current = snapshot;
     tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(scenario) ? historyMessageLimit : null;
+    tutorialRetryRestoreRef.current = scenarioRequiresRetryOverride(scenario) ? { delaySec: retryDelaySec, max: retryMax } : null;
     tutorialStepKeyRef.current = "";
     setTutorialScenario(scenario);
     setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
@@ -1246,6 +1622,7 @@ export default function App() {
 
   function moveToNextTutorialScenario() {
     const restoredHistoryLimit = restoreTutorialHistoryLimitIfNeeded();
+    const restoredRetry = restoreTutorialRetryIfNeeded();
     if (tutorialScenarioIndex === null) {
       setShowTutorialExitPrompt(true);
       return;
@@ -1259,6 +1636,9 @@ export default function App() {
     tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(nextScenario)
       ? restoredHistoryLimit ?? historyMessageLimit
       : null;
+    tutorialRetryRestoreRef.current = scenarioRequiresRetryOverride(nextScenario)
+      ? restoredRetry ?? { delaySec: retryDelaySec, max: retryMax }
+      : null;
     setTutorialScenario(nextScenario);
     setTutorialScenarioIndex(tutorialScenarioIndex + 1);
     setTutorialStepIndex(0);
@@ -1271,6 +1651,7 @@ export default function App() {
 
   async function finishTutorial(keepWorkspaceChanges: boolean) {
     restoreTutorialHistoryLimitIfNeeded();
+    restoreTutorialRetryIfNeeded();
     if (!keepWorkspaceChanges && tutorialSnapshotRef.current) {
       await restoreTutorialWorkspaceSnapshot(tutorialSnapshotRef.current);
       setBuiltInTools(tutorialSnapshotRef.current.builtInTools);
@@ -1288,6 +1669,7 @@ export default function App() {
 
     tutorialSnapshotRef.current = null;
     tutorialHistoryLimitRestoreRef.current = null;
+    tutorialRetryRestoreRef.current = null;
     tutorialStepKeyRef.current = "";
     setTutorialScenario(null);
     setTutorialScenarioIndex(null);
@@ -1542,7 +1924,189 @@ export default function App() {
     return null;
   }
 
-  async function resolveToolAugmentedInput(args: {
+  async function runSkillBootstrapPlan(args: {
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    retry: { delaySec: number; max: number };
+    skill: SkillConfig;
+    runtime: LoadedSkillRuntime;
+    userInput: string;
+  }): Promise<SkillTodoItem[]> {
+    const prompt = buildBootstrapPlanPrompt({
+      skill: args.skill,
+      runtime: args.runtime,
+      userInput: args.userInput
+    });
+
+    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
+      const raw = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.agent,
+        input: prompt,
+        history: [],
+        onDelta: () => {},
+        retry: args.retry,
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      });
+
+      const todo = normalizeSkillBootstrapTodo(extractJsonObject(raw));
+      if (todo?.length) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: true,
+          message: "Skill bootstrap plan created",
+          details: raw
+        });
+        return bootstrapTodoList(todo);
+      }
+
+      logNow({
+        category: "skills",
+        agent: args.agent.name,
+        ok: false,
+        message: `Skill bootstrap plan invalid schema (${attempt + 1}/${args.retry.max + 1})`,
+        details: raw
+      });
+
+      if (attempt < args.retry.max) {
+        await sleep(args.retry.delaySec * 1000);
+      }
+    }
+
+    return bootstrapTodoList([
+      "載入 skill 與必要資源",
+      "觀察目前狀態",
+      "執行下一個工具操作",
+      "確認任務是否完成",
+      "整理最終回覆"
+    ]);
+  }
+
+  async function runSkillStepPlanner(args: {
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    retry: { delaySec: number; max: number };
+    state: SkillRunState;
+    skill: SkillConfig;
+    runtime: LoadedSkillRuntime;
+    userInput: string;
+    currentContext: string;
+    toolScopeSummary: string;
+    mustObserve: boolean;
+    mustAct: boolean;
+    phaseHint?: string;
+  }): Promise<SkillStepDecision | null> {
+    const prompt = buildPlannerStepPrompt({
+      skill: args.skill,
+      runtime: args.runtime,
+      userInput: args.userInput,
+      currentContext: args.currentContext,
+      currentPhaseHint: args.phaseHint,
+      toolScopeSummary: args.toolScopeSummary,
+      todoSummary: summarizeTodo(args.state.todo),
+      mustObserve: args.mustObserve,
+      mustAct: args.mustAct
+    });
+
+    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
+      const raw = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.agent,
+        input: prompt,
+        history: [],
+        onDelta: () => {},
+        retry: args.retry,
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      });
+
+      const decision = normalizeSkillStepDecision(extractJsonObject(raw));
+      if (decision) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: true,
+          message: `Skill planner step: ${decision.type}`,
+          details: raw
+        });
+        return decision;
+      }
+
+      logNow({
+        category: "skills",
+        agent: args.agent.name,
+        ok: false,
+        message: `Skill planner step invalid schema (${attempt + 1}/${args.retry.max + 1})`,
+        details: raw
+      });
+
+      if (attempt < args.retry.max) {
+        await sleep(args.retry.delaySec * 1000);
+      }
+    }
+
+    return null;
+  }
+
+  async function runSkillCompletionGate(args: {
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    retry: { delaySec: number; max: number };
+    state: SkillRunState;
+    skill: SkillConfig;
+    runtime: LoadedSkillRuntime;
+    userInput: string;
+    currentContext: string;
+    toolScopeSummary: string;
+  }): Promise<SkillCompletionDecision | null> {
+    const prompt = buildCompletionGatePrompt({
+      skill: args.skill,
+      runtime: args.runtime,
+      userInput: args.userInput,
+      currentContext: args.currentContext,
+      todoSummary: summarizeTodo(args.state.todo)
+    });
+
+    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
+      const raw = await runOneToOne({
+        adapter: args.adapter,
+        agent: args.agent,
+        input: prompt,
+        history: [],
+        onDelta: () => {},
+        retry: args.retry,
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      });
+
+      const decision = normalizeSkillCompletionDecision(extractJsonObject(raw));
+      if (decision) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: true,
+          message: `Skill completion gate: ${decision.type}`,
+          details: raw
+        });
+        return decision;
+      }
+
+      logNow({
+        category: "skills",
+        agent: args.agent.name,
+        ok: false,
+        message: `Skill completion gate invalid schema (${attempt + 1}/${args.retry.max + 1})`,
+        details: raw
+      });
+
+      if (attempt < args.retry.max) {
+        await sleep(args.retry.delaySec * 1000);
+      }
+    }
+
+    return null;
+  }
+
+  async function resolveToolAugmentedInputDetailed(args: {
     input: string;
     agent: AgentConfig;
     adapter: ReturnType<typeof pickAdapter>;
@@ -1552,16 +2116,17 @@ export default function App() {
     toolEntries: ToolEntry[];
     decisionContext?: string;
     onStatus?: (text: string) => void;
-  }): Promise<string> {
+    promptDetail?: ToolPromptDetailMode;
+  }): Promise<ToolAugmentationResult> {
     if (args.toolEntries.length === 0) {
       if (args.availableBuiltinTools.length > 0) {
         logNow({ category: "tool", agent: args.agent.name, message: "Tool decision skipped: no available tool entries" });
       } else if (args.availableMcpServers.length === 0) {
-        return args.input;
+        return { input: args.input, status: "no_entries", detail: "沒有可用的工具或 MCP server。" };
       } else if (args.availableMcpTools.length === 0) {
         logNow({ category: "mcp", agent: args.agent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
       }
-      return args.input;
+      return { input: args.input, status: "no_entries", detail: "目前沒有可用的工具項目。" };
     }
 
     args.onStatus?.("正在判斷是否需要呼叫工具中…");
@@ -1577,48 +2142,106 @@ export default function App() {
 
     if (!decision) {
       logNow({ category: "tool", agent: args.agent.name, ok: false, message: "Tool decision failed after retries; continue without tools" });
-      return args.input;
+      return { input: args.input, status: "decision_failed", detail: "工具判斷在重試後仍失敗，已略過。" };
     }
 
-    if (decision.type === "no_tool") {
+    const normalizedDecision = normalizeToolDecisionAgainstAvailableTools({
+      decision,
+      availableBuiltinTools: args.availableBuiltinTools,
+      availableMcpServers: args.availableMcpServers,
+      availableMcpTools: args.availableMcpTools
+    });
+
+    if (decision.type === "mcp_call" && normalizedDecision.type === "builtin_tool_call") {
+      logNow({
+        category: "tool",
+        agent: args.agent.name,
+        ok: true,
+        message: `Tool decision normalized from MCP to built-in: ${decision.tool}`,
+        details: JSON.stringify({ original: decision, normalized: normalizedDecision }, null, 2)
+      });
+    }
+
+    if (normalizedDecision.type === "no_tool") {
       logNow({ category: "tool", agent: args.agent.name, message: "Tool decision resolved: no_tool" });
-      return args.input;
+      return { input: args.input, status: "no_tool", detail: "模型判斷這一輪不需要工具。" };
     }
 
-    if (decision.type === "builtin_tool_call") {
-      args.onStatus?.(`正在呼叫內建工具「${decision.tool}」中…`);
-      const targetTool = args.availableBuiltinTools.find((tool) => tool.name === decision.tool) ?? null;
+    return executeResolvedToolSelection({
+      selection: normalizedDecision,
+      input: args.input,
+      agent: args.agent,
+      availableBuiltinTools: args.availableBuiltinTools,
+      availableMcpServers: args.availableMcpServers,
+      availableMcpTools: args.availableMcpTools,
+      onStatus: args.onStatus,
+      promptDetail: args.promptDetail ?? "default"
+    });
+  }
+
+  async function executeResolvedToolSelection(args: {
+    selection: BuiltInToolAction | McpAction;
+    input: string;
+    agent: AgentConfig;
+    availableBuiltinTools: BuiltInToolConfig[];
+    availableMcpServers: McpServerConfig[];
+    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+    onStatus?: (text: string) => void;
+    promptDetail: ToolPromptDetailMode;
+  }): Promise<ToolAugmentationResult> {
+    const normalizedDecision = args.selection;
+
+    if (normalizedDecision.type === "builtin_tool_call") {
+      const actionSignature = buildToolActionSignature({
+        kind: "builtin",
+        toolName: normalizedDecision.tool,
+        input: normalizedDecision.input
+      });
+      args.onStatus?.(`正在呼叫內建工具「${normalizedDecision.tool}」中…`);
+      const targetTool = args.availableBuiltinTools.find((tool) => tool.name === normalizedDecision.tool) ?? null;
       if (!targetTool) {
-        const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${decision.tool} 的 built-in tool。`;
+        const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${normalizedDecision.tool} 的 built-in tool。`;
         append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
         logNow({
           category: "tool",
           agent: args.agent.name,
           ok: false,
-          message: `Built-in tool not found: ${decision.tool}`,
-          details: JSON.stringify(decision)
+          message: `Built-in tool not found: ${normalizedDecision.tool}`,
+          details: JSON.stringify(normalizedDecision)
         });
-        return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+        return {
+          input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
+          status: "tool_called",
+          toolLabel: `Built-in ${normalizedDecision.tool}`,
+          detail: toolSummaryForQuestion,
+          actionSignature
+        };
       }
 
       try {
         const allowed =
           !targetTool.requireConfirmation ||
           window.confirm(
-            `允許 agent ${args.agent.name} 執行工具「${targetTool.displayLabel ?? targetTool.name}」嗎？\n\ninput:\n${stringifyAny(decision.input ?? {})}`
+            `允許 agent ${args.agent.name} 執行工具「${targetTool.displayLabel ?? targetTool.name}」嗎？\n\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`
           );
 
         if (!allowed) {
-          const toolSummaryForQuestion = `工具執行已被使用者阻止：${decision.tool}`;
+          const toolSummaryForQuestion = `工具執行已被使用者阻止：${normalizedDecision.tool}`;
           append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
           logNow({
             category: "tool",
             agent: args.agent.name,
             ok: false,
-            message: `Built-in tool blocked by user: ${decision.tool}`,
-            details: stringifyAny(decision.input ?? {})
+            message: `Built-in tool blocked by user: ${normalizedDecision.tool}`,
+            details: stringifyAny(normalizedDecision.input ?? {})
           });
-          return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+          return {
+            input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
+            status: "tool_called",
+            toolLabel: `Built-in ${normalizedDecision.tool}`,
+            detail: toolSummaryForQuestion,
+            actionSignature
+          };
         }
 
         const allowedSystemHelpers: NonNullable<Parameters<typeof runBuiltInScriptTool>[2]>["system"] = {};
@@ -1629,21 +2252,28 @@ export default function App() {
           allowedSystemHelpers.pick_best_agent_for_question = async (question: string) =>
             pickBestAgentNameForQuestion(question, loadSavedAgentsFromStorage(), args.agent.name);
         }
+        if (args.availableBuiltinTools.some((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID)) {
+          allowedSystemHelpers.request_user_confirmation = async (message: string) => {
+            const confirmed = window.confirm(String(message ?? "").trim() || "是否繼續？");
+            return { confirmed };
+          };
+        }
 
-        const toolOutput = await runBuiltInScriptTool(targetTool, decision.input ?? {}, {
+        const toolOutput = await runBuiltInScriptTool(targetTool, normalizedDecision.input ?? {}, {
           system: allowedSystemHelpers
         });
+        const toolIntent = classifyBuiltInToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
         const toolSummaryForQuestion = buildToolResultPromptBlock({
           kind: "builtin",
-          toolName: decision.tool,
-          input: decision.input ?? {},
+          toolName: normalizedDecision.tool,
+          input: normalizedDecision.input ?? {},
           output: toolOutput
-        });
+        }, args.promptDetail ?? "default");
         append(
           msg(
             "tool",
-            `Built-in tool -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
+            `Built-in tool -> ${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}\noutput:\n${toolOutputText}`,
             "builtin_tool",
             { displayName: "Built-in Tool" }
           )
@@ -1652,93 +2282,151 @@ export default function App() {
           category: "tool",
           agent: args.agent.name,
           ok: true,
-          message: `Built-in tool call OK: ${decision.tool}`,
+          message: `Built-in tool call OK: ${normalizedDecision.tool}`,
           details: toolOutputText
         });
-        return appendToolPromptSummary(args.input, toolSummaryForQuestion);
+        return {
+          input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+          status: "tool_called",
+          toolLabel: `Built-in ${normalizedDecision.tool}`,
+          detail: toolSummaryForQuestion,
+          actionSignature,
+          toolIntent,
+          observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
+          decisionSummary: `builtin:${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
+          toolOutput
+        };
       } catch (e: any) {
         const briefError = String(e?.message ?? e);
-        const toolSummaryForQuestion = `工具執行失敗：${decision.tool} 執行失敗（${briefError}）。`;
+        const toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 執行失敗（${briefError}）。`;
         append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
         logNow({
           category: "tool",
           agent: args.agent.name,
           ok: false,
-          message: `Built-in tool call failed: ${decision.tool}`,
+          message: `Built-in tool call failed: ${normalizedDecision.tool}`,
           details: briefError
         });
-        return `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`;
+        return {
+          input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
+          status: "tool_called",
+          toolLabel: `Built-in ${normalizedDecision.tool}`,
+          detail: toolSummaryForQuestion,
+          actionSignature
+        };
       }
     }
 
-    const targetServer = args.availableMcpServers.find((server) => server.id === decision.serverId) ?? null;
-    const targetTool = args.availableMcpTools.find((entry) => entry.server.id === decision.serverId)?.tools.find((tool) => tool.name === decision.tool) ?? null;
+    const actionSignature = buildToolActionSignature({
+      kind: "mcp",
+      serverId: normalizedDecision.serverId,
+      toolName: normalizedDecision.tool,
+      input: normalizedDecision.input
+    });
+    const targetServer = args.availableMcpServers.find((server) => server.id === normalizedDecision.serverId) ?? null;
+    const targetTool =
+      args.availableMcpTools.find((entry) => entry.server.id === normalizedDecision.serverId)?.tools.find((tool) => tool.name === normalizedDecision.tool) ?? null;
     let toolSummaryForQuestion = "";
-    args.onStatus?.(`正在呼叫 MCP 工具「${decision.tool}」中…`);
+    args.onStatus?.(`正在呼叫 MCP 工具「${normalizedDecision.tool}」中…`);
 
     if (!targetServer) {
-      toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${decision.serverId} 的可用 MCP server。`;
+      toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${normalizedDecision.serverId} 的可用 MCP server。`;
       logNow({
         category: "mcp",
         agent: args.agent.name,
         ok: false,
-        message: `Tool decision selected unavailable server: ${decision.serverId}`,
-        details: JSON.stringify(decision)
+        message: `Tool decision selected unavailable server: ${normalizedDecision.serverId}`,
+        details: JSON.stringify(normalizedDecision)
       });
       append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
     } else if (!targetTool) {
-      toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${decision.tool} 這個工具。`;
+      toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${normalizedDecision.tool} 這個工具。`;
       logNow({
         category: "mcp",
         agent: args.agent.name,
         ok: false,
-        message: `Tool decision selected unavailable tool: ${decision.tool}`,
-        details: JSON.stringify(decision)
+        message: `Tool decision selected unavailable tool: ${normalizedDecision.tool}`,
+        details: JSON.stringify(normalizedDecision)
       });
       append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
     } else {
       try {
         const client = new McpSseClient(targetServer);
         client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
-        const toolOutput = await callTool(client, decision.tool, decision.input ?? {});
+        const toolOutput = await callTool(client, normalizedDecision.tool, normalizedDecision.input ?? {});
+        const toolIntent = classifyMcpToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
         toolSummaryForQuestion = buildToolResultPromptBlock({
           kind: "mcp",
           serverName: targetServer.name,
-          toolName: decision.tool,
-          input: decision.input ?? {},
+          toolName: normalizedDecision.tool,
+          input: normalizedDecision.input ?? {},
           output: toolOutput
-        });
+        }, args.promptDetail ?? "default");
         logNow({
           category: "mcp",
           agent: targetServer.name,
           ok: true,
-          message: `MCP tool call OK: ${decision.tool}`,
+          message: `MCP tool call OK: ${normalizedDecision.tool}`,
           details: toolOutputText
         });
         append(
           msg(
             "tool",
-            `MCP ${targetServer.name} -> ${decision.tool}\ninput:\n${stringifyAny(decision.input ?? {})}\noutput:\n${toolOutputText}`,
+            `MCP ${targetServer.name} -> ${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}\noutput:\n${toolOutputText}`,
             "mcp",
             { displayName: "MCP Tool" }
           )
         );
+        return {
+          input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+          status: "tool_called",
+          toolLabel: `MCP ${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
+          detail: toolSummaryForQuestion,
+          actionSignature,
+          toolIntent,
+          observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
+          decisionSummary: `mcp:${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"}/${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
+          toolOutput
+        };
       } catch (e: any) {
         const briefError = String(e?.message ?? e);
-        toolSummaryForQuestion = `工具執行失敗：${decision.tool} 呼叫失敗（${briefError}）。`;
+        toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 呼叫失敗（${briefError}）。`;
         append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
         logNow({
           category: "mcp",
           agent: targetServer.name,
           ok: false,
-          message: `Tool call failed: ${decision.tool}`,
+          message: `Tool call failed: ${normalizedDecision.tool}`,
           details: briefError
         });
       }
     }
 
-    return toolSummaryForQuestion ? appendToolPromptSummary(args.input, toolSummaryForQuestion) : args.input;
+    return toolSummaryForQuestion
+      ? {
+          input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+          status: "tool_called",
+          toolLabel: `MCP ${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
+          detail: toolSummaryForQuestion,
+          actionSignature
+        }
+      : { input: args.input, status: "no_tool", detail: "沒有產生可回填的工具摘要。" };
+  }
+
+  async function resolveToolAugmentedInput(args: {
+    input: string;
+    agent: AgentConfig;
+    adapter: ReturnType<typeof pickAdapter>;
+    availableBuiltinTools: BuiltInToolConfig[];
+    availableMcpServers: McpServerConfig[];
+    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+    toolEntries: ToolEntry[];
+    decisionContext?: string;
+    onStatus?: (text: string) => void;
+  }): Promise<string> {
+    const result = await resolveToolAugmentedInputDetailed(args);
+    return result.input;
   }
 
   async function prepareSkillExecution(args: {
@@ -1747,6 +2435,10 @@ export default function App() {
     userInput: string;
     agent: AgentConfig;
     adapter: ReturnType<typeof pickAdapter>;
+    availableBuiltinTools: BuiltInToolConfig[];
+    availableMcpServers: McpServerConfig[];
+    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+    deferToolDecision?: boolean;
     onStatus?: (text: string) => void;
   }): Promise<PreparedSkillExecution> {
     args.onStatus?.(`正在載入 skill「${args.skill.name}」中…`);
@@ -1755,27 +2447,27 @@ export default function App() {
       skillDocs: args.skill.workflow.useSkillDocs !== false ? await listSkillDocs(args.skill.id) : [],
       skillFiles: await listSkillFiles(args.skill.id),
       agentDocs: docsForAgent,
-      availableMcpServers: availableMcpServersForAgent,
-      availableMcpTools: availableMcpToolsForAgent,
-      availableBuiltinTools: availableBuiltinToolsForAgent,
+      availableMcpServers: args.availableMcpServers,
+      availableMcpTools: args.availableMcpTools,
+      availableBuiltinTools: args.availableBuiltinTools,
       userInput: args.userInput,
       skillInput: args.skillInput
     });
 
     const scopedMcpServers = loaded.runtime.allowMcp
       ? loaded.runtime.allowedMcpServerIds?.length
-        ? availableMcpServersForAgent.filter((server) => loaded.runtime.allowedMcpServerIds?.includes(server.id))
-        : availableMcpServersForAgent
+        ? args.availableMcpServers.filter((server) => loaded.runtime.allowedMcpServerIds?.includes(server.id))
+        : args.availableMcpServers
       : [];
 
     const scopedMcpTools = loaded.runtime.allowMcp
-      ? availableMcpToolsForAgent.filter((entry) => scopedMcpServers.some((server) => server.id === entry.server.id))
+      ? args.availableMcpTools.filter((entry) => scopedMcpServers.some((server) => server.id === entry.server.id))
       : [];
 
     const scopedBuiltInTools = loaded.runtime.allowBuiltInTools
       ? loaded.runtime.allowedBuiltInToolIds?.length
-        ? availableBuiltinToolsForAgent.filter((tool) => loaded.runtime.allowedBuiltInToolIds?.includes(tool.id))
-        : availableBuiltinToolsForAgent
+        ? args.availableBuiltinTools.filter((tool) => loaded.runtime.allowedBuiltInToolIds?.includes(tool.id))
+        : args.availableBuiltinTools
       : [];
 
     const scopedToolEntries: ToolEntry[] = [
@@ -1783,27 +2475,25 @@ export default function App() {
       ...scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
     ];
 
-    const decisionContext = [
-      loaded.runtime.instructions ? `Skill workflow:\n${loaded.runtime.instructions}` : "",
-      loaded.runtime.loadedReferences.length
-        ? `Loaded references:\n${loaded.runtime.loadedReferences.map((doc) => `- ${doc.path}`).join("\n")}`
-        : "",
-      loaded.runtime.loadedAssets.length ? `Loaded assets:\n${loaded.runtime.loadedAssets.map((file) => `- ${file.path}`).join("\n")}` : ""
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    const finalInput = await resolveToolAugmentedInput({
-      input: loaded.finalInput,
-      agent: args.agent,
-      adapter: args.adapter,
-      availableBuiltinTools: scopedBuiltInTools,
-      availableMcpServers: scopedMcpServers,
-      availableMcpTools: scopedMcpTools,
-      toolEntries: scopedToolEntries,
-      decisionContext,
-      onStatus: args.onStatus
+    const decisionContext = buildCompactSkillDecisionContext({
+      instructions: loaded.runtime.instructions,
+      references: loaded.runtime.loadedReferences,
+      assets: loaded.runtime.loadedAssets
     });
+
+    const finalInput = args.deferToolDecision
+      ? loaded.finalInput
+      : await resolveToolAugmentedInput({
+          input: loaded.finalInput,
+          agent: args.agent,
+          adapter: args.adapter,
+          availableBuiltinTools: scopedBuiltInTools,
+          availableMcpServers: scopedMcpServers,
+          availableMcpTools: scopedMcpTools,
+          toolEntries: scopedToolEntries,
+          decisionContext,
+          onStatus: args.onStatus
+        });
 
     return {
       baseInput: loaded.finalInput,
@@ -1825,9 +2515,9 @@ export default function App() {
     agent: AgentConfig;
     adapter: ReturnType<typeof pickAdapter>;
     userInput: string;
+    assistantMessageId: string;
     onStatus?: (text: string) => void;
-  }): Promise<{ finalInput: string; trace: ChatTraceEntry[] }> {
-    const trace = [...args.initialTrace];
+  }): Promise<{ finalInput: string; trace: ChatTraceEntry[]; todo: SkillTodoItem[]; phase: SkillPhase; finalAnswerOverride?: string }> {
     const verifierAgent = resolveSkillVerifierAgent(args.agent);
     const verifierAdapter = pickAdapter(verifierAgent);
     const scopedToolEntries: ToolEntry[] = [
@@ -1835,14 +2525,364 @@ export default function App() {
       ...args.prepared.scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
     ];
 
+    const updateAssistantProgress = (todo: SkillTodoItem[], phase: SkillPhase, trace?: ChatTraceEntry[]) => {
+      patchMessage(args.assistantMessageId, {
+        skillGoal: args.userInput,
+        skillTodo: todo.length ? todo : undefined,
+        skillPhase: phase,
+        skillTrace: trace?.length ? trace : undefined,
+        statusText: formatSkillPhaseStatus(phase),
+        isStreaming: true,
+        hideWhileStreaming: false
+      });
+    };
+
+    const resolveMcpServerId = (toolName: string) => {
+      const match = args.prepared.scopedMcpTools
+        .flatMap((entry) => entry.tools.map((tool) => ({ server: entry.server, tool })))
+        .find((entry) => entry.tool.name === toolName);
+      return match?.server.id ?? null;
+    };
+
+    const chooseObservationSelection = (): BuiltInToolAction | McpAction | null => {
+      const observeScope = filterPreparedToolScopeByIntent(args.prepared, new Set<ToolIntent>(["observe"]));
+      const ranked = observeScope.toolEntries
+        .map((entry) => {
+          const name = entry.kind === "mcp" ? entry.tool.name : entry.tool.name;
+          const description = entry.kind === "mcp" ? entry.tool.description ?? "" : entry.tool.description ?? "";
+          const haystack = `${name} ${description}`.toLowerCase();
+          let score = 0;
+          if (haystack.includes("snapshot")) score += 100;
+          if (haystack.includes("get text") || haystack.includes("get_text") || haystack.includes("content") || haystack.includes("read")) score += 80;
+          if (haystack.includes("url") || haystack.includes("status") || haystack.includes("state")) score += 60;
+          if (haystack.includes("list") || haystack.includes("query") || haystack.includes("inspect")) score += 40;
+          if (haystack.includes("screenshot")) score += 20;
+          if (entry.kind === "mcp") score += 10;
+          return { entry, score };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      const candidate = ranked[0]?.entry;
+      if (!candidate) return null;
+
+      if (candidate.kind === "builtin") {
+        return {
+          type: "builtin_tool_call",
+          tool: candidate.tool.name,
+          input: {}
+        };
+      }
+
+      return {
+        type: "mcp_call",
+        serverId: candidate.server.id,
+        tool: candidate.tool.name,
+        input: {}
+      };
+    };
+
+    const buildSelectionForDecision = (decision: Extract<SkillStepDecision, { type: "act" }>): BuiltInToolAction | McpAction | null => {
+      if (decision.toolKind === "builtin") {
+        const tool = args.prepared.scopedBuiltInTools.find((item) => item.name === decision.toolName);
+        return tool ? { type: "builtin_tool_call", tool: tool.name, input: decision.input ?? {} } : null;
+      }
+      const serverId = resolveMcpServerId(decision.toolName);
+      return serverId ? { type: "mcp_call", serverId, tool: decision.toolName, input: decision.input ?? {} } : null;
+    };
+
+    const convertToolDecisionToSkillStep = (
+      selection: BuiltInToolAction | McpAction | { type: "no_tool" } | null,
+      reason: string
+    ): SkillStepDecision | null => {
+      if (!selection || selection.type === "no_tool") return null;
+      if (selection.type === "builtin_tool_call") {
+        const requestConfirmationTool =
+          args.prepared.scopedBuiltInTools.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
+          SYSTEM_BUILT_IN_TOOLS.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
+          null;
+        if (requestConfirmationTool && selection.tool === requestConfirmationTool.name) {
+          const message = String(selection.input?.message ?? reason).trim() || reason;
+          return {
+            type: "ask_user",
+            reason,
+            message
+          };
+        }
+        return {
+          type: "act",
+          reason,
+          toolKind: "builtin",
+          toolName: selection.tool,
+          input: selection.input ?? {}
+        };
+      }
+      return {
+        type: "act",
+        reason,
+        toolKind: "mcp",
+        toolName: selection.tool,
+        input: selection.input ?? {}
+      };
+    };
+
+    async function runRuntimePass(initialInput: string, initialTrace: ChatTraceEntry[]) {
+      return await runMultiTurnSkillRuntime({
+        skill: args.skill,
+        runtime: args.prepared.runtime,
+        userInput: args.userInput,
+        initialInput,
+        initialTrace,
+        toolLoopMax: skillToolLoopMax,
+        callbacks: {
+          onStatus: args.onStatus,
+          onStateChange: (state) => updateAssistantProgress(state.todo, state.phase),
+          buildToolScopeSummary: () => ({
+            summary: formatToolScopeSummary(scopedToolEntries),
+            toolCount: scopedToolEntries.length
+          }),
+          bootstrapPlan: async () =>
+            await runSkillBootstrapPlan({
+              agent: args.agent,
+              adapter: args.adapter,
+              retry: { delaySec: retryDelaySec, max: retryMax },
+              skill: args.skill,
+              runtime: args.prepared.runtime,
+              userInput: args.userInput
+            }),
+          decideNextStep: async ({ state, currentContext, toolScopeSummary, mustObserve, mustAct, phaseHint }) => {
+            if (mustObserve) {
+              return {
+                type: "observe",
+                reason: phaseHint?.trim() || "Runtime requires an observation step immediately after a state-changing action."
+              };
+            }
+
+            const fastPathScope = mustAct
+              ? filterPreparedToolScopeByIntent(args.prepared, new Set<ToolIntent>(["state_change", "control"]))
+              : { toolEntries: scopedToolEntries, scopedBuiltInTools: args.prepared.scopedBuiltInTools, scopedMcpTools: args.prepared.scopedMcpTools };
+
+            const shouldUseFastToolDecision =
+              fastPathScope.toolEntries.length > 0 &&
+              ((state.stepIndex === 0 && state.recentActionSignatures.length === 0 && state.recentObservationSignatures.length === 0) || mustAct);
+
+            if (
+              state.stepIndex === 0 &&
+              !mustAct &&
+              args.prepared.runtime.bootstrapAction &&
+              fastPathScope.toolEntries.length > 0
+            ) {
+              const bootstrap = args.prepared.runtime.bootstrapAction;
+              const toolExists =
+                bootstrap.toolKind === "builtin"
+                  ? fastPathScope.scopedBuiltInTools.some((tool) => tool.name === bootstrap.toolName)
+                  : fastPathScope.scopedMcpTools.some((entry) => entry.tools.some((tool) => tool.name === bootstrap.toolName));
+              if (toolExists) {
+                return {
+                  type: "act",
+                  reason: bootstrap.reason ?? "Use the skill bootstrap action to begin the multi-turn workflow.",
+                  toolKind: bootstrap.toolKind,
+                  toolName: bootstrap.toolName,
+                  input: bootstrap.input ?? {}
+                };
+              }
+            }
+
+            if (shouldUseFastToolDecision) {
+              const fastReason =
+                state.stepIndex === 0
+                  ? "Initial multi-turn step should start with a concrete tool action when tools are available."
+                  : "Repeated observation did not advance the workflow, so choose a concrete action or ask_user.";
+              const fastPrompt = [
+                stripPreviousToolPromptSummaries(currentContext),
+                state.stepIndex === 0
+                  ? "Internal runtime request: choose the first concrete tool step for this multi-turn workflow."
+                  : "Internal runtime request: repeated observation did not advance the workflow. Choose one concrete action or ask_user. Do not choose observe."
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+
+              const fastDecision = await runToolDecision({
+                agent: args.agent,
+                adapter: args.adapter,
+                userInput: args.prepared.decisionContext ? `${fastPrompt}\n\nCurrent loaded skill context (internal only):\n${args.prepared.decisionContext}` : fastPrompt,
+                retry: { delaySec: retryDelaySec, max: retryMax },
+                toolEntries: fastPathScope.toolEntries,
+                promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
+                fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
+              });
+
+              if (fastDecision) {
+                const normalizedFastDecision = normalizeToolDecisionAgainstAvailableTools({
+                  decision: fastDecision,
+                  availableBuiltinTools: fastPathScope.scopedBuiltInTools,
+                  availableMcpServers: args.prepared.scopedMcpServers,
+                  availableMcpTools: fastPathScope.scopedMcpTools
+                });
+                const stepDecision = convertToolDecisionToSkillStep(normalizedFastDecision, fastReason);
+                if (stepDecision) {
+                  return stepDecision;
+                }
+              }
+            }
+
+            return await runSkillStepPlanner({
+              agent: args.agent,
+              adapter: args.adapter,
+              retry: { delaySec: retryDelaySec, max: retryMax },
+              state,
+              skill: args.skill,
+              runtime: args.prepared.runtime,
+              userInput: args.userInput,
+              currentContext,
+              toolScopeSummary,
+              mustObserve,
+              mustAct,
+              phaseHint
+            });
+          },
+          runObservation: async ({ currentContext }) => {
+            const selection = chooseObservationSelection();
+            if (!selection) {
+              return {
+                context: currentContext,
+                detail: "目前沒有可用的 observation 工具。"
+              };
+            }
+            const result = await executeResolvedToolSelection({
+              selection,
+              input: currentContext,
+              agent: args.agent,
+              availableBuiltinTools: args.prepared.scopedBuiltInTools,
+              availableMcpServers: args.prepared.scopedMcpServers,
+              availableMcpTools: args.prepared.scopedMcpTools,
+              onStatus: args.onStatus,
+              promptDetail: "actionable"
+            });
+
+            return {
+              context: result.input,
+              detail: result.detail,
+              observationSignature: result.observationSignature,
+              actionSignature: result.actionSignature
+            };
+          },
+          runAction: async ({ decision, currentContext }) => {
+            const selection = buildSelectionForDecision(decision);
+            if (!selection) {
+              const detail = `找不到可用工具：${decision.toolKind}/${decision.toolName}`;
+              return {
+                context: appendToolPromptSummary(currentContext, detail),
+                detail,
+                toolLabel: `${decision.toolKind}:${decision.toolName}`
+              };
+            }
+
+            const result = await executeResolvedToolSelection({
+              selection,
+              input: currentContext,
+              agent: args.agent,
+              availableBuiltinTools: args.prepared.scopedBuiltInTools,
+              availableMcpServers: args.prepared.scopedMcpServers,
+              availableMcpTools: args.prepared.scopedMcpTools,
+              onStatus: args.onStatus,
+              promptDetail: "actionable"
+            });
+
+            return {
+              context: result.input,
+              detail: result.detail,
+              toolLabel: result.toolLabel,
+              actionSignature: result.actionSignature,
+              observationSignature: result.observationSignature,
+              confirmed: typeof result.toolOutput?.confirmed === "boolean" ? result.toolOutput.confirmed : null
+            };
+          },
+          runManualGate: async ({ decision, currentContext }) => {
+            const requestTool =
+              args.prepared.scopedBuiltInTools.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
+              SYSTEM_BUILT_IN_TOOLS.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
+              null;
+            if (!requestTool) {
+              return {
+                context: currentContext,
+                detail: decision.message,
+                confirmed: false
+              };
+            }
+
+            const manualResult = await executeResolvedToolSelection({
+              selection: {
+                type: "builtin_tool_call",
+                tool: requestTool.name,
+                input: { message: decision.message }
+              },
+              input: currentContext,
+              agent: args.agent,
+              availableBuiltinTools: args.prepared.scopedBuiltInTools.some((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID)
+                ? args.prepared.scopedBuiltInTools
+                : [...args.prepared.scopedBuiltInTools, requestTool],
+              availableMcpServers: args.prepared.scopedMcpServers,
+              availableMcpTools: args.prepared.scopedMcpTools,
+              onStatus: args.onStatus,
+              promptDetail: "actionable"
+            });
+
+            return {
+              context: manualResult.input,
+              detail: manualResult.detail ?? decision.message,
+              toolLabel: manualResult.toolLabel,
+              actionSignature: manualResult.actionSignature,
+              confirmed: typeof manualResult.toolOutput?.confirmed === "boolean" ? manualResult.toolOutput.confirmed : null
+            };
+          },
+          checkCompletion: async ({ state, currentContext, toolScopeSummary }) =>
+            await runSkillCompletionGate({
+              agent: args.agent,
+              adapter: args.adapter,
+              retry: { delaySec: retryDelaySec, max: retryMax },
+              state,
+              skill: args.skill,
+              runtime: args.prepared.runtime,
+              userInput: args.userInput,
+              currentContext,
+              toolScopeSummary
+            })
+        }
+      });
+    }
+
+    let trace = [...args.initialTrace];
     pushSkillExecutionModeTrace(trace, {
       mode: "multi_turn",
       verifyMax: skillVerifyMax,
+      toolLoopMax: skillToolLoopMax,
       verifierName: verifierAgent.name
     });
+    updateAssistantProgress([], "skill_load", trace);
+
+    args.onStatus?.("正在依 skill 規劃多步工具流程中…");
+    let runtimeResult = await runRuntimePass(args.prepared.finalInput, trace);
+    trace = runtimeResult.trace;
+    updateAssistantProgress(runtimeResult.todo, runtimeResult.phase, trace);
+
+    let currentInput = runtimeResult.finalInput;
+    let currentTodo = runtimeResult.todo;
+    let currentPhase = runtimeResult.phase;
+
+    if (runtimeResult.finalAnswerOverride) {
+      pushSkillTrace(trace, "Final answer", "已由 multi-turn runtime 直接產生 blocked/manual summary。");
+      currentPhase = "final_answer";
+      updateAssistantProgress(currentTodo, currentPhase, trace);
+      return {
+        finalInput: currentInput,
+        trace,
+        todo: currentTodo,
+        phase: currentPhase,
+        finalAnswerOverride: runtimeResult.finalAnswerOverride
+      };
+    }
 
     args.onStatus?.("正在依 skill 產生初版回答中…");
-    let currentInput = args.prepared.finalInput;
     let currentAnswer = await runOneToOne({
       adapter: args.adapter,
       agent: args.agent,
@@ -1855,13 +2895,16 @@ export default function App() {
     });
 
     pushSkillTrace(trace, "Skill answer round 1", currentAnswer);
+    currentPhase = "final_answer";
+    updateAssistantProgress(currentTodo, currentPhase, trace);
 
     if (skillVerifyMax === 0) {
-      pushSkillTrace(trace, "Skill verify", "已設定 verify 次數為 0，略過 refine。");
-      return { finalInput: currentInput, trace };
+      pushSkillTrace(trace, "Verify/refine", "已設定 verify 次數為 0，略過 refine。");
+      return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
     }
 
     for (let round = 1; round <= skillVerifyMax; round++) {
+      updateAssistantProgress(currentTodo, "verify_refine", trace);
       args.onStatus?.(`正在進行 skill verify 第 ${round} 輪…`);
       const verifyDecision = await runSkillVerifyDecision({
         answeringAgent: args.agent,
@@ -1877,23 +2920,29 @@ export default function App() {
       });
 
       if (!verifyDecision) {
-        pushSkillTrace(trace, `Skill verify round ${round}`, "Verifier 在重試後仍未回傳合法 JSON，停止 refine。");
+        pushSkillTrace(trace, `Verify/refine`, `第 ${round} 輪 verifier 未回傳合法 JSON，停止 refine。`);
         break;
       }
 
       if (verifyDecision.type === "pass") {
         pushSkillTrace(
           trace,
-          `Skill verify round ${round}`,
-          [`結果：通過`, verifyDecision.reason ? `原因：${verifyDecision.reason}` : ""].filter(Boolean).join("\n")
+          "Verify/refine",
+          [`第 ${round} 輪結果：通過`, verifyDecision.reason ? `原因：${verifyDecision.reason}` : ""].filter(Boolean).join("\n")
         );
-        return { finalInput: currentInput, trace };
+        currentPhase = "final_answer";
+        updateAssistantProgress(currentTodo, currentPhase, trace);
+        return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
       }
 
       pushSkillTrace(
         trace,
-        `Skill verify round ${round}`,
-        [`結果：需要 refine`, `原因：${verifyDecision.reason}`, verifyDecision.revisionPrompt ? `Revision prompt:\n${verifyDecision.revisionPrompt}` : ""]
+        "Verify/refine",
+        [
+          `第 ${round} 輪結果：需要 refine`,
+          `原因：${verifyDecision.reason}`,
+          verifyDecision.revisionPrompt ? `Revision prompt:\n${verifyDecision.revisionPrompt}` : ""
+        ]
           .filter(Boolean)
           .join("\n")
       );
@@ -1905,19 +2954,25 @@ export default function App() {
       });
 
       args.onStatus?.(`正在依 verifier 建議進行第 ${round} 輪修正…`);
-      currentInput = await resolveToolAugmentedInput({
-        input: refinedBaseInput,
-        agent: args.agent,
-        adapter: args.adapter,
-        availableBuiltinTools: args.prepared.scopedBuiltInTools,
-        availableMcpServers: args.prepared.scopedMcpServers,
-        availableMcpTools: args.prepared.scopedMcpTools,
-        toolEntries: scopedToolEntries,
-        decisionContext: args.prepared.decisionContext,
-        onStatus: args.onStatus
-      });
+      runtimeResult = await runRuntimePass(refinedBaseInput, trace);
+      trace = runtimeResult.trace;
+      currentInput = runtimeResult.finalInput;
+      currentTodo = runtimeResult.todo;
+      currentPhase = runtimeResult.phase;
+      updateAssistantProgress(currentTodo, currentPhase, trace);
 
-      pushSkillTrace(trace, `Skill refine round ${round}`, currentInput);
+      if (runtimeResult.finalAnswerOverride) {
+        pushSkillTrace(trace, "Final answer", "refine 後由 multi-turn runtime 直接產生 blocked/manual summary。");
+        currentPhase = "final_answer";
+        updateAssistantProgress(currentTodo, currentPhase, trace);
+        return {
+          finalInput: currentInput,
+          trace,
+          todo: currentTodo,
+          phase: currentPhase,
+          finalAnswerOverride: runtimeResult.finalAnswerOverride
+        };
+      }
 
       args.onStatus?.(`正在產生第 ${round + 1} 輪回答中…`);
       currentAnswer = await runOneToOne({
@@ -1932,10 +2987,12 @@ export default function App() {
       });
 
       pushSkillTrace(trace, `Skill answer round ${round + 1}`, currentAnswer);
+      currentPhase = "final_answer";
+      updateAssistantProgress(currentTodo, currentPhase, trace);
     }
 
-    pushSkillTrace(trace, "Skill verify", `已達最大 verify 次數 ${skillVerifyMax}，回傳最後一次 refine 的結果。`);
-    return { finalInput: currentInput, trace };
+    pushSkillTrace(trace, "Verify/refine", `已達最大 verify 次數 ${skillVerifyMax}，回傳最後一次 refine 的結果。`);
+    return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
   }
 
   function readUserAvatar(file: File | undefined) {
@@ -2044,6 +3101,13 @@ export default function App() {
         };
         const resolvedActiveAgent = hydrateAgentCredentials(activeAgent);
         const adapter = pickAdapter(resolvedActiveAgent);
+        const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
+          onStatus: setAssistantStatus
+        });
+        const resolvedToolEntries: ToolEntry[] = [
+          ...resolvedMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
+          ...availableBuiltinToolsForAgent.map((tool) => ({ kind: "builtin" as const, tool }))
+        ];
         let finalInput = input;
         let finalSystem = userSystem;
         const skillTrace: ChatTraceEntry[] = [];
@@ -2085,8 +3149,8 @@ export default function App() {
               adapter,
               availableBuiltinTools: availableBuiltinToolsForAgent,
               availableMcpServers: availableMcpServersForAgent,
-              availableMcpTools: availableMcpToolsForAgent,
-              toolEntries: availableToolsForAgent,
+              availableMcpTools: resolvedMcpToolsForAgent,
+              toolEntries: resolvedToolEntries,
               onStatus: setAssistantStatus
             });
           } else if (skillDecision.type === "no_skill") {
@@ -2098,8 +3162,8 @@ export default function App() {
               adapter,
               availableBuiltinTools: availableBuiltinToolsForAgent,
               availableMcpServers: availableMcpServersForAgent,
-              availableMcpTools: availableMcpToolsForAgent,
-              toolEntries: availableToolsForAgent,
+              availableMcpTools: resolvedMcpToolsForAgent,
+              toolEntries: resolvedToolEntries,
               onStatus: setAssistantStatus
             });
           } else {
@@ -2123,8 +3187,8 @@ export default function App() {
                 adapter,
                 availableBuiltinTools: availableBuiltinToolsForAgent,
                 availableMcpServers: availableMcpServersForAgent,
-                availableMcpTools: availableMcpToolsForAgent,
-                toolEntries: availableToolsForAgent,
+                availableMcpTools: resolvedMcpToolsForAgent,
+                toolEntries: resolvedToolEntries,
                 onStatus: setAssistantStatus
               });
             } else {
@@ -2140,6 +3204,10 @@ export default function App() {
                 userInput: input,
                 agent: resolvedActiveAgent,
                 adapter,
+                availableBuiltinTools: availableBuiltinToolsForAgent,
+                availableMcpServers: availableMcpServersForAgent,
+                availableMcpTools: resolvedMcpToolsForAgent,
+                deferToolDecision: skillExecutionMode === "multi_turn",
                 onStatus: setAssistantStatus
               });
               preparedSkillExecution = prepared;
@@ -2167,8 +3235,8 @@ export default function App() {
             adapter,
             availableBuiltinTools: availableBuiltinToolsForAgent,
             availableMcpServers: availableMcpServersForAgent,
-            availableMcpTools: availableMcpToolsForAgent,
-            toolEntries: availableToolsForAgent,
+            availableMcpTools: resolvedMcpToolsForAgent,
+            toolEntries: resolvedToolEntries,
             onStatus: setAssistantStatus
           });
         }
@@ -2182,18 +3250,39 @@ export default function App() {
               agent: resolvedActiveAgent,
               adapter,
               userInput: input,
+              assistantMessageId: assistantId,
               onStatus: setAssistantStatus
             });
             finalInput = executed.finalInput;
             finalSystem = preparedSkillExecution.system;
             patchMessage(assistantId, {
               skillTrace: executed.trace.length ? executed.trace : undefined,
+              skillGoal: input,
+              skillTodo: executed.todo.length ? executed.todo : undefined,
+              skillPhase: executed.phase,
               statusText: "正在生成最終回覆中…",
               isStreaming: true,
               hideWhileStreaming: false
             });
             skillTrace.length = 0;
             skillTrace.push(...executed.trace);
+            if (executed.finalAnswerOverride) {
+              finalizeAssistant({
+                content: executed.finalAnswerOverride,
+                skillTrace: executed.trace.length ? executed.trace : undefined,
+                skillGoal: input,
+                skillTodo: executed.todo.length ? executed.todo : undefined,
+                skillPhase: executed.phase
+              });
+              logNow({
+                category: "chat",
+                agent: activeAgent.name,
+                ok: true,
+                message: "normal talking completed via multi-turn runtime override",
+                details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
+              });
+              return;
+            }
           }
 
           if (skillExecutionMode !== "multi_turn") {
@@ -2206,6 +3295,7 @@ export default function App() {
 
         patchMessage(assistantId, {
           skillTrace: skillTrace.length ? skillTrace : undefined,
+          skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined,
           statusText: "正在生成回覆中…",
           isStreaming: true
         });
@@ -2239,7 +3329,8 @@ export default function App() {
         });
         finalizeAssistant({
           content: full,
-          skillTrace: skillTrace.length ? skillTrace : undefined
+          skillTrace: skillTrace.length ? skillTrace : undefined,
+          skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined
         });
         logNow({
           category: "chat",
@@ -2578,6 +3669,37 @@ export default function App() {
     setSkillPanelFiles(files);
   }
 
+  async function ensureTutorialChatgptBrowserSkill() {
+    const all = await listSkills();
+    let target =
+      all.find((skill) => skill.rootPath === TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT) ??
+      all.find((skill) => skill.name === TUTORIAL_CHATGPT_BROWSER_SKILL_NAME) ??
+      null;
+
+    if (!target) {
+      target = await createEmptySkill(TUTORIAL_CHATGPT_BROWSER_SKILL_NAME);
+    }
+
+    target = await updateSkillMarkdown(target.id, TUTORIAL_CHATGPT_BROWSER_SKILL_MARKDOWN);
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_CHATGPT_BROWSER_REFERENCE_PATH,
+      kind: "reference",
+      content: TUTORIAL_CHATGPT_BROWSER_REFERENCE_CONTENT
+    });
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_CHATGPT_BROWSER_ASSET_PATH,
+      kind: "asset",
+      content: TUTORIAL_CHATGPT_BROWSER_ASSET_CONTENT
+    });
+
+    const next = await listSkills();
+    setSkills(next);
+    setSkillPanelSelectedId(target.id);
+    const [docs, files] = await Promise.all([listSkillDocs(target.id), listSkillFiles(target.id)]);
+    setSkillPanelDocs(docs);
+    setSkillPanelFiles(files);
+  }
+
   function onChangeMcpServers(next: McpServerConfig[]) {
     const prev = mcpServers;
     setMcpServers(next);
@@ -2800,7 +3922,7 @@ export default function App() {
                 }}
                 data-tutorial-id="chat-config-agent-card"
               >
-                <span className="cc-card-label">Agent</span>
+                <span className="cc-card-label">Main Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">{activeAgent?.type ?? ""}{activeAgent?.model ? ` · ${activeAgent.model}` : ""}</span>
               </button>
@@ -3144,11 +4266,13 @@ export default function App() {
                   activeAgentId={activeAgentId}
                   executionMode={skillExecutionMode}
                   verifyMax={skillVerifyMax}
+                  toolLoopMax={skillToolLoopMax}
                   verifierAgentId={skillVerifierAgentId}
                   builtInTools={allBuiltInTools}
                   mcpToolCatalog={globalMcpToolCatalog}
                   onChangeExecutionMode={setSkillExecutionMode}
                   onChangeVerifyMax={(value) => setSkillVerifyMax(clampSkillVerifyMax(value))}
+                  onChangeToolLoopMax={(value) => setSkillToolLoopMax(clampSkillToolLoopMax(value))}
                   onChangeVerifierAgentId={setSkillVerifierAgentId}
                   onSelect={setSkillPanelSelectedId}
                   onImport={onImportSkill}

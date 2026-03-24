@@ -121,7 +121,11 @@ export default function BuiltInToolsPanel(props: {
               hasAvatar: !!state.userAvatarUrl
             };
           },
-          pick_best_agent_for_question: pickBestSavedAgentForQuestion
+          pick_best_agent_for_question: pickBestSavedAgentForQuestion,
+          request_user_confirmation: async (message: string) => {
+            const confirmed = window.confirm(String(message ?? "").trim() || "是否繼續？");
+            return { confirmed };
+          }
         }
       });
       setTestResult(stringifyAny(output));

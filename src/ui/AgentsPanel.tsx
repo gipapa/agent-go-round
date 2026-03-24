@@ -125,8 +125,8 @@ export default function AgentsPanel(props: {
                   alignItems: "center",
                   padding: 12,
                   borderRadius: 14,
-                  border: isActive ? "1px solid #5b6bff" : isSelected ? "1px solid rgba(91,123,255,0.35)" : "1px solid #222636",
-                  background: isActive ? "#13162a" : isSelected ? "#111522" : "#0f1118",
+                  border: isSelected ? "1px solid #5b6bff" : isActive ? "1px solid rgba(91,123,255,0.2)" : "1px solid #222636",
+                  background: isSelected ? "#13162a" : isActive ? "#111522" : "#0f1118",
                   color: "white"
                 }}
                 data-tutorial-id={isActive ? "agents-active-row" : undefined}
@@ -161,21 +161,6 @@ export default function AgentsPanel(props: {
                   <div className="agents-actions" style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
                     <button
                       type="button"
-                      onClick={() => props.onSetMain(a.id)}
-                      style={{
-                        ...btnSmall,
-                        borderColor: isActive ? "#5b6bff" : "#2a395f",
-                        background: isActive ? "rgba(91,123,255,0.18)" : "#141b2d",
-                        color: isActive ? "#dfe6ff" : "white",
-                        cursor: isActive ? "default" : "pointer"
-                      }}
-                      disabled={isActive}
-                      data-tutorial-id={isActive ? "agents-main-active-button" : "agents-set-main-button"}
-                    >
-                      Main
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => setDraft(a)}
                       style={btnSmall}
                       data-tutorial-id={isActive ? "agents-edit-active-button" : undefined}
@@ -197,6 +182,21 @@ export default function AgentsPanel(props: {
                     </button>
                     <button type="button" onClick={() => props.onDelete(a.id)} style={btnDangerSmall}>
                       Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => props.onSetMain(a.id)}
+                      style={{
+                        ...btnSmall,
+                        borderColor: isActive ? "#5b6bff" : "#2a395f",
+                        background: isActive ? "rgba(91,123,255,0.18)" : "#141b2d",
+                        color: isActive ? "#dfe6ff" : "white",
+                        cursor: isActive ? "default" : "pointer"
+                      }}
+                      disabled={isActive}
+                      data-tutorial-id={isActive ? "agents-main-active-button" : "agents-set-main-button"}
+                    >
+                      Main
                     </button>
                   </div>
                 ) : isActive ? (
@@ -875,8 +875,8 @@ function Editor(props: {
         {showUserInfoHelp && (
           <HelpModal title="系統工具說明與測試方式" onClose={() => setShowUserInfoHelp(false)}>
             <div style={helpText}>
-              在 <strong>Built-in Tools</strong> 裡，除了使用者自訂的 JS tools，也有兩個系統工具：
-              <code>get_user_profile</code> 與 <code>pick_best_agent_for_question</code>。
+              在 <strong>Built-in Tools</strong> 裡，除了使用者自訂的 JS tools，也有三個系統工具：
+              <code>get_user_profile</code>、<code>pick_best_agent_for_question</code> 與 <code>request_user_confirmation</code>。
             </div>
             <div style={{ ...helpText, marginTop: 8 }}>
               使用方式：
@@ -892,6 +892,10 @@ function Editor(props: {
               或
               <br />
               <code>[系統工具]允許存取所有Agent清單(pick_best_agent_for_question)</code>
+              <br />
+              或
+              <br />
+              <code>[系統工具]請求使用者確認(request_user_confirmation)</code>
               <br />
               4. 回到 <strong>Chat</strong> 後，agent 就能在工具判斷階段決定是否呼叫這些系統工具
             </div>

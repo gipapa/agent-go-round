@@ -5,6 +5,7 @@ export type UiState = {
   mode?: OrchestratorMode;
   skillExecutionMode?: SkillExecutionMode;
   skillVerifyMax?: number;
+  skillToolLoopMax?: number;
   skillVerifierAgentId?: string;
   activeAgentId?: string;
   memberAgentIds?: string[];

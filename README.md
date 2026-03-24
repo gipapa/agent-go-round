@@ -96,12 +96,13 @@
 ### 2.1 Onboarding / 案例教學
 
 - 入口在首頁 `使用案例教學`
-- 目前提供五個案例：
+- 目前提供六個案例：
   - `[1] 自訂 Agent 並完成第一次對話`
   - `[2] 建立 DOC 並驗證內容注入`
   - `[3] 使用 Built-in Tools 完成工具對話`
   - `[4] 使用 Sequential Thinking Skill 驗證單輪能力`
   - `[5] 使用 agent-browser MCP 讀取 GitHub Trending`
+  - `[6] 使用多輪 Skill 操作 Google AI 模式`
 - 教學模式特性：
   - 左側固定 checklist 與系統提示
   - 右側保留真實可操作的 app 介面
@@ -190,9 +191,14 @@ skill-name/
   - 適合語氣調整、回答框架、輕量 docs/tool 輔助
   - 不會在最終回答後做 refine
 - `multi_turn`
-  - 會先在背景執行 verify / refine
-  - 最後一輪答案再以 streaming 顯示
-  - 可設定 verify 次數與 verifier agent
+  - 採顯式 phase runtime，而不是單輪 tool decision 疊補丁
+  - 會建立 todo 清單、追蹤 phase、在 chat 內顯示唯讀 todo 面板
+  - 適合 browser automation、需要 `observe -> act -> observe` 的 workflow
+  - 可設定工具步數上限、verify 次數與 verifier agent
+
+多輪 skill 的完整設計與實作細節已整理在：
+
+- [agentic.md](./agentic.md)
 
 #### 技能與工具整合
 
@@ -212,6 +218,11 @@ skill-name/
     - `正在載入 skill...`
     - `正在呼叫 MCP 工具...`
     - `正在進行 skill verify...`
+  - multi-turn skill 命中時，assistant 訊息下方會直接顯示 todo 面板：
+    - 目標
+    - 待辦清單
+    - 目前進行中
+    - blocked 原因
   - 完成後可展開查看：
     - `查看思考過程`
     - `查看 tool result`
@@ -273,6 +284,14 @@ npm run test:real_tutorial
 - 逐案例列印真實執行狀態與 assistant 回覆
 - 測試完成後自動清除本網站的 `localStorage` 與 `IndexedDB`
 
+若你只想針對某一個案例做真實驗證，可以指定：
+
+```bash
+REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
+```
+
+這對 multi-turn skill / agent-browser 這類高成本案例特別有用。
+
 `.tutorial-test.local.json` 範例：
 
 ```json
@@ -288,6 +307,9 @@ npm run test:real_tutorial
 
 - `test:real_tutorial` 目前是 `Groq-only`
 - 案例 5 只驗證 MCP / browser automation 流程能跑通，不驗證最終內容品質
+- 案例 6 的 acceptance 允許兩條成功路徑：
+  - 真正完成 Google AI 流程
+  - 正確辨識 blocked / manual 狀態並給出最終總結
 
 Vitest 全量測試：
 

@@ -12,6 +12,10 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
     composerSeed: typeof input.composerSeed === "string" ? input.composerSeed.trim() : undefined,
     clearChatOnEnter: input.clearChatOnEnter === true,
     skillExecutionMode: input.skillExecutionMode === "multi_turn" ? "multi_turn" : input.skillExecutionMode === "single_turn" ? "single_turn" : undefined,
+    skillVerifyMax: typeof input.skillVerifyMax === "number" ? input.skillVerifyMax : undefined,
+    skillToolLoopMax: typeof input.skillToolLoopMax === "number" ? input.skillToolLoopMax : undefined,
+    retryDelaySec: typeof input.retryDelaySec === "number" ? input.retryDelaySec : undefined,
+    retryMax: typeof input.retryMax === "number" ? input.retryMax : undefined,
     activeAgentPreset:
       input.activeAgentPreset === "tutorial_agent" || input.activeAgentPreset === "tutorial_agent_base"
         ? input.activeAgentPreset
@@ -21,10 +25,15 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
           userPrompt: typeof expectInput.userPrompt === "string" ? expectInput.userPrompt.trim() : undefined,
           requireAssistant: expectInput.requireAssistant !== false,
           assistantContentIncludes: normalizeStringArray(expectInput.assistantContentIncludes),
+          assistantContentIncludesAny: normalizeStringArray(expectInput.assistantContentIncludesAny),
           successfulToolMessageIncludes: normalizeStringArray(expectInput.successfulToolMessageIncludes),
+          successfulToolMessageIncludesAny: normalizeStringArray(expectInput.successfulToolMessageIncludesAny),
           requireOpenedToolResult: expectInput.requireOpenedToolResult === true,
           skillTraceIncludes: normalizeStringArray(expectInput.skillTraceIncludes),
-          skillLoadContainsAny: normalizeStringArray(expectInput.skillLoadContainsAny)
+          skillTraceIncludesAny: normalizeStringArray(expectInput.skillTraceIncludesAny),
+          skillLoadContainsAny: normalizeStringArray(expectInput.skillLoadContainsAny),
+          requireSkillTodo: expectInput.requireSkillTodo === true,
+          requireSkillTodoProgress: expectInput.requireSkillTodoProgress === true
         }
       : undefined
   };
@@ -33,6 +42,10 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
     !automation.composerSeed &&
     !automation.clearChatOnEnter &&
     !automation.skillExecutionMode &&
+    automation.skillVerifyMax === undefined &&
+    automation.skillToolLoopMax === undefined &&
+    automation.retryDelaySec === undefined &&
+    automation.retryMax === undefined &&
     !automation.activeAgentPreset &&
     !automation.expect
   ) {

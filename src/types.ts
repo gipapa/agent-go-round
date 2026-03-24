@@ -7,6 +7,29 @@ export type ChatTraceEntry = {
   content: string;
 };
 
+export type SkillTodoStatus = "pending" | "in_progress" | "completed" | "blocked";
+export type SkillTodoSource = "skill" | "planner" | "system";
+export type SkillPhase =
+  | "skill_load"
+  | "bootstrap_plan"
+  | "observe"
+  | "plan_next_step"
+  | "act"
+  | "sync_state"
+  | "completion_gate"
+  | "manual_gate"
+  | "final_answer"
+  | "verify_refine";
+
+export type SkillTodoItem = {
+  id: string;
+  label: string;
+  status: SkillTodoStatus;
+  source: SkillTodoSource;
+  reason?: string;
+  updatedAt: number;
+};
+
 export type ChatMessage = {
   id: string;
   role: Role;
@@ -18,6 +41,9 @@ export type ChatMessage = {
   isStreaming?: boolean;
   hideWhileStreaming?: boolean;
   skillTrace?: ChatTraceEntry[];
+  skillGoal?: string;
+  skillTodo?: SkillTodoItem[];
+  skillPhase?: SkillPhase;
   ts: number;
 };
 
@@ -117,6 +143,12 @@ export type SkillWorkflowPolicy = {
   allowBuiltInTools?: boolean;
   allowedMcpServerIds?: string[];
   allowedBuiltInToolIds?: string[];
+  bootstrapAction?: {
+    toolKind: "mcp" | "builtin";
+    toolName: string;
+    input?: any;
+    reason?: string;
+  };
 };
 
 export type SkillConfig = {
@@ -152,6 +184,58 @@ export type SkillSessionSnapshot = {
   availableSkills: SkillAvailability[];
 };
 
+export type SkillStepDecision =
+  | {
+      type: "observe";
+      reason: string;
+      todoIds?: string[];
+    }
+  | {
+      type: "act";
+      reason: string;
+      toolKind: "mcp" | "builtin";
+      toolName: string;
+      input?: any;
+      todoIds?: string[];
+    }
+  | {
+      type: "ask_user";
+      reason: string;
+      message: string;
+      todoIds?: string[];
+    }
+  | {
+      type: "finish";
+      reason: string;
+      todoIds?: string[];
+    };
+
+export type SkillCompletionDecision =
+  | {
+      type: "complete";
+      reason?: string;
+      todoIds?: string[];
+    }
+  | {
+      type: "incomplete";
+      reason: string;
+      suggestedFocus?: string;
+      todoIds?: string[];
+    };
+
+export type SkillRunState = {
+  skillId: string;
+  goal: string;
+  phase: SkillPhase;
+  stepIndex: number;
+  todo: SkillTodoItem[];
+  recentObservationSignatures: string[];
+  recentActionSignatures: string[];
+  manualGate: "none" | "awaiting_user_confirmation" | "awaiting_manual_browser_step" | "resumable";
+  completionStatus: "unknown" | "complete" | "incomplete";
+  latestReason?: string;
+};
+
 export type LoadedSkillReference = {
   path: string;
   content: string;
@@ -170,6 +254,7 @@ export type LoadedSkillRuntime = {
   allowBuiltInTools: boolean;
   allowedMcpServerIds?: string[];
   allowedBuiltInToolIds?: string[];
+  bootstrapAction?: SkillWorkflowPolicy["bootstrapAction"];
 };
 
 export type SkillDocItem = {

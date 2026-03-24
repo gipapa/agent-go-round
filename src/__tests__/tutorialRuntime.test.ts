@@ -88,9 +88,15 @@ describe("tutorial YAML automation linkage", () => {
       setActiveAgentId: vi.fn(),
       setSelectedAgentId: vi.fn(),
       setSkillExecutionMode: vi.fn(),
+      setSkillVerifyMax: vi.fn(),
+      setSkillToolLoopMax: vi.fn(),
+      setRetryDelaySec: vi.fn(),
+      setRetryMax: vi.fn(),
       setComposerSeed: vi.fn(),
       clearChat: vi.fn(),
-      ensureTutorialSequentialSkill: vi.fn()
+      ensureTutorialAgentBrowserMcpTools: vi.fn(),
+      ensureTutorialSequentialSkill: vi.fn(),
+      ensureTutorialChatgptBrowserSkill: vi.fn()
     };
 
     applyTutorialStepEntry(
@@ -140,5 +146,33 @@ describe("tutorial YAML automation linkage", () => {
     const step = getStep("built-in-tools-chat", "set-history-limit");
     expect(evaluateTutorialStep(step, makeState({ historyMessageLimit: 10 })).completed).toBe(false);
     expect(evaluateTutorialStep(step, makeState({ historyMessageLimit: 1 })).completed).toBe(true);
+  });
+
+  it("keeps multi-turn browser skill runtime parameters in YAML", () => {
+    const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+    expect(step.automation?.skillExecutionMode).toBe("multi_turn");
+    expect(step.automation?.skillToolLoopMax).toBe(8);
+    expect(step.automation?.skillVerifyMax).toBe(2);
+    expect(step.automation?.retryDelaySec).toBe(10);
+    expect(step.automation?.retryMax).toBe(10);
+    expect(step.automation?.composerSeed).toBe("請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」");
+    expect(step.automation?.expect?.requireSkillTodo).toBe(true);
+    expect(step.automation?.expect?.requireSkillTodoProgress).toBe(true);
+  });
+
+  it("uses multi-turn todo expectations for the Google AI browser skill step", () => {
+    const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const assistant = makeAssistant("assistant-multi-turn", "這是多輪 skill 回覆", {
+      skillTrace: [{ label: "Skill load", content: "已載入 skill：google-ai-browser-multiturn" }],
+      skillTodo: [
+        { id: "todo-1", label: "打開 Google", status: "completed", source: "planner", updatedAt: Date.now() },
+        { id: "todo-2", label: "輸入問題", status: "in_progress", source: "planner", updatedAt: Date.now() }
+      ],
+      skillPhase: "act"
+    });
+    const tool = makeTool("MCP 教學用MCP -> browser_open");
+    const result = evaluateTutorialStep(step, makeState({ history: [makeUser(prompt), tool, assistant], openedToolResultMessageIds: [assistant.id] }));
+    expect(result.completed).toBe(true);
   });
 });
