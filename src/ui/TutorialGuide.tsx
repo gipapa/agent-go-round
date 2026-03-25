@@ -18,16 +18,12 @@ export default function TutorialGuide(props: {
     <aside className="tutorial-sidebar" data-onboarding-surface="sidebar">
       <div className="tutorial-sidebar-topline">
         <div className="tutorial-sidebar-kicker">案例教學</div>
-        <div className="tutorial-agent-chip" data-onboarding-surface="agent">
-          <span className="tutorial-agent-chip-label">Active Agent</span>
-          <span className="tutorial-agent-chip-name">{props.activeAgentName}</span>
-        </div>
+        <div className="tutorial-agent-chip" data-onboarding-surface="agent">{`Agent: ${props.activeAgentName}`}</div>
       </div>
       <div className="tutorial-sidebar-title">{props.scenario.title}</div>
       <div className="tutorial-sidebar-copy">{props.scenario.description}</div>
-      {props.lockedAgentLabel || props.activeAgentWarning ? (
+      {props.activeAgentWarning ? (
         <div className="tutorial-agent-inline-note">
-          {props.lockedAgentLabel ? <span>{props.lockedAgentLabel}</span> : null}
           {props.activeAgentWarning ? <span className="tutorial-agent-inline-warning">{props.activeAgentWarning}</span> : null}
         </div>
       ) : null}

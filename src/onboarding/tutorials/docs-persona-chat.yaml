@@ -22,16 +22,16 @@ steps:
   - id: create-doc
     title: 建立教學文件
     checklistLabel: 建立教學用DOC
-    instructionTitle: 第一步：建立一份文件
+    instructionTitle: 第一步：系統會自動建立教學文件
     instructionBody: |
-      請前往 Chat Config 頁籤，按下 Docs 進入文件設定。
+      我已經幫你切到 Chat Config，並會自動建立這份文件。
 
-      接著建立一份新文件：
+      文件內容固定為：
       - Title：教學用DOC
       - Content：你是個說話結尾都會喵喵叫的助手。每次回答的結尾都要補上一句喵。
 
-      建立完成後按下 Save。只要文件名稱與內容正確，這一步就算完成。
-    completionLabel: 等待你建立教學文件
+      你可以按下 Docs 檢查內容是否正確；只要名稱與內容一致，這一步就算完成。
+    completionLabel: 等待系統建立教學文件
     tab: chat_config
     targetId: chat-config-docs-card
     behavior: create_tutorial_doc

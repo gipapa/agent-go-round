@@ -72,10 +72,15 @@ import TutorialGuide from "../ui/TutorialGuide";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   applyTutorialStepEntry,
+  TUTORIAL_DOC_CONTENT,
   captureTutorialWorkspaceSnapshot,
   evaluateTutorialStep,
   restoreTutorialWorkspaceSnapshot,
   TUTORIAL_DOC_NAME,
+  TUTORIAL_TIME_TOOL_CODE,
+  TUTORIAL_TIME_TOOL_DESCRIPTION,
+  TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
+  TUTORIAL_TIME_TOOL_NAME,
   TUTORIAL_MCP_NAME
 } from "../onboarding/runtime";
 import {
@@ -1212,6 +1217,12 @@ export default function App() {
       clearChat: () => {
         setHistory([]);
         setTutorialOpenedToolResultMessageIds([]);
+      },
+      ensureTutorialDoc: () => {
+        void ensureTutorialDoc();
+      },
+      ensureTutorialTimeTool: () => {
+        void ensureTutorialTimeTool();
       },
       ensureTutorialAgentBrowserMcpTools: () => {
         const tutorialServer = mcpServers.find((server) => server.name === TUTORIAL_MCP_NAME);
@@ -3020,7 +3031,7 @@ export default function App() {
 
   function limitHistory(messages: ChatMessage[]) {
     const limit = clampHistoryLimit(historyMessageLimit);
-    return messages.slice(-limit);
+    return messages.filter((message) => message.role !== "tool").slice(-limit);
   }
 
   const leaderPhaseRef = React.useRef<"planning" | "verification" | "summary" | "act" | "assign" | "react" | null>(null);
@@ -3523,6 +3534,40 @@ export default function App() {
       logNow({ category: "docs", ok: false, message: "Doc create failed", details: String(e?.message ?? e) });
       return null;
     }
+  }
+
+  async function ensureTutorialDoc() {
+    const existing = docs.find((item) => item.title === TUTORIAL_DOC_NAME) ?? null;
+    const nextDoc: DocItem = {
+      id: existing?.id ?? generateId(),
+      title: TUTORIAL_DOC_NAME,
+      content: TUTORIAL_DOC_CONTENT,
+      updatedAt: Date.now()
+    };
+    await upsertDoc(nextDoc);
+    const nextDocs = await listDocs();
+    setDocs(nextDocs);
+    setDocEditorId(nextDoc.id);
+    logNow({ category: "docs", ok: true, message: `Tutorial doc ensured: ${nextDoc.title}` });
+  }
+
+  async function ensureTutorialTimeTool() {
+    const existing = builtInTools.find((tool) => tool.name === TUTORIAL_TIME_TOOL_NAME) ?? null;
+    const nextTool: BuiltInToolConfig = {
+      id: existing?.id ?? generateId(),
+      name: TUTORIAL_TIME_TOOL_NAME,
+      description: TUTORIAL_TIME_TOOL_DESCRIPTION,
+      code: TUTORIAL_TIME_TOOL_CODE,
+      inputSchema: TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
+      requireConfirmation: false,
+      updatedAt: Date.now(),
+      source: "custom"
+    };
+    const nextTools = existing
+      ? builtInTools.map((tool) => (tool.id === existing.id ? nextTool : tool))
+      : [nextTool, ...builtInTools];
+    setBuiltInTools(nextTools);
+    logNow({ category: "tool", ok: true, message: `Tutorial built-in tool ensured: ${nextTool.name}` });
   }
 
   async function onSaveDoc(d: DocItem) {

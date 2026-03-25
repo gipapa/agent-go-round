@@ -47,17 +47,18 @@ steps:
   - id: create-time-tool
     title: 建立時間工具
     checklistLabel: 建立教學用時間工具
-    instructionTitle: 第一步：建立一個取得目前時間的自訂工具
+    instructionTitle: 第一步：系統會自動建立一個取得目前時間的自訂工具
     instructionBody: |
-      請前往 Chat Config 頁籤，按下 Built-in Tools 進入設定視窗。
+      我已經幫你切到 Chat Config，並會自動建立這個工具。
 
-      建議先打開右上角的 help，從「範例：取得目前時間」直接複製程式內容。接著建立一個新工具，並使用以下設定：
+      工具內容固定為：
       - Tool name：教學用時間工具
       - Description：取得目前瀏覽器時間與時區，適合回答現在幾點或目前時區等問題。
       - Input schema：{}
+      - JavaScript code：Built-in Tools help 裡「範例：取得目前時間」的版本
 
-      JavaScript code 可以直接使用 help 裡的「取得目前時間」範例。完成後按下 Save。
-    completionLabel: 等待你建立教學用時間工具
+      你可以按下 Built-in Tools 檢查工具內容是否正確；只要內容一致，這一步就算完成。
+    completionLabel: 等待系統建立教學用時間工具
     tab: chat_config
     targetId: chat-config-tools-card
     behavior: create_tutorial_time_tool

@@ -29,7 +29,10 @@ export const CustomAdapter: AgentAdapter = {
       return;
     }
 
-    const history = req.history.map((m) => `${m.role}: ${m.content}`).join("\n");
+    const history = req.history
+      .filter((m) => m.role !== "tool")
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
     const body = mustache(c.bodyTemplate, {
       input: req.input,
       history,

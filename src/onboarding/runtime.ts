@@ -25,8 +25,16 @@ import {
 } from "./types";
 
 export const TUTORIAL_DOC_NAME = "教學用DOC";
-export const TUTORIAL_MCP_NAME = "教學用MCP";
+export const TUTORIAL_DOC_CONTENT = "你是個說話結尾都會喵喵叫的助手。每次回答的結尾都要補上一句喵。";
 export const TUTORIAL_TIME_TOOL_NAME = "教學用時間工具";
+export const TUTORIAL_TIME_TOOL_DESCRIPTION = "取得目前瀏覽器時間與時區，適合回答現在幾點或目前時區等問題。";
+export const TUTORIAL_TIME_TOOL_INPUT_SCHEMA = {};
+export const TUTORIAL_TIME_TOOL_CODE = `const now = new Date().toISOString();
+return {
+  now,
+  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+};`;
+export const TUTORIAL_MCP_NAME = "教學用MCP";
 
 function findGroqCredential(state: TutorialRuntimeState) {
   return state.credentials.find((entry) => entry.preset === "groq" && entry.apiKey.trim());
@@ -311,14 +319,14 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
     }
     case "create_tutorial_doc": {
       const doc = state.docs.find((item) => item.title === TUTORIAL_DOC_NAME);
-      const contentOk = !!doc && /喵/.test(doc.content);
+      const contentOk = !!doc && doc.content.trim() === TUTORIAL_DOC_CONTENT;
       return {
         completed: contentOk,
         targetId: step.targetId ?? "chat-config-docs-card",
         canContinue: contentOk,
         statusText: contentOk
           ? `已建立文件：${doc?.title}`
-          : "請建立「教學用DOC」，並在內容中加入「你是個說話結尾都會喵喵叫的助手」。"
+          : "系統正在建立教學用DOC。"
       };
     }
     case "enable_tutorial_doc_access": {
@@ -351,9 +359,9 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       const tool = findTutorialTimeTool(state);
       const completed =
         !!tool &&
-        tool.description.trim().length > 0 &&
-        tool.code.trim().length > 0 &&
-        /(new Date|toISOString|resolvedOptions\(\)\.timeZone)/.test(tool.code);
+        tool.description.trim() === TUTORIAL_TIME_TOOL_DESCRIPTION &&
+        JSON.stringify(tool.inputSchema ?? {}) === JSON.stringify(TUTORIAL_TIME_TOOL_INPUT_SCHEMA) &&
+        tool.code.trim() === TUTORIAL_TIME_TOOL_CODE.trim();
       return {
         completed,
         targetId:
@@ -363,7 +371,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `已建立工具：${tool?.name}`
-          : "請建立名稱為「教學用時間工具」的自訂工具，並使用 help 裡的時間範例程式。"
+          : "系統正在建立教學用時間工具。"
       };
     }
     case "set_history_limit_to_one": {
@@ -657,8 +665,13 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
   switch (step.behavior) {
     case "setup_groq_credential":
     case "create_groq_agent":
+      break;
     case "create_tutorial_doc":
+      controller.ensureTutorialDoc();
+      break;
     case "create_tutorial_time_tool":
+      controller.ensureTutorialTimeTool();
+      break;
     case "set_history_limit_to_one":
     case "fill_tutorial_user_profile":
       break;

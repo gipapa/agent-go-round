@@ -18,7 +18,7 @@ export const ChromePromptAdapter: AgentAdapter = {
       return;
     }
 
-    const context = renderHistory(req.history.map((h) => ({ role: h.role, content: h.content })));
+    const context = renderHistory(req.history.filter((h) => h.role !== "tool").map((h) => ({ role: h.role, content: h.content })));
     const system = req.system?.trim() ? `SYSTEM:\n${req.system.trim()}\n\n` : "";
     const prompt = `${system}${context ? `HISTORY:\n${context}\n\n` : ""}USER:\n${req.input}`;
 

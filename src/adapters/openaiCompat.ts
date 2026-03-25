@@ -3,8 +3,7 @@ import { DetectResult, ChatMessage } from "../types";
 
 function toOpenAIMessage(m: ChatMessage) {
   if (m.role === "tool") {
-    // MVP: tool messages are flattened into assistant text.
-    return { role: "assistant", content: `[tool:${m.name ?? "tool"}]\n${m.content}` };
+    return null;
   }
   return { role: m.role, content: m.content };
 }
@@ -37,7 +36,10 @@ export const OpenAICompatAdapter: AgentAdapter = {
 
     const messages: any[] = [];
     if (req.system?.trim()) messages.push({ role: "system", content: req.system.trim() });
-    for (const m of req.history) messages.push(toOpenAIMessage(m));
+    for (const m of req.history) {
+      const mapped = toOpenAIMessage(m);
+      if (mapped) messages.push(mapped);
+    }
     messages.push({ role: "user", content: req.input });
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
