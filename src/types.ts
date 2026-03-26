@@ -53,20 +53,45 @@ export type ChatThread = {
   messages: ChatMessage[];
 };
 
+export type LoadBalancerInstance = {
+  id: string;
+  credentialId: string;
+  credentialKeyId?: string;
+  model: string;
+  description: string;
+  maxRetries: number;
+  delaySecond: number;
+  failure: boolean;
+  failureCount: number;
+  nextCheckTime?: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type LoadBalancerConfig = {
+  id: string;
+  name: string;
+  description?: string;
+  instances: LoadBalancerInstance[];
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type AgentConfig = {
   id: string;
   name: string;
   avatarUrl?: string;
   type: AgentType;
   description?: string;
+  loadBalancerId?: string;
 
+  // Legacy fields kept for backward compatibility during migration.
   endpoint?: string; // e.g. https://api.openai.com/v1
   apiKey?: string;
-
   model?: string; // for openai_compat
   headers?: Record<string, string>; // custom headers
 
-  // custom adapter: template mapping (minimal MVP)
+  // Legacy custom adapter config.
   custom?: {
     method: "POST";
     url: string;

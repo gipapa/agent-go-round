@@ -1,14 +1,17 @@
-import { AgentConfig, BuiltInToolConfig, ChatMessage, DocItem, SkillConfig, SkillExecutionMode, SkillFileItem } from "../types";
+import { AgentConfig, BuiltInToolConfig, ChatMessage, DocItem, LoadBalancerConfig, SkillConfig, SkillExecutionMode, SkillFileItem } from "../types";
 import { ModelCredentialEntry } from "../storage/settingsStore";
 
 export type TutorialTab = "chat" | "chat_config" | "agents" | "profile";
-export type TutorialConfigModal = "credentials" | "agent" | null;
+export type TutorialConfigModal = "credentials" | "agent" | "load_balancers" | null;
 
 export type TutorialStepBehaviorId =
   | "manual_info"
   | "setup_groq_credential"
+  | "create_single_load_balancer"
   | "create_groq_agent"
   | "first_chat_joke"
+  | "create_multi_load_balancer"
+  | "switch_tutorial_agent_to_multi_load_balancer"
   | "create_tutorial_doc"
   | "enable_tutorial_doc_access"
   | "first_chat_doc_persona"
@@ -68,8 +71,8 @@ export type TutorialStepAutomation = {
   skillExecutionMode?: SkillExecutionMode;
   skillVerifyMax?: number;
   skillToolLoopMax?: number;
-  retryDelaySec?: number;
-  retryMax?: number;
+  loadBalancerDelaySecond?: number;
+  loadBalancerMaxRetries?: number;
   activeAgentPreset?: "tutorial_agent" | "tutorial_agent_base";
   expect?: TutorialChatExpectation;
 };
@@ -116,6 +119,7 @@ export type TutorialRuntimeState = {
   historyMessageLimit: number;
   builtInTools: BuiltInToolConfig[];
   docs: DocItem[];
+  loadBalancers: LoadBalancerConfig[];
   mcpServers: { id: string; name: string; sseUrl: string }[];
   mcpToolsByServer: Record<string, { name: string; description?: string }[]>;
   userProfile: {
@@ -134,10 +138,12 @@ export type TutorialEntryController = {
   setSkillExecutionMode: (mode: "single_turn" | "multi_turn") => void;
   setSkillVerifyMax: (value: number) => void;
   setSkillToolLoopMax: (value: number) => void;
-  setRetryDelaySec: (value: number) => void;
-  setRetryMax: (value: number) => void;
+  setAgentLoadBalancerRetryPolicy: (agentId: string, value: { delaySecond?: number; maxRetries?: number }) => void;
   setComposerSeed: (value: string) => void;
   clearChat: () => void;
+  ensureTutorialPrimaryLoadBalancer: () => void;
+  ensureTutorialSecondaryLoadBalancer: () => void;
+  seedTutorialLoadBalancerDraft: (kind: "single" | "multi") => void;
   ensureTutorialDoc: () => void;
   ensureTutorialTimeTool: () => void;
   ensureTutorialAgentBrowserMcpTools: () => void;

@@ -1,4 +1,4 @@
-import { McpServerConfig, OrchestratorMode, SkillExecutionMode } from "../types";
+import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, SkillExecutionMode } from "../types";
 
 export type UiState = {
   activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
@@ -10,6 +10,7 @@ export type UiState = {
   activeAgentId?: string;
   memberAgentIds?: string[];
   reactMax?: number;
+  // Legacy global retry settings kept only for migration.
   retryDelaySec?: number;
   retryMax?: number;
   historyMessageLimit?: number;
@@ -23,15 +24,22 @@ const MCP_KEY = "agr_mcp_v1";
 const MCP_ALIAS_KEY = "agr_mcp_aliases_v1";
 const MCP_PROMPT_KEY = "agr_mcp_prompt_templates_v1";
 const MODEL_CREDENTIALS_KEY = "agr_model_credentials_v1";
+const LOAD_BALANCERS_KEY = "agr_load_balancers_v1";
 
 export type McpToolAliases = Record<string, Record<string, string>>;
-export type ModelCredentialPreset = "openai" | "groq" | "custom";
+export type ModelCredentialPreset = "openai" | "groq" | "custom" | "chrome_prompt";
+export type ModelCredentialKeyEntry = {
+  id: string;
+  apiKey: string;
+  createdAt: number;
+  updatedAt: number;
+};
 export type ModelCredentialEntry = {
   id: string;
   preset: ModelCredentialPreset;
   label: string;
   endpoint: string;
-  apiKey: string;
+  keys: ModelCredentialKeyEntry[];
   createdAt: number;
   updatedAt: number;
 };
@@ -169,8 +177,8 @@ export function loadModelCredentials(): ModelCredentials {
           typeof item.id === "string" &&
           typeof item.label === "string" &&
           typeof item.endpoint === "string" &&
-          typeof item.apiKey === "string" &&
-          (item.preset === "openai" || item.preset === "groq" || item.preset === "custom")
+          Array.isArray(item.keys) &&
+          (item.preset === "openai" || item.preset === "groq" || item.preset === "custom" || item.preset === "chrome_prompt")
       );
     }
     if (parsed && typeof parsed === "object") {
@@ -185,7 +193,14 @@ export function loadModelCredentials(): ModelCredentials {
             preset,
             label: preset === "openai" ? "OpenAI" : preset === "groq" ? "Groq" : `Custom ${index + 1}`,
             endpoint,
-            apiKey: value,
+            keys: [
+              {
+                id: `${preset}-key-${index}-${now}`,
+                apiKey: value,
+                createdAt: now,
+                updatedAt: now
+              }
+            ],
             createdAt: now,
             updatedAt: now
           };
@@ -199,4 +214,30 @@ export function loadModelCredentials(): ModelCredentials {
 
 export function saveModelCredentials(credentials: ModelCredentials) {
   localStorage.setItem(MODEL_CREDENTIALS_KEY, JSON.stringify(credentials));
+}
+
+export function loadLoadBalancers(): LoadBalancerConfig[] {
+  try {
+    const raw = localStorage.getItem(LOAD_BALANCERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is LoadBalancerConfig =>
+        item &&
+        typeof item.id === "string" &&
+        typeof item.name === "string" &&
+        Array.isArray(item.instances)
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function saveLoadBalancers(loadBalancers: LoadBalancerConfig[]) {
+  localStorage.setItem(LOAD_BALANCERS_KEY, JSON.stringify(loadBalancers));
+}
+
+export function getLoadBalancersStorageKey() {
+  return LOAD_BALANCERS_KEY;
 }

@@ -35,24 +35,84 @@ return {
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
 };`;
 export const TUTORIAL_MCP_NAME = "教學用MCP";
+export const TUTORIAL_PRIMARY_LOAD_BALANCER_NAME = "教學用Load Balancer 1";
+export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
 
-function findGroqCredential(state: TutorialRuntimeState) {
-  return state.credentials.find((entry) => entry.preset === "groq" && entry.apiKey.trim());
+function findLoadBalancerByName(state: TutorialRuntimeState, name: string) {
+  return state.loadBalancers.find((entry) => entry.name.trim() === name) ?? null;
 }
 
-function findTutorialAgentBase(agents: AgentConfig[]) {
+function findGroqCredential(state: TutorialRuntimeState) {
+  return state.credentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => key.apiKey.trim()));
+}
+
+function findTutorialPrimaryCredentialKey(state: TutorialRuntimeState) {
+  const primary = findLoadBalancerByName(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
+  const primaryInstance = primary?.instances[0] ?? null;
+  const primaryCredential =
+    (primaryInstance ? state.credentials.find((entry) => entry.id === primaryInstance.credentialId) : null) ??
+    findGroqCredential(state) ??
+    null;
+  if (!primaryCredential) return null;
+  const primaryKey =
+    primaryCredential.keys.find((key) => key.id === primaryInstance?.credentialKeyId && key.apiKey.trim()) ??
+    primaryCredential.keys.find((key) => state.credentialTestResults[key.id]?.ok === true) ??
+    primaryCredential.keys.find((key) => key.apiKey.trim()) ??
+    null;
+  if (!primaryKey) return null;
+  return { credential: primaryCredential, key: primaryKey };
+}
+
+function findTutorialSecondaryCredentialKey(state: TutorialRuntimeState) {
+  const primary = findTutorialPrimaryCredentialKey(state);
+  if (!primary) return null;
+
+  const sameCredentialOtherKey =
+    primary.credential.keys.find((key) => key.id !== primary.key.id && key.apiKey.trim()) ?? null;
+  if (sameCredentialOtherKey) {
+    return {
+      credential: primary.credential,
+      key: sameCredentialOtherKey
+    };
+  }
+
+  const otherCredential =
+    state.credentials.find((entry) => entry.id !== primary.credential.id && entry.preset !== "chrome_prompt" && entry.keys.some((key) => key.apiKey.trim())) ?? null;
+  if (!otherCredential) return null;
+  const otherKey =
+    otherCredential.keys.find((key) => state.credentialTestResults[key.id]?.ok === true) ??
+    otherCredential.keys.find((key) => key.apiKey.trim()) ??
+    null;
+  if (!otherKey) return null;
+  return { credential: otherCredential, key: otherKey };
+}
+
+function findTutorialAgentPrimaryInstance(state: TutorialRuntimeState, agent: AgentConfig) {
+  if (!agent.loadBalancerId) return null;
+  const loadBalancer = state.loadBalancers.find((entry) => entry.id === agent.loadBalancerId) ?? null;
+  if (!loadBalancer) return null;
+  const instance = loadBalancer.instances[0] ?? null;
+  if (!instance) return null;
+  const credential = state.credentials.find((entry) => entry.id === instance.credentialId) ?? null;
+  return { loadBalancer, instance, credential };
+}
+
+function findTutorialAgentBase(state: TutorialRuntimeState) {
   return (
-    agents.find(
-      (agent) =>
-        agent.type === "openai_compat" &&
-        normalizeCredentialUrl(agent.endpoint) === "https://api.groq.com/openai/v1" &&
-        agent.model === "moonshotai/kimi-k2-instruct-0905"
-    ) ?? null
+    state.agents.find((agent) => {
+      const primary = findTutorialAgentPrimaryInstance(state, agent);
+      return (
+        !!primary &&
+        primary.credential?.preset === "groq" &&
+        normalizeCredentialUrl(primary.credential.endpoint) === "https://api.groq.com/openai/v1" &&
+        primary.instance.model === "moonshotai/kimi-k2-instruct-0905"
+      );
+    }) ?? null
   );
 }
 
-function findTutorialAgent(agents: AgentConfig[]) {
-  const agent = findTutorialAgentBase(agents);
+function findTutorialAgent(state: TutorialRuntimeState) {
+  const agent = findTutorialAgentBase(state);
   if (!agent) return null;
   if (
     agent.enableDocs === false &&
@@ -63,6 +123,18 @@ function findTutorialAgent(agents: AgentConfig[]) {
     return agent;
   }
   return null;
+}
+
+function loadBalancerMatchesTutorialGroq(state: TutorialRuntimeState, loadBalancerName: string) {
+  const loadBalancer = findLoadBalancerByName(state, loadBalancerName);
+  const firstInstance = loadBalancer?.instances[0];
+  if (!loadBalancer || !firstInstance) return false;
+  const credential = state.credentials.find((entry) => entry.id === firstInstance.credentialId) ?? null;
+  return (
+    credential?.preset === "groq" &&
+    normalizeCredentialUrl(credential.endpoint) === "https://api.groq.com/openai/v1" &&
+    firstInstance.model === "moonshotai/kimi-k2-instruct-0905"
+  );
 }
 
 function findTutorialTimeTool(state: TutorialRuntimeState) {
@@ -90,8 +162,8 @@ function findTutorialMcpServer(state: TutorialRuntimeState) {
 }
 
 function findTutorialAgentByPreset(state: TutorialRuntimeState, preset?: "tutorial_agent" | "tutorial_agent_base") {
-  if (preset === "tutorial_agent") return findTutorialAgent(state.agents);
-  if (preset === "tutorial_agent_base") return findTutorialAgentBase(state.agents);
+  if (preset === "tutorial_agent") return findTutorialAgent(state);
+  if (preset === "tutorial_agent_base") return findTutorialAgentBase(state);
   return null;
 }
 
@@ -287,7 +359,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     case "setup_groq_credential": {
       const groq = findGroqCredential(state);
-      const success = groq ? state.credentialTestResults[groq.id]?.ok === true : false;
+      const success = groq ? groq.keys.some((key) => state.credentialTestResults[key.id]?.ok === true) : false;
       return {
         completed: success,
         targetId: step.targetId ?? "credentials-modal",
@@ -295,18 +367,32 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         statusText: success ? "Groq provider 已測試成功。" : "請先新增 Groq credential，填入 API key 並完成連線測試。"
       };
     }
-    case "create_groq_agent": {
-      const agent = findTutorialAgent(state.agents);
-      const baseAgent = findTutorialAgentBase(state.agents);
+    case "create_single_load_balancer": {
+      const loadBalancer = findLoadBalancerByName(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
+      const completed = !!loadBalancer && loadBalancer.instances.length >= 1 && loadBalancerMatchesTutorialGroq(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
       return {
-        completed: !!agent,
+        completed,
+        targetId: step.targetId ?? "chat-config-load-balancer-card",
+        canContinue: completed,
+        statusText: completed
+          ? `已建立單一 instance load balancer：${loadBalancer?.name}`
+          : "請建立「教學用Load Balancer 1」，至少加入 1 個 instance，並使用 Groq credential + moonshotai/kimi-k2-instruct-0905。"
+      };
+    }
+    case "create_groq_agent": {
+      const agent = findTutorialAgent(state);
+      const baseAgent = findTutorialAgentBase(state);
+      const singleLoadBalancer = findLoadBalancerByName(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
+      const usesSingleLoadBalancer = !!baseAgent && !!singleLoadBalancer && baseAgent.loadBalancerId === singleLoadBalancer.id;
+      return {
+        completed: !!agent && usesSingleLoadBalancer,
         targetId: typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]') ? "agent-edit-modal" : "agents-add-button",
-        canContinue: !!agent,
-        statusText: agent
+        canContinue: !!agent && usesSingleLoadBalancer,
+        statusText: agent && usesSingleLoadBalancer
           ? `已建立 Agent：${agent.name}`
           : baseAgent
-          ? "已建立 Agent，但 Access Control 仍需全部保持未勾選後再按 Save。"
-          : "請新增 Agent，將 Provider 設為 Groq，載入 models 後選擇 moonshotai/kimi-k2-instruct-0905，再按 Save。"
+          ? "已建立 Agent，但請確認它綁定的是「教學用Load Balancer 1」，且 Access Control 全部保持未勾選。"
+          : "請新增 Agent，並將 Load Balancer 設為「教學用Load Balancer 1」，再按 Save。"
       };
     }
     case "first_chat_joke": {
@@ -315,6 +401,51 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
         statusText: step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。"
+      };
+    }
+    case "create_multi_load_balancer": {
+      const loadBalancer = findLoadBalancerByName(state, TUTORIAL_SECONDARY_LOAD_BALANCER_NAME);
+      const primary = findTutorialPrimaryCredentialKey(state);
+      const secondary = findTutorialSecondaryCredentialKey(state);
+      const completed =
+        !!loadBalancer &&
+        loadBalancer.instances.length >= 3 &&
+        !!primary &&
+        !!secondary &&
+        loadBalancer.instances[0]?.credentialId === primary.credential.id &&
+        loadBalancer.instances[0]?.credentialKeyId === primary.key.id &&
+        loadBalancer.instances[0]?.model === "moonshotai/kimi-k2-instruct-0905" &&
+        loadBalancer.instances[1]?.credentialId === primary.credential.id &&
+        loadBalancer.instances[1]?.credentialKeyId === primary.key.id &&
+        loadBalancer.instances[1]?.model === "groq/compound" &&
+        loadBalancer.instances[2]?.model === "moonshotai/kimi-k2-instruct-0905" &&
+        (loadBalancer.instances[2]?.credentialId !== primary.credential.id ||
+          loadBalancer.instances[2]?.credentialKeyId !== primary.key.id);
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-credentials-card",
+        canContinue: completed,
+        statusText: completed
+          ? `已建立多 instance load balancer：${loadBalancer?.name}`
+          : !secondary
+          ? "請先回到 Credentials，新增第二把 key 或另一個可用 provider。系統偵測到後會自動建立「教學用Load Balancer 2」。"
+          : "系統正在根據你的 credentials 自動建立「教學用Load Balancer 2」。"
+      };
+    }
+    case "switch_tutorial_agent_to_multi_load_balancer": {
+      const loadBalancer = findLoadBalancerByName(state, TUTORIAL_SECONDARY_LOAD_BALANCER_NAME);
+      const agent = findTutorialAgentBase(state);
+      const completed = !!agent && !!loadBalancer && agent.loadBalancerId === loadBalancer.id;
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? `目前 Agent 已切換到 ${loadBalancer?.name}`
+          : "請編輯目前 Agent，將 Load Balancer 改成「教學用Load Balancer 2」。"
       };
     }
     case "create_tutorial_doc": {
@@ -330,7 +461,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "enable_tutorial_doc_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       const doc = state.docs.find((item) => item.title === TUTORIAL_DOC_NAME);
       const docsEnabled = !!agent && agent.enableDocs === true;
       const docAllowed = !!doc && !!agent && (agent.allowedDocIds === undefined || agent.allowedDocIds.includes(doc.id));
@@ -382,7 +513,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? "Messages sent to model 已改為 1，案例結束後會自動恢復原本設定。"
-          : "請前往 Chat Config > History & Retry，將 Messages sent to model 改成 1。"
+          : "請前往 Chat Config > History，將 Messages sent to model 改成 1。"
       };
     }
     case "fill_tutorial_user_profile": {
@@ -395,7 +526,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "enable_tutorial_builtin_tool_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       const timeTool = findTutorialTimeTool(state);
       const builtInEnabled = !!agent && agent.enableBuiltInTools === true;
       const customSelection = !!agent && Array.isArray(agent.allowedBuiltInToolIds);
@@ -466,7 +597,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "enable_tutorial_skill_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       const skill = findTutorialSequentialSkill(state);
       const completed =
         !!agent &&
@@ -486,7 +617,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "enable_tutorial_chatgpt_browser_skill_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       const skill = findTutorialChatgptBrowserSkill(state);
       const builtInReady =
         !!agent &&
@@ -578,7 +709,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       };
     }
     case "enable_tutorial_mcp_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       const server = findTutorialMcpServer(state);
       const completed =
         !!agent &&
@@ -630,6 +761,18 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
 
   controller.setConfigModal(null);
 
+  let targetAgentId: string | null = null;
+  if (step.automation?.activeAgentPreset) {
+    const agent = findTutorialAgentByPreset(state, step.automation.activeAgentPreset);
+    if (agent) {
+      targetAgentId = agent.id;
+      controller.setActiveAgentId(agent.id);
+      controller.setSelectedAgentId(agent.id);
+    }
+  } else {
+    targetAgentId = state.agents.find((agent) => agent.id === state.activeAgentId)?.id ?? null;
+  }
+
   if (step.automation?.skillExecutionMode) {
     controller.setSkillExecutionMode(step.automation.skillExecutionMode);
   }
@@ -639,19 +782,14 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
   if (typeof step.automation?.skillToolLoopMax === "number") {
     controller.setSkillToolLoopMax(step.automation.skillToolLoopMax);
   }
-  if (typeof step.automation?.retryDelaySec === "number") {
-    controller.setRetryDelaySec(step.automation.retryDelaySec);
-  }
-  if (typeof step.automation?.retryMax === "number") {
-    controller.setRetryMax(step.automation.retryMax);
-  }
-
-  if (step.automation?.activeAgentPreset) {
-    const agent = findTutorialAgentByPreset(state, step.automation.activeAgentPreset);
-    if (agent) {
-      controller.setActiveAgentId(agent.id);
-      controller.setSelectedAgentId(agent.id);
-    }
+  if (
+    targetAgentId &&
+    (typeof step.automation?.loadBalancerDelaySecond === "number" || typeof step.automation?.loadBalancerMaxRetries === "number")
+  ) {
+    controller.setAgentLoadBalancerRetryPolicy(targetAgentId, {
+      delaySecond: step.automation?.loadBalancerDelaySecond,
+      maxRetries: step.automation?.loadBalancerMaxRetries
+    });
   }
 
   if (step.automation?.clearChatOnEnter) {
@@ -665,6 +803,13 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
   switch (step.behavior) {
     case "setup_groq_credential":
     case "create_groq_agent":
+    case "switch_tutorial_agent_to_multi_load_balancer":
+      break;
+    case "create_single_load_balancer":
+      controller.ensureTutorialPrimaryLoadBalancer();
+      break;
+    case "create_multi_load_balancer":
+      controller.ensureTutorialSecondaryLoadBalancer();
       break;
     case "create_tutorial_doc":
       controller.ensureTutorialDoc();
@@ -676,7 +821,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "fill_tutorial_user_profile":
       break;
     case "enable_tutorial_doc_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);
         controller.setSelectedAgentId(agent.id);
@@ -684,7 +829,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       break;
     }
     case "enable_tutorial_builtin_tool_access": {
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);
         controller.setSelectedAgentId(agent.id);
@@ -712,7 +857,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "enable_tutorial_skill_access": {
       controller.setActiveTab("agents");
       controller.setSkillExecutionMode("single_turn");
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);
         controller.setSelectedAgentId(agent.id);
@@ -727,7 +872,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "enable_tutorial_chatgpt_browser_skill_access": {
       controller.setActiveTab("agents");
       controller.setSkillExecutionMode("multi_turn");
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);
         controller.setSelectedAgentId(agent.id);
@@ -745,7 +890,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       break;
     case "enable_tutorial_mcp_access": {
       controller.setActiveTab("agents");
-      const agent = findTutorialAgentBase(state.agents);
+      const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);
         controller.setSelectedAgentId(agent.id);

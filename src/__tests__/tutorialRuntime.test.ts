@@ -4,15 +4,54 @@ import { describe, expect, it, vi } from "vitest";
 import { getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import { applyTutorialStepEntry, evaluateTutorialStep } from "../onboarding/runtime";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../onboarding/types";
-import type { AgentConfig, ChatMessage } from "../types";
+import type { AgentConfig, ChatMessage, LoadBalancerConfig } from "../types";
+import type { ModelCredentialEntry } from "../storage/settingsStore";
+
+function makeTutorialCredential(): ModelCredentialEntry {
+  const now = Date.now();
+  return {
+    id: "credential-groq",
+    preset: "groq",
+    label: "Groq",
+    endpoint: "https://api.groq.com/openai/v1",
+    keys: [{ id: "credential-groq-key-1", apiKey: "test-key", createdAt: now, updatedAt: now }],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function makeTutorialLoadBalancer(): LoadBalancerConfig {
+  const now = Date.now();
+  return {
+    id: "lb-groq",
+    name: "Tutorial Groq LB",
+    instances: [
+      {
+        id: "lb-groq-instance-1",
+        credentialId: "credential-groq",
+        credentialKeyId: "credential-groq-key-1",
+        model: "moonshotai/kimi-k2-instruct-0905",
+        description: "",
+        maxRetries: 4,
+        delaySecond: 5,
+        failure: false,
+        failureCount: 0,
+        nextCheckTime: null,
+        createdAt: now,
+        updatedAt: now
+      }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
 
 function makeTutorialAgentBase(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
     id: "agent-groq",
     name: "Tutorial Groq Agent",
     type: "openai_compat",
-    endpoint: "https://api.groq.com/openai/v1",
-    model: "moonshotai/kimi-k2-instruct-0905",
+    loadBalancerId: "lb-groq",
     enableDocs: false,
     enableMcp: false,
     enableBuiltInTools: false,
@@ -38,13 +77,14 @@ function makeState(patch?: Partial<TutorialRuntimeState>): TutorialRuntimeState 
     agents: [makeTutorialAgentBase()],
     skills: [],
     activeAgentId: "agent-groq",
-    credentials: [],
+    credentials: [makeTutorialCredential()],
     credentialTestResults: {},
     history: [],
     currentChatInput: "",
     historyMessageLimit: 10,
     builtInTools: [],
     docs: [],
+    loadBalancers: [makeTutorialLoadBalancer()],
     mcpServers: [],
     mcpToolsByServer: {},
     userProfile: {
@@ -90,10 +130,10 @@ describe("tutorial YAML automation linkage", () => {
       setSkillExecutionMode: vi.fn(),
       setSkillVerifyMax: vi.fn(),
       setSkillToolLoopMax: vi.fn(),
-      setRetryDelaySec: vi.fn(),
-      setRetryMax: vi.fn(),
+      setAgentLoadBalancerRetryPolicy: vi.fn(),
       setComposerSeed: vi.fn(),
       clearChat: vi.fn(),
+      seedTutorialLoadBalancerDraft: vi.fn(),
       ensureTutorialAgentBrowserMcpTools: vi.fn(),
       ensureTutorialSequentialSkill: vi.fn(),
       ensureTutorialChatgptBrowserSkill: vi.fn()
@@ -153,8 +193,8 @@ describe("tutorial YAML automation linkage", () => {
     expect(step.automation?.skillExecutionMode).toBe("multi_turn");
     expect(step.automation?.skillToolLoopMax).toBe(8);
     expect(step.automation?.skillVerifyMax).toBe(2);
-    expect(step.automation?.retryDelaySec).toBe(10);
-    expect(step.automation?.retryMax).toBe(10);
+    expect(step.automation?.loadBalancerDelaySecond).toBe(10);
+    expect(step.automation?.loadBalancerMaxRetries).toBe(10);
     expect(step.automation?.composerSeed).toBe("請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」");
     expect(step.automation?.expect?.requireSkillTodo).toBe(true);
     expect(step.automation?.expect?.requireSkillTodoProgress).toBe(true);

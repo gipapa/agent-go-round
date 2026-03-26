@@ -4,6 +4,7 @@ import {
   BuiltInToolConfig,
   ChatTraceEntry,
   ChatMessage,
+  DetectResult,
   LoadedSkillRuntime,
   OrchestratorMode,
   SkillExecutionMode,
@@ -16,6 +17,7 @@ import {
   McpServerConfig,
   McpTool,
   LogEntry,
+  LoadBalancerConfig,
   SkillConfig,
   SkillDocItem,
   SkillFileItem
@@ -41,9 +43,11 @@ import {
   ModelCredentialEntry,
   McpPromptTemplates,
   getDefaultMcpPromptTemplates,
+  loadLoadBalancers,
   loadMcpPromptTemplates,
   loadMcpServers,
   loadUiState,
+  saveLoadBalancers,
   saveModelCredentials,
   saveMcpPromptTemplates,
   saveMcpServers,
@@ -69,6 +73,7 @@ import LandingPage from "../ui/LandingPage";
 import McpPanel from "../ui/McpPanel";
 import SkillsPanel from "../ui/SkillsPanel";
 import TutorialGuide from "../ui/TutorialGuide";
+import LoadBalancersPanel from "../ui/LoadBalancersPanel";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   applyTutorialStepEntry,
@@ -139,6 +144,19 @@ import {
 import { buildToolResultPromptBlock, ToolPromptDetailMode } from "../utils/toolResultSummary";
 import { normalizeCredentialUrl } from "../utils/credential";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
+import {
+  applyInstanceFailure,
+  applyInstanceSuccess,
+  createCredentialEntry,
+  createCredentialKeyEntry,
+  createLoadBalancer,
+  createLoadBalancerInstance,
+  DEFAULT_INSTANCE_DELAY_SECOND,
+  DEFAULT_INSTANCE_MAX_RETRIES,
+  migrateAgentsToLoadBalancers,
+  resolveLoadBalancerCandidates,
+  setLoadBalancerRetryPolicy
+} from "../utils/loadBalancer";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -328,19 +346,19 @@ function clampHistoryLimit(value: number) {
   return Math.max(1, Math.min(200, Math.round(value)));
 }
 
-function findTutorialAgentBaseInList(agents: AgentConfig[]) {
+function findTutorialAgentBaseInList(agents: AgentConfig[], loadBalancers: LoadBalancerConfig[]) {
+  const primaryNames = new Set(["教學用Load Balancer 1", "教學用Load Balancer 2"]);
   return (
-    agents.find(
-      (agent) =>
-        agent.type === "openai_compat" &&
-        normalizeCredentialUrl(agent.endpoint) === "https://api.groq.com/openai/v1" &&
-        agent.model === "moonshotai/kimi-k2-instruct-0905"
-    ) ?? null
+    agents.find((agent) => {
+      if (!agent.loadBalancerId) return false;
+      const loadBalancer = loadBalancers.find((entry) => entry.id === agent.loadBalancerId);
+      return !!loadBalancer && primaryNames.has(loadBalancer.name);
+    }) ?? null
   );
 }
 
-function findTutorialAgentInList(agents: AgentConfig[]) {
-  const agent = findTutorialAgentBaseInList(agents);
+function findTutorialAgentInList(agents: AgentConfig[], loadBalancers: LoadBalancerConfig[]) {
+  const agent = findTutorialAgentBaseInList(agents, loadBalancers);
   if (!agent) return null;
   if (
     agent.enableDocs === false &&
@@ -644,66 +662,22 @@ function classifyMcpToolIntent(tool: McpTool): ToolIntent {
   return classifyToolIntentFromText(tool.name, tool.description);
 }
 
-function describeCredentialEndpoint(url: string) {
-  if (!url) return { label: "Unconfigured Endpoint", hint: "請先設定 endpoint 或 URL" };
-  if (url === "https://api.openai.com/v1") return { label: "OpenAI", hint: url };
-  if (url === "https://api.groq.com/openai/v1") return { label: "Groq", hint: url };
-  try {
-    const parsed = new URL(url);
-    return { label: parsed.hostname, hint: url };
-  } catch {
-    return { label: url, hint: url };
-  }
-}
-
-function createCredentialEntry(preset: "openai" | "groq" | "custom", indexHint = 1): ModelCredentialEntry {
-  const now = Date.now();
-  if (preset === "openai") {
-    return {
-      id: generateId(),
-      preset,
-      label: "OpenAI",
-      endpoint: "https://api.openai.com/v1",
-      apiKey: "",
-      createdAt: now,
-      updatedAt: now
-    };
-  }
-  if (preset === "groq") {
-    return {
-      id: generateId(),
-      preset,
-      label: "Groq",
-      endpoint: "https://api.groq.com/openai/v1",
-      apiKey: "",
-      createdAt: now,
-      updatedAt: now
-    };
-  }
-  return {
-    id: generateId(),
-    preset,
-    label: `Custom ${indexHint}`,
-    endpoint: "",
-    apiKey: "",
-    createdAt: now,
-    updatedAt: now
-  };
-}
-
 type CredentialTestState = {
   ok: boolean;
   message: string;
 };
 
-async function testCredentialConnection(slot: ModelCredentialEntry): Promise<CredentialTestState> {
+async function testCredentialConnection(slot: ModelCredentialEntry, apiKey: string): Promise<CredentialTestState> {
   const endpoint = normalizeCredentialUrl(slot.endpoint);
   if (!endpoint) {
     throw new Error("請先設定 endpoint。");
   }
+  if (slot.preset === "chrome_prompt") {
+    return { ok: true, message: "Chrome Prompt provider 不需要遠端連線測試。" };
+  }
 
   const res = await fetch(`${endpoint}/models`, {
-    headers: slot.apiKey.trim() ? { Authorization: `Bearer ${slot.apiKey.trim()}` } : undefined
+    headers: apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : undefined
   });
 
   if (!res.ok) {
@@ -725,22 +699,36 @@ async function testCredentialConnection(slot: ModelCredentialEntry): Promise<Cre
   };
 }
 
-function getModelCredentialSlot(agent: AgentConfig): { id: string; label: string; hint: string } | null {
-  if (agent.type === "openai_compat") {
-    const endpoint = normalizeCredentialUrl(agent.endpoint || "https://api.openai.com/v1");
-    const meta = describeCredentialEndpoint(endpoint);
-    return { id: `openai_compat:${endpoint}`, label: meta.label, hint: meta.hint };
+async function fetchCredentialModels(slot: ModelCredentialEntry, apiKey: string): Promise<string[]> {
+  if (slot.preset === "chrome_prompt") {
+    return ["chrome_prompt"];
   }
-  if (agent.type === "custom") {
-    const targetUrl = normalizeCredentialUrl(agent.custom?.url);
-    const meta = describeCredentialEndpoint(targetUrl);
-    return {
-      id: `custom:${targetUrl || "unconfigured"}`,
-      label: meta.label,
-      hint: targetUrl || "Custom adapter URL 尚未設定"
-    };
+  const endpoint = normalizeCredentialUrl(slot.endpoint);
+  if (!endpoint) {
+    throw new Error("請先設定 endpoint。");
   }
-  return null;
+
+  const res = await fetch(`${endpoint}/models`, {
+    headers: apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : undefined
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
+  }
+
+  const json = await res.json().catch(() => null);
+  const models = Array.isArray(json?.data)
+    ? json.data
+        .map((item: any) => String(item?.id ?? "").trim())
+        .filter(Boolean)
+    : [];
+
+  if (!models.length) {
+    throw new Error("這個 endpoint 沒有回傳可用模型。");
+  }
+
+  return models;
 }
 
 function EyeIcon(props: { open: boolean }) {
@@ -850,16 +838,15 @@ export default function App() {
   // Leader+Team config (leader = active agent)
   const [memberAgentIds, setMemberAgentIds] = useState<string[]>(() => initialUi.memberAgentIds ?? agents.slice(1).map((a) => a.id));
   const [reactMax, setReactMax] = useState<number>(() => (typeof initialUi.reactMax === "number" ? initialUi.reactMax : 2));
-  const [retryDelaySec, setRetryDelaySec] = useState<number>(() => (typeof initialUi.retryDelaySec === "number" ? initialUi.retryDelaySec : 2));
-  const [retryMax, setRetryMax] = useState<number>(() => (typeof initialUi.retryMax === "number" ? initialUi.retryMax : 3));
   const [historyMessageLimit, setHistoryMessageLimit] = useState<number>(() => clampHistoryLimit(initialUi.historyMessageLimit ?? 10));
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
-  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | null;
+  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
+  const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
   const [docs, setDocs] = useState<DocItem[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
@@ -871,6 +858,8 @@ export default function App() {
   const [skillPanelFiles, setSkillPanelFiles] = useState<SkillFileItem[]>([]);
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
   const [modelCredentials, setModelCredentials] = useState<ModelCredentialEntry[]>(() => loadModelCredentials());
+  const [loadBalancers, setLoadBalancers] = useState<LoadBalancerConfig[]>(() => loadLoadBalancers());
+  const [loadBalancerPanelSelectedId, setLoadBalancerPanelSelectedId] = useState<string | null>(null);
   const systemBuiltInTools = useMemo(() => SYSTEM_BUILT_IN_TOOLS, []);
   const allBuiltInTools = useMemo(
     () => [...systemBuiltInTools, ...builtInTools.map((tool) => ({ ...tool, source: "custom" as const, readonly: false }))],
@@ -922,7 +911,7 @@ export default function App() {
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
-  const tutorialRetryRestoreRef = React.useRef<{ delaySec: number; max: number } | null>(null);
+  const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number }>> | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
       agents,
@@ -935,6 +924,7 @@ export default function App() {
       historyMessageLimit,
       builtInTools,
       docs,
+      loadBalancers,
       mcpServers,
       mcpToolsByServer,
       userProfile: {
@@ -955,6 +945,7 @@ export default function App() {
       historyMessageLimit,
       builtInTools,
       docs,
+      loadBalancers,
       mcpServers,
       mcpToolsByServer,
       userName,
@@ -971,10 +962,10 @@ export default function App() {
   const currentTutorialEvaluation = tutorialScenario ? tutorialEvaluations[tutorialStepIndex] ?? null : null;
   const tutorialExpectedAgent = useMemo(() => {
     const preset = currentTutorialStep?.automation?.activeAgentPreset;
-    if (preset === "tutorial_agent") return findTutorialAgentInList(agents);
-    if (preset === "tutorial_agent_base") return findTutorialAgentBaseInList(agents);
+    if (preset === "tutorial_agent") return findTutorialAgentInList(agents, loadBalancers);
+    if (preset === "tutorial_agent_base") return findTutorialAgentBaseInList(agents, loadBalancers);
     return null;
-  }, [currentTutorialStep, agents]);
+  }, [currentTutorialStep, agents, loadBalancers]);
   const tutorialActiveAgentHint = useMemo(() => {
     const preset = currentTutorialStep?.automation?.activeAgentPreset;
     if (!preset) return null;
@@ -1112,14 +1103,12 @@ export default function App() {
       activeAgentId,
       memberAgentIds,
       reactMax,
-      retryDelaySec,
-      retryMax,
       historyMessageLimit,
       userName,
       userAvatarUrl,
       userDescription
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, memberAgentIds, reactMax, retryDelaySec, retryMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, memberAgentIds, reactMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -1136,6 +1125,10 @@ export default function App() {
   React.useEffect(() => {
     saveModelCredentials(modelCredentials);
   }, [modelCredentials]);
+
+  React.useEffect(() => {
+    saveLoadBalancers(loadBalancers);
+  }, [loadBalancers]);
 
   React.useEffect(() => {
     if (!historyLoaded) return;
@@ -1212,12 +1205,24 @@ export default function App() {
       setSkillExecutionMode,
       setSkillVerifyMax: (value) => setSkillVerifyMax(clampSkillVerifyMax(value)),
       setSkillToolLoopMax: (value) => setSkillToolLoopMax(clampSkillToolLoopMax(value)),
-      setRetryDelaySec: (value) => setRetryDelaySec(Math.max(0, Math.min(30, Math.round(value)))),
-      setRetryMax: (value) => setRetryMax(Math.max(0, Math.min(20, Math.round(value)))),
+      setAgentLoadBalancerRetryPolicy: (agentId, value) =>
+        setAgentLoadBalancerRetryPolicy(agentId, {
+          delaySecond:
+            typeof value.delaySecond === "number" ? Math.max(0, Math.min(30, Math.round(value.delaySecond))) : undefined,
+          maxRetries:
+            typeof value.maxRetries === "number" ? Math.max(0, Math.min(20, Math.round(value.maxRetries))) : undefined
+        }),
       clearChat: () => {
         setHistory([]);
         setTutorialOpenedToolResultMessageIds([]);
       },
+      ensureTutorialPrimaryLoadBalancer: () => {
+        ensureTutorialPrimaryLoadBalancer();
+      },
+      ensureTutorialSecondaryLoadBalancer: () => {
+        ensureTutorialSecondaryLoadBalancer();
+      },
+      seedTutorialLoadBalancerDraft: (kind) => queueTutorialLoadBalancerDraft(kind),
       ensureTutorialDoc: () => {
         void ensureTutorialDoc();
       },
@@ -1242,6 +1247,17 @@ export default function App() {
         })
     });
   }, [tutorialScenario, currentTutorialStep, tutorialRuntimeState]);
+
+  React.useEffect(() => {
+    if (!tutorialScenario || !currentTutorialStep) return;
+    if (currentTutorialStep.behavior === "create_single_load_balancer") {
+      ensureTutorialPrimaryLoadBalancer();
+      return;
+    }
+    if (currentTutorialStep.behavior === "create_multi_load_balancer") {
+      ensureTutorialSecondaryLoadBalancer();
+    }
+  }, [tutorialScenario, currentTutorialStep?.behavior, modelCredentials, credentialTestResults, loadBalancers]);
 
   React.useEffect(() => {
     if (!tutorialActive || !currentTutorialEvaluation?.targetId) return;
@@ -1337,33 +1353,17 @@ export default function App() {
   }, [skills, skillsLoaded]);
 
   React.useEffect(() => {
-    setModelCredentials((prev) => {
-      let changed = false;
-      const next = [...prev];
-      agents.forEach((agent) => {
-        const slot = getModelCredentialSlot(agent);
-        const legacy = agent.apiKey?.trim();
-        if (slot && legacy && !next.some((entry) => normalizeCredentialUrl(entry.endpoint) === normalizeCredentialUrl(slot.hint))) {
-          next.push({
-            id: generateId(),
-            preset:
-              slot.hint === "https://api.openai.com/v1"
-                ? "openai"
-                : slot.hint === "https://api.groq.com/openai/v1"
-                ? "groq"
-                : "custom",
-            label: slot.label,
-            endpoint: slot.hint,
-            apiKey: legacy,
-            createdAt: Date.now(),
-            updatedAt: Date.now()
-          });
-          changed = true;
-        }
-      });
-      return changed ? next : prev;
+    const migrated = migrateAgentsToLoadBalancers({
+      agents,
+      credentials: modelCredentials,
+      loadBalancers
     });
-  }, [agents]);
+    if (migrated.changed) {
+      setAgents(migrated.agents);
+      setModelCredentials(migrated.credentials);
+      setLoadBalancers(migrated.loadBalancers);
+    }
+  }, [agents, modelCredentials, loadBalancers]);
 
   const docsForAgent = useMemo(() => {
     if (!activeAgent) return [];
@@ -1400,25 +1400,430 @@ export default function App() {
 
   const credentialSlots = useMemo(() => modelCredentials.slice().sort((a, b) => a.label.localeCompare(b.label)), [modelCredentials]);
   const configuredCredentialCount = useMemo(
-    () => credentialSlots.filter((slot) => !!slot.apiKey.trim()).length,
+    () =>
+      credentialSlots.filter(
+        (slot) => slot.preset === "chrome_prompt" || slot.keys.some((key) => key.apiKey.trim())
+      ).length,
     [credentialSlots]
   );
+  const loadBalancerSlots = useMemo(() => loadBalancers.slice().sort((a, b) => a.name.localeCompare(b.name)), [loadBalancers]);
+  const configuredLoadBalancerCount = useMemo(
+    () => loadBalancerSlots.filter((entry) => entry.instances.length > 0).length,
+    [loadBalancerSlots]
+  );
 
-  function resolveApiKeyForAgent(agent: AgentConfig) {
-    const slot = getModelCredentialSlot(agent);
-    const shared = slot
-      ? modelCredentials.find((entry) => normalizeCredentialUrl(entry.endpoint) === normalizeCredentialUrl(slot.hint))?.apiKey.trim() ?? ""
-      : "";
-    return shared || agent.apiKey?.trim() || undefined;
+  function resolveLoadBalancerPlanForAgent(agent: AgentConfig, now?: number) {
+    return resolveLoadBalancerCandidates({
+      agent,
+      credentials: modelCredentials,
+      loadBalancers,
+      now
+    });
+  }
+
+  function resolvePrimaryCandidate(agent: AgentConfig) {
+    return resolveLoadBalancerPlanForAgent(agent)[0] ?? null;
+  }
+
+  function getRetryPolicyForAgent(agent: AgentConfig) {
+    const primary = resolvePrimaryCandidate(agent);
+    return {
+      delaySec: Math.max(0, primary?.instance.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND),
+      max: Math.max(0, primary?.instance.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES)
+    };
   }
 
   function hydrateAgentCredentials(agent: AgentConfig) {
-    const apiKey = resolveApiKeyForAgent(agent);
-    return apiKey && apiKey !== agent.apiKey ? { ...agent, apiKey } : agent;
+    const primary = resolvePrimaryCandidate(agent);
+    return primary?.hydratedAgent ?? agent;
   }
 
   function resolveSkillVerifierAgent(active: AgentConfig) {
-    return hydrateAgentCredentials(configuredSkillVerifierAgent ?? active);
+    return configuredSkillVerifierAgent ? hydrateAgentCredentials(configuredSkillVerifierAgent) : hydrateAgentCredentials(active);
+  }
+
+  function setAgentLoadBalancerRetryPolicy(agentId: string, patch: { delaySecond?: number; maxRetries?: number }) {
+    const agent = agents.find((entry) => entry.id === agentId) ?? null;
+    if (!agent?.loadBalancerId) return;
+
+    setLoadBalancers((prev) => {
+      const loadBalancer = prev.find((entry) => entry.id === agent.loadBalancerId) ?? null;
+      if (!loadBalancer) return prev;
+
+      if (!tutorialLoadBalancerRetryRestoreRef.current) {
+        tutorialLoadBalancerRetryRestoreRef.current = {};
+      }
+      if (!tutorialLoadBalancerRetryRestoreRef.current[loadBalancer.id]) {
+        tutorialLoadBalancerRetryRestoreRef.current[loadBalancer.id] = loadBalancer.instances.map((instance) => ({
+          instanceId: instance.id,
+          maxRetries: instance.maxRetries,
+          delaySecond: instance.delaySecond
+        }));
+      }
+
+      return setLoadBalancerRetryPolicy({
+        loadBalancers: prev,
+        loadBalancerId: loadBalancer.id,
+        maxRetries: patch.maxRetries,
+        delaySecond: patch.delaySecond
+      });
+    });
+  }
+
+  function queueTutorialLoadBalancerDraft(kind: "single" | "multi") {
+    const tutorialModel = "moonshotai/kimi-k2-instruct-0905";
+    const draft =
+      kind === "single"
+        ? {
+            ...createLoadBalancer("教學用Load Balancer 1"),
+            description: "教學用單一 instance Load Balancer",
+            instances: [
+              createLoadBalancerInstance({
+                model: tutorialModel,
+                description: "Primary tutorial instance"
+              })
+            ]
+          }
+        : {
+            ...createLoadBalancer("教學用Load Balancer 2"),
+            description: "教學用多 instance Load Balancer",
+            instances: Array.from({ length: 3 }, (_, index) =>
+              createLoadBalancerInstance({
+                model: tutorialModel,
+                description: `Tutorial instance ${index + 1}`
+              })
+            )
+          };
+    setConfigModal("load_balancers");
+    setLoadBalancerDraftSeed({ token: Date.now(), draft });
+  }
+
+  function ensureTutorialPrimaryLoadBalancer() {
+    const tutorialModel = "moonshotai/kimi-k2-instruct-0905";
+    const credential =
+      modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => credentialTestResults[key.id]?.ok === true)) ??
+      modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => key.apiKey.trim())) ??
+      null;
+    const key =
+      credential?.keys.find((entry) => credentialTestResults[entry.id]?.ok === true) ??
+      credential?.keys.find((entry) => entry.apiKey.trim()) ??
+      null;
+
+    if (!credential || !key) return;
+
+    const existing = loadBalancers.find((entry) => entry.name.trim() === "教學用Load Balancer 1") ?? null;
+    const existingInstance = existing?.instances[0] ?? null;
+    const now = Date.now();
+    const nextEntry: LoadBalancerConfig = {
+      ...(existing ?? createLoadBalancer("教學用Load Balancer 1")),
+      name: "教學用Load Balancer 1",
+      description: "教學用單一 instance Load Balancer",
+      instances: [
+        {
+          ...(existingInstance ?? createLoadBalancerInstance()),
+          credentialId: credential.id,
+          credentialKeyId: key.id,
+          model: tutorialModel,
+          description: "Primary tutorial instance",
+          failure: false,
+          failureCount: 0,
+          nextCheckTime: null,
+          updatedAt: now
+        }
+      ],
+      updatedAt: now
+    };
+
+    const alreadyMatches =
+      !!existing &&
+      existing.description === nextEntry.description &&
+      existing.instances.length === 1 &&
+      existing.instances[0]?.credentialId === nextEntry.instances[0]?.credentialId &&
+      existing.instances[0]?.credentialKeyId === nextEntry.instances[0]?.credentialKeyId &&
+      existing.instances[0]?.model === nextEntry.instances[0]?.model &&
+      existing.instances[0]?.description === nextEntry.instances[0]?.description &&
+      existing.instances[0]?.failure === false &&
+      existing.instances[0]?.failureCount === 0 &&
+      existing.instances[0]?.nextCheckTime === null;
+
+    if (alreadyMatches) {
+      setLoadBalancerPanelSelectedId(existing.id);
+      return;
+    }
+
+    setLoadBalancers((prev) => {
+      const hasExisting = prev.some((entry) => entry.id === nextEntry.id);
+      return hasExisting ? prev.map((entry) => (entry.id === nextEntry.id ? nextEntry : entry)) : [nextEntry, ...prev];
+    });
+    setLoadBalancerPanelSelectedId(nextEntry.id);
+    logNow({
+      category: "load_balancer",
+      ok: true,
+      message: `Tutorial load balancer ensured: ${nextEntry.name}`,
+      details: `${credential.label} / ${tutorialModel}`
+    });
+  }
+
+  function ensureTutorialSecondaryLoadBalancer() {
+    const tutorialModel = "moonshotai/kimi-k2-instruct-0905";
+    const primaryLoadBalancer = loadBalancers.find((entry) => entry.name.trim() === "教學用Load Balancer 1") ?? null;
+    const primaryInstance = primaryLoadBalancer?.instances[0] ?? null;
+    const primaryCredential =
+      (primaryInstance ? modelCredentials.find((entry) => entry.id === primaryInstance.credentialId) : null) ??
+      modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => credentialTestResults[key.id]?.ok === true)) ??
+      modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => key.apiKey.trim())) ??
+      null;
+    if (!primaryCredential) return;
+
+    const primaryKey =
+      primaryCredential.keys.find((entry) => entry.id === primaryInstance?.credentialKeyId && entry.apiKey.trim()) ??
+      primaryCredential.keys.find((entry) => credentialTestResults[entry.id]?.ok === true) ??
+      primaryCredential.keys.find((entry) => entry.apiKey.trim()) ??
+      null;
+    if (!primaryKey) return;
+
+    const secondarySameCredentialKey =
+      primaryCredential.keys.find((entry) => entry.id !== primaryKey.id && entry.apiKey.trim()) ?? null;
+    const secondaryCredential =
+      secondarySameCredentialKey
+        ? primaryCredential
+        : modelCredentials.find((entry) => entry.id !== primaryCredential.id && entry.preset !== "chrome_prompt" && entry.keys.some((key) => key.apiKey.trim())) ??
+          null;
+    const secondaryKey =
+      secondarySameCredentialKey ??
+      secondaryCredential?.keys.find((entry) => credentialTestResults[entry.id]?.ok === true) ??
+      secondaryCredential?.keys.find((entry) => entry.apiKey.trim()) ??
+      null;
+    if (!secondaryCredential || !secondaryKey) return;
+
+    const existing = loadBalancers.find((entry) => entry.name.trim() === "教學用Load Balancer 2") ?? null;
+    const now = Date.now();
+    const nextInstances = [
+      createLoadBalancerInstance({
+        id: existing?.instances[0]?.id,
+        credentialId: primaryCredential.id,
+        credentialKeyId: primaryKey.id,
+        model: tutorialModel,
+        description: "Primary provider / model baseline",
+        maxRetries: existing?.instances[0]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
+        delaySecond: existing?.instances[0]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+        failure: false,
+        failureCount: 0,
+        nextCheckTime: null,
+        createdAt: existing?.instances[0]?.createdAt
+      }),
+      createLoadBalancerInstance({
+        id: existing?.instances[1]?.id,
+        credentialId: primaryCredential.id,
+        credentialKeyId: primaryKey.id,
+        model: "groq/compound",
+        description: "Same key with alternate model",
+        maxRetries: existing?.instances[1]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
+        delaySecond: existing?.instances[1]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+        failure: false,
+        failureCount: 0,
+        nextCheckTime: null,
+        createdAt: existing?.instances[1]?.createdAt
+      }),
+      createLoadBalancerInstance({
+        id: existing?.instances[2]?.id,
+        credentialId: secondaryCredential.id,
+        credentialKeyId: secondaryKey.id,
+        model: tutorialModel,
+        description:
+          secondaryCredential.id === primaryCredential.id ? "Different key with same model" : "Different provider with same model",
+        maxRetries: existing?.instances[2]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
+        delaySecond: existing?.instances[2]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+        failure: false,
+        failureCount: 0,
+        nextCheckTime: null,
+        createdAt: existing?.instances[2]?.createdAt
+      })
+    ];
+
+    const nextEntry: LoadBalancerConfig = {
+      ...(existing ?? createLoadBalancer("教學用Load Balancer 2")),
+      name: "教學用Load Balancer 2",
+      description: "教學用多 instance Load Balancer",
+      instances: nextInstances,
+      updatedAt: now
+    };
+
+    const alreadyMatches =
+      !!existing &&
+      existing.description === nextEntry.description &&
+      existing.instances.length === nextEntry.instances.length &&
+      existing.instances.every((instance, index) => {
+        const nextInstance = nextEntry.instances[index];
+        return (
+          instance.credentialId === nextInstance.credentialId &&
+          instance.credentialKeyId === nextInstance.credentialKeyId &&
+          instance.model === nextInstance.model &&
+          instance.description === nextInstance.description &&
+          instance.failure === false &&
+          instance.failureCount === 0 &&
+          instance.nextCheckTime === null
+        );
+      });
+
+    if (alreadyMatches) {
+      setLoadBalancerPanelSelectedId(existing.id);
+      return;
+    }
+
+    setLoadBalancers((prev) => {
+      const hasExisting = prev.some((entry) => entry.id === nextEntry.id);
+      return hasExisting ? prev.map((entry) => (entry.id === nextEntry.id ? nextEntry : entry)) : [nextEntry, ...prev];
+    });
+    setLoadBalancerPanelSelectedId(nextEntry.id);
+    logNow({
+      category: "load_balancer",
+      ok: true,
+      message: `Tutorial load balancer ensured: ${nextEntry.name}`,
+      details: `${primaryCredential.label} / ${tutorialModel}\n${primaryCredential.label} / groq/compound\n${secondaryCredential.label} / ${tutorialModel}`
+    });
+  }
+
+  function classifyRetryableAgentFailure(text: string) {
+    const normalized = text.trim();
+    if (!normalized) return null;
+    if (normalized.startsWith("Request failed: HTTP 400") || normalized.startsWith("Request failed: HTTP 422")) {
+      return { retryable: false, markFailure: false };
+    }
+    if (normalized.startsWith("Request failed: HTTP ")) {
+      const status = Number(normalized.slice("Request failed: HTTP ".length).split(/\D/, 1)[0] || 0);
+      if (status === 400 || status === 422) return { retryable: false, markFailure: false };
+      return { retryable: true, markFailure: true };
+    }
+    if (normalized.startsWith("Request failed:")) {
+      return { retryable: true, markFailure: true };
+    }
+    if (normalized.startsWith("HTTP 400") || normalized.startsWith("HTTP 422")) {
+      return { retryable: false, markFailure: false };
+    }
+    if (normalized.startsWith("HTTP ")) {
+      return { retryable: true, markFailure: true };
+    }
+    if (normalized.includes("Chrome Prompt API not available")) {
+      return { retryable: true, markFailure: true };
+    }
+    return null;
+  }
+
+  async function runOneToOneWithLoadBalancer(args: {
+    logicalAgent: AgentConfig;
+    input: string;
+    history: ChatMessage[];
+    system?: string;
+    onDelta: (text: string) => void;
+    onLog?: (text: string) => void;
+  }) {
+    let candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
+    if (!candidates.length) {
+      const fallbackAgent = hydrateAgentCredentials(args.logicalAgent);
+      return runOneToOne({
+        adapter: pickAdapter(fallbackAgent),
+        agent: fallbackAgent,
+        input: args.input,
+        history: args.history,
+        system: args.system,
+        onDelta: args.onDelta,
+        retry: getRetryPolicyForAgent(args.logicalAgent),
+        onLog: args.onLog
+      });
+    }
+
+    let lastFailureText = "No available load balancer instance.";
+    for (const candidate of candidates) {
+      const retry = {
+        delaySec: Math.max(0, candidate.instance.delaySecond),
+        max: Math.max(0, candidate.instance.maxRetries)
+      };
+      const text = await runOneToOne({
+        adapter: pickAdapter(candidate.hydratedAgent),
+        agent: candidate.hydratedAgent,
+        input: args.input,
+        history: args.history,
+        system: args.system,
+        onDelta: args.onDelta,
+        retry,
+        onLog: args.onLog
+      });
+      const failure = classifyRetryableAgentFailure(text);
+      if (failure?.retryable) {
+        lastFailureText = text;
+        if (failure.markFailure) {
+          setLoadBalancers((prev) =>
+            applyInstanceFailure({
+              loadBalancers: prev,
+              loadBalancerId: candidate.loadBalancer.id,
+              instanceId: candidate.instance.id
+            })
+          );
+          logNow({
+            category: "load_balancer",
+            agent: args.logicalAgent.name,
+            ok: false,
+            message: `Instance failed: ${candidate.loadBalancer.name}`,
+            details: `${candidate.credential.label} / ${candidate.instance.model}\n${text}`
+          });
+        }
+        continue;
+      }
+
+      setLoadBalancers((prev) =>
+        applyInstanceSuccess({
+          loadBalancers: prev,
+          loadBalancerId: candidate.loadBalancer.id,
+          instanceId: candidate.instance.id
+        })
+      );
+      return text;
+    }
+
+    return lastFailureText;
+  }
+
+  async function detectWithLoadBalancer(agent: AgentConfig): Promise<DetectResult> {
+    const candidates = resolveLoadBalancerPlanForAgent(agent);
+    if (!candidates.length) {
+      const fallbackAgent = hydrateAgentCredentials(agent);
+      const adapter = pickAdapter(fallbackAgent);
+      return adapter.detect ? await adapter.detect(fallbackAgent) : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
+    }
+
+    let lastResult: DetectResult = { ok: false, detectedType: "unknown", notes: "No available instance" };
+    for (const candidate of candidates) {
+      const adapter = pickAdapter(candidate.hydratedAgent);
+      const result = adapter.detect
+        ? await adapter.detect(candidate.hydratedAgent)
+        : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
+      if (result.ok) {
+        setLoadBalancers((prev) =>
+          applyInstanceSuccess({
+            loadBalancers: prev,
+            loadBalancerId: candidate.loadBalancer.id,
+            instanceId: candidate.instance.id
+          })
+        );
+        return result;
+      }
+      lastResult = result;
+      const failure = classifyRetryableAgentFailure(result.notes ?? "");
+      if (failure?.markFailure) {
+        setLoadBalancers((prev) =>
+          applyInstanceFailure({
+            loadBalancers: prev,
+            loadBalancerId: candidate.loadBalancer.id,
+            instanceId: candidate.instance.id
+          })
+        );
+      }
+      if (!failure?.retryable) {
+        return result;
+      }
+    }
+    return lastResult;
   }
 
   async function ensureMcpToolsLoadedForServers(
@@ -1479,10 +1884,11 @@ export default function App() {
       .filter((entry) => entry.tools.length > 0);
   }
 
-  function addCredential(preset: "openai" | "groq" | "custom") {
+  function addCredential(preset: "openai" | "groq" | "custom" | "chrome_prompt") {
     setModelCredentials((prev) => {
       if (preset === "openai" && prev.some((entry) => entry.preset === "openai")) return prev;
       if (preset === "groq" && prev.some((entry) => entry.preset === "groq")) return prev;
+      if (preset === "chrome_prompt" && prev.some((entry) => entry.preset === "chrome_prompt")) return prev;
       const customCount = prev.filter((entry) => entry.preset === "custom").length;
       return [...prev, createCredentialEntry(preset, customCount + 1)];
     });
@@ -1500,7 +1906,7 @@ export default function App() {
           : entry
       )
     );
-    if (patch.endpoint !== undefined || patch.apiKey !== undefined) {
+    if (patch.endpoint !== undefined) {
       setCredentialTestResults((prev) => {
         if (!(id in prev)) return prev;
         const next = { ...prev };
@@ -1514,51 +1920,124 @@ export default function App() {
     setModelCredentials((prev) => prev.filter((entry) => entry.id !== id));
     setVisibleCredentialIds((prev) => {
       const next = { ...prev };
-      delete next[id];
+      const credential = modelCredentials.find((entry) => entry.id === id);
+      credential?.keys.forEach((key) => delete next[key.id]);
       return next;
     });
     setCredentialTestResults((prev) => {
-      if (!(id in prev)) return prev;
       const next = { ...prev };
-      delete next[id];
+      const credential = modelCredentials.find((entry) => entry.id === id);
+      credential?.keys.forEach((key) => delete next[key.id]);
       return next;
     });
     setTestingCredentialIds((prev) => {
-      if (!(id in prev)) return prev;
       const next = { ...prev };
-      delete next[id];
+      const credential = modelCredentials.find((entry) => entry.id === id);
+      credential?.keys.forEach((key) => delete next[key.id]);
       return next;
     });
   }
 
-  async function runCredentialTest(slot: ModelCredentialEntry) {
-    setTestingCredentialIds((prev) => ({ ...prev, [slot.id]: true }));
-    setCredentialTestResults((prev) => ({ ...prev, [slot.id]: undefined }));
+  function addCredentialKey(credentialId: string) {
+    setModelCredentials((prev) =>
+      prev.map((entry) =>
+        entry.id === credentialId
+          ? {
+              ...entry,
+              keys: [...entry.keys, createCredentialKeyEntry("")],
+              updatedAt: Date.now()
+            }
+          : entry
+      )
+    );
+  }
+
+  function updateCredentialKey(credentialId: string, keyId: string, apiKey: string) {
+    setModelCredentials((prev) =>
+      prev.map((entry) =>
+        entry.id === credentialId
+          ? {
+              ...entry,
+              keys: entry.keys.map((key) =>
+                key.id === keyId
+                  ? {
+                      ...key,
+                      apiKey,
+                      updatedAt: Date.now()
+                    }
+                  : key
+              ),
+              updatedAt: Date.now()
+            }
+          : entry
+      )
+    );
+    setCredentialTestResults((prev) => {
+      const next = { ...prev };
+      delete next[keyId];
+      return next;
+    });
+  }
+
+  function removeCredentialKey(credentialId: string, keyId: string) {
+    setModelCredentials((prev) =>
+      prev.map((entry) =>
+        entry.id === credentialId
+          ? {
+              ...entry,
+              keys: entry.keys.filter((key) => key.id !== keyId),
+              updatedAt: Date.now()
+            }
+          : entry
+      )
+    );
+    setVisibleCredentialIds((prev) => {
+      const next = { ...prev };
+      delete next[keyId];
+      return next;
+    });
+    setCredentialTestResults((prev) => {
+      const next = { ...prev };
+      delete next[keyId];
+      return next;
+    });
+    setTestingCredentialIds((prev) => {
+      const next = { ...prev };
+      delete next[keyId];
+      return next;
+    });
+  }
+
+  async function runCredentialTest(slot: ModelCredentialEntry, keyId: string) {
+    const key = slot.keys.find((entry) => entry.id === keyId);
+    if (!key) return;
+    setTestingCredentialIds((prev) => ({ ...prev, [key.id]: true }));
+    setCredentialTestResults((prev) => ({ ...prev, [key.id]: undefined }));
     try {
-      const result = await testCredentialConnection(slot);
-      setCredentialTestResults((prev) => ({ ...prev, [slot.id]: result }));
+      const result = await testCredentialConnection(slot, key.apiKey);
+      setCredentialTestResults((prev) => ({ ...prev, [key.id]: result }));
       logNow({
         category: "credentials",
         agent: slot.label,
         ok: true,
         message: "Credential test passed",
-        details: `${slot.endpoint}\n${result.message}`
+        details: `${slot.endpoint}\nKey ${slot.keys.findIndex((entry) => entry.id === keyId) + 1}\n${result.message}`
       });
     } catch (e: any) {
       const message = String(e?.message ?? e);
       setCredentialTestResults((prev) => ({
         ...prev,
-        [slot.id]: { ok: false, message }
+        [key.id]: { ok: false, message }
       }));
       logNow({
         category: "credentials",
         agent: slot.label,
         ok: false,
         message: "Credential test failed",
-        details: `${slot.endpoint}\n${message}`
+        details: `${slot.endpoint}\nKey ${slot.keys.findIndex((entry) => entry.id === keyId) + 1}\n${message}`
       });
     } finally {
-      setTestingCredentialIds((prev) => ({ ...prev, [slot.id]: false }));
+      setTestingCredentialIds((prev) => ({ ...prev, [key.id]: false }));
     }
   }
 
@@ -1581,9 +2060,11 @@ export default function App() {
     return !!scenario?.steps.some((step) => step.behavior === "set_history_limit_to_one");
   }
 
-  function scenarioRequiresRetryOverride(scenario: TutorialScenarioDefinition | null | undefined) {
+  function scenarioRequiresLoadBalancerRetryOverride(scenario: TutorialScenarioDefinition | null | undefined) {
     return !!scenario?.steps.some(
-      (step) => typeof step.automation?.retryDelaySec === "number" || typeof step.automation?.retryMax === "number"
+      (step) =>
+        typeof step.automation?.loadBalancerDelaySecond === "number" ||
+        typeof step.automation?.loadBalancerMaxRetries === "number"
     );
   }
 
@@ -1595,13 +2076,33 @@ export default function App() {
     return original;
   }
 
-  function restoreTutorialRetryIfNeeded() {
-    if (tutorialRetryRestoreRef.current === null) return tutorialRetryRestoreRef.current;
-    const original = tutorialRetryRestoreRef.current;
-    setRetryDelaySec(original.delaySec);
-    setRetryMax(original.max);
-    tutorialRetryRestoreRef.current = null;
-    return original;
+  function restoreTutorialLoadBalancerRetryIfNeeded() {
+    if (!tutorialLoadBalancerRetryRestoreRef.current) return null;
+    const restoreMap = tutorialLoadBalancerRetryRestoreRef.current;
+    setLoadBalancers((prev) =>
+      prev.map((loadBalancer) => {
+        const restoreEntries = restoreMap[loadBalancer.id];
+        if (!restoreEntries?.length) return loadBalancer;
+        const byId = new Map(restoreEntries.map((entry) => [entry.instanceId, entry]));
+        return {
+          ...loadBalancer,
+          instances: loadBalancer.instances.map((instance) => {
+            const restore = byId.get(instance.id);
+            return restore
+              ? {
+                  ...instance,
+                  maxRetries: restore.maxRetries,
+                  delaySecond: restore.delaySecond,
+                  updatedAt: Date.now()
+                }
+              : instance;
+          }),
+          updatedAt: Date.now()
+        };
+      })
+    );
+    tutorialLoadBalancerRetryRestoreRef.current = null;
+    return restoreMap;
   }
 
   async function startTutorial(scenarioId: string) {
@@ -1618,7 +2119,7 @@ export default function App() {
     const snapshot = await captureTutorialWorkspaceSnapshot(tutorialRuntimeState);
     tutorialSnapshotRef.current = snapshot;
     tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(scenario) ? historyMessageLimit : null;
-    tutorialRetryRestoreRef.current = scenarioRequiresRetryOverride(scenario) ? { delaySec: retryDelaySec, max: retryMax } : null;
+    tutorialLoadBalancerRetryRestoreRef.current = scenarioRequiresLoadBalancerRetryOverride(scenario) ? {} : null;
     tutorialStepKeyRef.current = "";
     setTutorialScenario(scenario);
     setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
@@ -1633,7 +2134,7 @@ export default function App() {
 
   function moveToNextTutorialScenario() {
     const restoredHistoryLimit = restoreTutorialHistoryLimitIfNeeded();
-    const restoredRetry = restoreTutorialRetryIfNeeded();
+    restoreTutorialLoadBalancerRetryIfNeeded();
     if (tutorialScenarioIndex === null) {
       setShowTutorialExitPrompt(true);
       return;
@@ -1647,9 +2148,7 @@ export default function App() {
     tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(nextScenario)
       ? restoredHistoryLimit ?? historyMessageLimit
       : null;
-    tutorialRetryRestoreRef.current = scenarioRequiresRetryOverride(nextScenario)
-      ? restoredRetry ?? { delaySec: retryDelaySec, max: retryMax }
-      : null;
+    tutorialLoadBalancerRetryRestoreRef.current = scenarioRequiresLoadBalancerRetryOverride(nextScenario) ? {} : null;
     setTutorialScenario(nextScenario);
     setTutorialScenarioIndex(tutorialScenarioIndex + 1);
     setTutorialStepIndex(0);
@@ -1662,7 +2161,7 @@ export default function App() {
 
   async function finishTutorial(keepWorkspaceChanges: boolean) {
     restoreTutorialHistoryLimitIfNeeded();
-    restoreTutorialRetryIfNeeded();
+    restoreTutorialLoadBalancerRetryIfNeeded();
     if (!keepWorkspaceChanges && tutorialSnapshotRef.current) {
       await restoreTutorialWorkspaceSnapshot(tutorialSnapshotRef.current);
       setBuiltInTools(tutorialSnapshotRef.current.builtInTools);
@@ -1680,7 +2179,7 @@ export default function App() {
 
     tutorialSnapshotRef.current = null;
     tutorialHistoryLimitRestoreRef.current = null;
-    tutorialRetryRestoreRef.current = null;
+    tutorialLoadBalancerRetryRestoreRef.current = null;
     tutorialStepKeyRef.current = "";
     setTutorialScenario(null);
     setTutorialScenarioIndex(null);
@@ -1787,13 +2286,11 @@ export default function App() {
     );
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.agent,
+      const raw = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.agent,
         input: decisionPrompt,
         history: [],
         onDelta: () => {},
-        retry: args.retry,
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
@@ -1837,13 +2334,11 @@ export default function App() {
     const prompt = buildSkillDecisionPrompt(args.userInput, JSON.stringify(skillList, null, 2), args.language);
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.agent,
+      const raw = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.agent,
         input: prompt,
         history: [],
         onDelta: () => {},
-        retry: args.retry,
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
@@ -1897,13 +2392,11 @@ export default function App() {
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.verifierAgent,
+      const raw = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.verifierAgent,
         input: prompt,
         history: [],
         onDelta: () => {},
-        retry: args.retry,
         onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, message: t })
       });
 
@@ -1950,13 +2443,11 @@ export default function App() {
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.agent,
+      const raw = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.agent,
         input: prompt,
         history: [],
         onDelta: () => {},
-        retry: args.retry,
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
@@ -2021,13 +2512,11 @@ export default function App() {
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.agent,
+      const raw = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.agent,
         input: prompt,
         history: [],
         onDelta: () => {},
-        retry: args.retry,
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
@@ -2079,13 +2568,11 @@ export default function App() {
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.agent,
+      const raw = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.agent,
         input: prompt,
         history: [],
         onDelta: () => {},
-        retry: args.retry,
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
@@ -2145,7 +2632,7 @@ export default function App() {
       agent: args.agent,
       adapter: args.adapter,
       userInput: args.decisionContext ? `${args.input}\n\nCurrent loaded skill context (internal only):\n${args.decisionContext}` : args.input,
-      retry: { delaySec: retryDelaySec, max: retryMax },
+      retry: getRetryPolicyForAgent(args.agent),
       toolEntries: args.toolEntries,
       promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
       fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
@@ -2655,7 +3142,7 @@ export default function App() {
             await runSkillBootstrapPlan({
               agent: args.agent,
               adapter: args.adapter,
-              retry: { delaySec: retryDelaySec, max: retryMax },
+              retry: getRetryPolicyForAgent(args.agent),
               skill: args.skill,
               runtime: args.prepared.runtime,
               userInput: args.userInput
@@ -2716,7 +3203,7 @@ export default function App() {
                 agent: args.agent,
                 adapter: args.adapter,
                 userInput: args.prepared.decisionContext ? `${fastPrompt}\n\nCurrent loaded skill context (internal only):\n${args.prepared.decisionContext}` : fastPrompt,
-                retry: { delaySec: retryDelaySec, max: retryMax },
+                retry: getRetryPolicyForAgent(args.agent),
                 toolEntries: fastPathScope.toolEntries,
                 promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
                 fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
@@ -2739,7 +3226,7 @@ export default function App() {
             return await runSkillStepPlanner({
               agent: args.agent,
               adapter: args.adapter,
-              retry: { delaySec: retryDelaySec, max: retryMax },
+              retry: getRetryPolicyForAgent(args.agent),
               state,
               skill: args.skill,
               runtime: args.prepared.runtime,
@@ -2850,7 +3337,7 @@ export default function App() {
             await runSkillCompletionGate({
               agent: args.agent,
               adapter: args.adapter,
-              retry: { delaySec: retryDelaySec, max: retryMax },
+              retry: getRetryPolicyForAgent(args.agent),
               state,
               skill: args.skill,
               runtime: args.prepared.runtime,
@@ -2894,14 +3381,12 @@ export default function App() {
     }
 
     args.onStatus?.("正在依 skill 產生初版回答中…");
-    let currentAnswer = await runOneToOne({
-      adapter: args.adapter,
-      agent: args.agent,
+    let currentAnswer = await runOneToOneWithLoadBalancer({
+      logicalAgent: args.agent,
       input: currentInput,
       history: limitHistory(history),
       system: args.prepared.system,
       onDelta: () => {},
-      retry: { delaySec: retryDelaySec, max: retryMax },
       onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
     });
 
@@ -2927,7 +3412,7 @@ export default function App() {
         skill: args.skill,
         runtime: args.prepared.runtime,
         round,
-        retry: { delaySec: retryDelaySec, max: retryMax }
+        retry: getRetryPolicyForAgent(verifierAgent)
       });
 
       if (!verifyDecision) {
@@ -2986,14 +3471,12 @@ export default function App() {
       }
 
       args.onStatus?.(`正在產生第 ${round + 1} 輪回答中…`);
-      currentAnswer = await runOneToOne({
-        adapter: args.adapter,
-        agent: args.agent,
+      currentAnswer = await runOneToOneWithLoadBalancer({
+        logicalAgent: args.agent,
         input: currentInput,
         history: limitHistory(history),
         system: args.prepared.system,
         onDelta: () => {},
-        retry: { delaySec: retryDelaySec, max: retryMax },
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
@@ -3146,7 +3629,7 @@ export default function App() {
             agent: resolvedActiveAgent,
             adapter,
             userInput: input,
-            retry: { delaySec: retryDelaySec, max: retryMax },
+            retry: getRetryPolicyForAgent(resolvedActiveAgent),
             skills: availableSkillsForAgent,
             language: mcpPromptTemplates.activeId
           });
@@ -3328,14 +3811,12 @@ export default function App() {
           }
         };
 
-        const full = await runOneToOne({
-          adapter,
-          agent: resolvedActiveAgent,
+        const full = await runOneToOneWithLoadBalancer({
+          logicalAgent: activeAgent,
           input: finalInput,
           history: limitHistory(history),
           system: finalSystem,
           onDelta,
-          retry: { delaySec: retryDelaySec, max: retryMax },
           onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
         });
         finalizeAssistant({
@@ -3499,7 +3980,7 @@ export default function App() {
         userSystem,
         maxRounds: 8,
         reactMax,
-        retry: { delaySec: retryDelaySec, max: retryMax },
+        retry: getRetryPolicyForAgent(leaderAgent),
         onLog: (t) =>
           pushLog({
             category: t.startsWith("[retry]") ? "retry" : "leader_team",
@@ -3800,17 +4281,13 @@ export default function App() {
 
     setIsSummaryExporting(true);
     try {
-      const resolvedActiveAgent = hydrateAgentCredentials(activeAgent);
-      const adapter = pickAdapter(resolvedActiveAgent);
-      const summary = await runOneToOne({
-        adapter,
-        agent: resolvedActiveAgent,
+      const summary = await runOneToOneWithLoadBalancer({
+        logicalAgent: activeAgent,
         input:
           "Please compress this conversation into a concise reusable summary for future continuation. Keep key facts, decisions, unresolved items, user preferences, and open tasks. Output plain text only.",
         history,
         system:
           "You are preparing a conversation carry-over note. Write in Traditional Chinese when possible. Do not include markdown code fences.",
-        retry: { delaySec: retryDelaySec, max: retryMax },
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
       });
@@ -3969,12 +4446,19 @@ export default function App() {
               >
                 <span className="cc-card-label">Main Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
-                <span className="cc-card-hint">{activeAgent?.type ?? ""}{activeAgent?.model ? ` · ${activeAgent.model}` : ""}</span>
+                <span className="cc-card-hint">
+                  {loadBalancerSlots.find((entry) => entry.id === activeAgent?.loadBalancerId)?.name ?? "No load balancer"}
+                </span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("credentials")} data-tutorial-id="chat-config-credentials-card">
                 <span className="cc-card-label">Credentials</span>
                 <strong className="cc-card-value">{configuredCredentialCount}/{credentialSlots.length}</strong>
                 <span className="cc-card-hint">集中管理模型金鑰與後續憑證</span>
+              </button>
+              <button className="cc-card" onClick={() => setConfigModal("load_balancers")} data-tutorial-id="chat-config-load-balancer-card">
+                <span className="cc-card-label">Load Balancer</span>
+                <strong className="cc-card-value">{configuredLoadBalancerCount}/{loadBalancerSlots.length}</strong>
+                <span className="cc-card-hint">Agent 透過 LB 選擇 provider / model / key</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("mode")} data-tutorial-id="chat-config-mode-card">
                 <span className="cc-card-label">Mode</span>
@@ -3982,9 +4466,9 @@ export default function App() {
                 <span className="cc-card-hint">{mode === "leader_team" ? "Legacy Leader → Members" : "1:1 對話"}</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("history")} data-tutorial-id="chat-config-history-card">
-                <span className="cc-card-label">History & Retry</span>
+                <span className="cc-card-label">History</span>
                 <strong className="cc-card-value">{historyMessageLimit} msgs</strong>
-                <span className="cc-card-hint">retry {retryMax}× / delay {retryDelaySec}s</span>
+                <span className="cc-card-hint">只保留與對話歷史相關設定</span>
               </button>
               {mode === "leader_team" && (
                 <button className="cc-card" onClick={() => setConfigModal("team")}>
@@ -4045,7 +4529,7 @@ export default function App() {
               <HelpModal title="Credentials" onClose={() => setConfigModal(null)} width="min(680px, 96vw)">
                 <div style={{ display: "grid", gap: 14 }} data-tutorial-id="credentials-modal">
                   <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.7 }}>
-                    這裡集中管理和模型或外部服務有關的 credentials。這一版先放共用的 Model API Key，會依 provider / endpoint 自動套用給所有相同服務的 agent。
+                    這裡集中管理 provider / endpoint 與多把 API keys。Load Balancer 的 instance 會選擇其中一筆 credential，再綁定某一把 key 來執行。
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button type="button" onClick={() => addCredential("openai")} style={iconActionBtn}>
@@ -4057,9 +4541,12 @@ export default function App() {
                     <button type="button" onClick={() => addCredential("custom")} style={iconActionBtn}>
                       + Custom
                     </button>
+                    <button type="button" onClick={() => addCredential("chrome_prompt")} style={iconActionBtn}>
+                      + Chrome Prompt
+                    </button>
                   </div>
                   {credentialSlots.length === 0 ? (
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>目前還沒有 credential。可先新增 OpenAI、Groq 或 Custom。</div>
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>目前還沒有 credential。可先新增 OpenAI、Groq、Custom 或 Chrome Prompt。</div>
                   ) : (
                     credentialSlots.map((slot) => (
                       <div
@@ -4074,7 +4561,11 @@ export default function App() {
                             <div style={{ fontSize: 12, opacity: 0.72 }}>{slot.endpoint || "尚未設定 endpoint"}</div>
                           </div>
                           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                            <div style={{ fontSize: 12, opacity: 0.72 }}>{slot.apiKey.trim() ? "已設定 API key" : "尚未設定 API key"}</div>
+                            <div style={{ fontSize: 12, opacity: 0.72 }}>
+                              {slot.preset === "chrome_prompt"
+                                ? "不需要 API key"
+                                : `已設定 ${slot.keys.filter((key) => key.apiKey.trim()).length}/${slot.keys.length} keys`}
+                            </div>
                             <button type="button" onClick={() => removeCredential(slot.id)} style={dangerMiniBtn}>
                               Remove
                             </button>
@@ -4110,59 +4601,96 @@ export default function App() {
                           />
                         </div>
 
-                        <div style={{ display: "grid", gap: 6 }}>
-                          <label style={label}>Model API Key</label>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <input
-                              type={visibleCredentialIds[slot.id] ? "text" : "password"}
-                              value={slot.apiKey}
-                              onChange={(e) => {
-                                updateCredential(slot.id, { apiKey: e.target.value });
-                              }}
-                              style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
-                              placeholder="Enter API key"
-                              data-tutorial-id={slot.preset === "groq" ? "credential-groq-api-key" : undefined}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setVisibleCredentialIds((prev) => ({ ...prev, [slot.id]: !prev[slot.id] }))}
-                              style={iconBtn}
-                              title={visibleCredentialIds[slot.id] ? "Hide API key" : "Show API key"}
-                              aria-label={visibleCredentialIds[slot.id] ? "Hide API key" : "Show API key"}
-                            >
-                              <EyeIcon open={!!visibleCredentialIds[slot.id]} />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{ display: "grid", gap: 8 }}>
-                          <button
-                            type="button"
-                            onClick={() => void runCredentialTest(slot)}
-                            disabled={testingCredentialIds[slot.id] || !slot.endpoint.trim()}
-                            data-tutorial-id={slot.preset === "groq" ? "credential-groq-test" : undefined}
-                            style={{
-                              ...iconActionBtn,
-                              width: "fit-content",
-                              opacity: testingCredentialIds[slot.id] || !slot.endpoint.trim() ? 0.64 : 1,
-                              cursor: testingCredentialIds[slot.id] || !slot.endpoint.trim() ? "not-allowed" : "pointer"
-                            }}
-                          >
-                            {testingCredentialIds[slot.id] ? "測試中..." : "測試 Provider 連線"}
-                          </button>
-                          {credentialTestResults[slot.id] ? (
-                            <div
-                              style={{
-                                fontSize: 12,
-                                lineHeight: 1.6,
-                                color: credentialTestResults[slot.id]?.ok ? "var(--ok)" : "var(--danger)",
-                                opacity: 0.92
-                              }}
-                            >
-                              {credentialTestResults[slot.id]?.message}
+                        {slot.preset !== "chrome_prompt" ? (
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <label style={label}>Model API Keys</label>
+                              <button
+                                type="button"
+                                onClick={() => addCredentialKey(slot.id)}
+                                style={{ ...iconActionBtn, marginLeft: "auto" }}
+                                data-tutorial-id={slot.preset === "groq" ? "credential-groq-add-key" : undefined}
+                              >
+                                + Key
+                              </button>
                             </div>
-                          ) : null}
-                        </div>
+                            {slot.keys.map((key, keyIndex) => (
+                              <div
+                                key={key.id}
+                                style={{
+                                  display: "grid",
+                                  gap: 8,
+                                  padding: 12,
+                                  borderRadius: 12,
+                                  border: "1px solid var(--border)",
+                                  background: "var(--bg-2)"
+                                }}
+                              >
+                                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700 }}>Key {keyIndex + 1}</div>
+                                  <button type="button" onClick={() => removeCredentialKey(slot.id, key.id)} style={dangerMiniBtn} disabled={slot.keys.length <= 1}>
+                                    Remove
+                                  </button>
+                                </div>
+                                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                  <input
+                                    type={visibleCredentialIds[key.id] ? "text" : "password"}
+                                    value={key.apiKey}
+                                    onChange={(e) => updateCredentialKey(slot.id, key.id, e.target.value)}
+                                    style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
+                                    placeholder="Enter API key"
+                                    data-tutorial-id={
+                                      slot.preset === "groq"
+                                        ? keyIndex === 0
+                                          ? "credential-groq-api-key"
+                                          : `credential-groq-api-key-${keyIndex + 1}`
+                                        : undefined
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setVisibleCredentialIds((prev) => ({ ...prev, [key.id]: !prev[key.id] }))}
+                                    style={iconBtn}
+                                    title={visibleCredentialIds[key.id] ? "Hide API key" : "Show API key"}
+                                    aria-label={visibleCredentialIds[key.id] ? "Hide API key" : "Show API key"}
+                                  >
+                                    <EyeIcon open={!!visibleCredentialIds[key.id]} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void runCredentialTest(slot, key.id)}
+                                    disabled={testingCredentialIds[key.id] || !slot.endpoint.trim()}
+                                    data-tutorial-id={slot.preset === "groq" && keyIndex === 0 ? "credential-groq-test" : undefined}
+                                    style={{
+                                      ...iconActionBtn,
+                                      whiteSpace: "nowrap",
+                                      opacity: testingCredentialIds[key.id] || !slot.endpoint.trim() ? 0.64 : 1,
+                                      cursor: testingCredentialIds[key.id] || !slot.endpoint.trim() ? "not-allowed" : "pointer"
+                                    }}
+                                  >
+                                    {testingCredentialIds[key.id] ? "測試中..." : "測試 Provider 連線"}
+                                  </button>
+                                </div>
+                                {credentialTestResults[key.id] ? (
+                                  <div
+                                    style={{
+                                      fontSize: 12,
+                                      lineHeight: 1.6,
+                                      color: credentialTestResults[key.id]?.ok ? "var(--ok)" : "var(--danger)",
+                                      opacity: 0.92
+                                    }}
+                                  >
+                                    {credentialTestResults[key.id]?.message}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, opacity: 0.72, lineHeight: 1.6 }}>
+                            Chrome Prompt 是 pseudo provider，不需要 API key；可直接給 load balancer instance 使用。
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -4170,8 +4698,26 @@ export default function App() {
               </HelpModal>
             )}
 
+            {configModal === "load_balancers" && (
+              <HelpModal title="Load Balancer" onClose={() => setConfigModal(null)} width="min(980px, 96vw)">
+                <LoadBalancersPanel
+                  loadBalancers={loadBalancerSlots}
+                  credentials={credentialSlots}
+                  selectedId={loadBalancerPanelSelectedId}
+                  onSelect={setLoadBalancerPanelSelectedId}
+                  onChange={setLoadBalancers}
+                  onLoadModels={async ({ credential, credentialKeyId }) => {
+                    const key = credential.keys.find((entry) => entry.id === credentialKeyId) ?? credential.keys[0];
+                    return await fetchCredentialModels(credential, key?.apiKey ?? "");
+                  }}
+                  draftSeed={loadBalancerDraftSeed}
+                  onDraftSeedConsumed={() => setLoadBalancerDraftSeed(null)}
+                />
+              </HelpModal>
+            )}
+
             {configModal === "history" && (
-              <HelpModal title="History & Retry" onClose={() => setConfigModal(null)} width="min(460px, 92vw)">
+              <HelpModal title="History" onClose={() => setConfigModal(null)} width="min(460px, 92vw)">
                 <div style={{ display: "grid", gap: 14 }}>
                   <div>
                     <label style={label}>Messages sent to model</label>
@@ -4185,14 +4731,6 @@ export default function App() {
                       data-tutorial-id="history-limit-input"
                     />
                   </div>
-                  <div>
-                    <label style={label}>Delay (sec)</label>
-                    <input type="number" min={0} max={10} value={retryDelaySec} onChange={(e) => { const n = Number(e.target.value); setRetryDelaySec(Number.isFinite(n) ? Math.max(0, Math.min(10, n)) : 0); }} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
-                  </div>
-                  <div>
-                    <label style={label}>Max retries</label>
-                    <input type="number" min={0} max={10} value={retryMax} onChange={(e) => { const n = Number(e.target.value); setRetryMax(Number.isFinite(n) ? Math.max(0, Math.min(10, n)) : 0); }} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
-                  </div>
                   {mode === "leader_team" && (
                     <div>
                       <label style={label}>REACT max</label>
@@ -4200,7 +4738,7 @@ export default function App() {
                     </div>
                   )}
                   <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.6 }}>
-                    Default history is 10. Only the latest N messages are sent to the model.
+                    Default history is 10. Only the latest N messages are sent to the model. Retry 與 failover 目前由 Load Balancer instance 維護。
                   </div>
                   <div
                     style={{
@@ -4354,9 +4892,7 @@ export default function App() {
                 onSave={onSaveAgent}
                 onDelete={onDeleteAgent}
                 onDetect={async (a) => {
-                  const resolvedAgent = hydrateAgentCredentials(a);
-                  const adapter = pickAdapter(resolvedAgent);
-                  const r = adapter.detect ? await adapter.detect(resolvedAgent) : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
+                  const r = await detectWithLoadBalancer(a);
                   pushLog({
                     category: "detect",
                     agent: a.name,
@@ -4370,8 +4906,7 @@ export default function App() {
                 mcpServers={mcpServers}
                 builtInTools={allBuiltInTools}
                 skills={skills}
-                credentialProviders={credentialSlots}
-                resolveApiKey={resolveApiKeyForAgent}
+                loadBalancers={loadBalancerSlots}
               />
             </div>
           </div>

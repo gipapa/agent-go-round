@@ -26,7 +26,7 @@ steps:
     checklistLabel: 將對話歷史改為 1
     instructionTitle: 先把送給模型的歷史訊息數量改成 1
     instructionBody: |
-      為了避免免費模型在後面幾段工具測試時被長對話吃掉 context，請先前往 Chat Config 頁籤，打開 `History & Retry`。
+      為了避免免費模型在後面幾段工具測試時被長對話吃掉 context，請先前往 Chat Config 頁籤，打開 `History`。
 
       請把：
       - `Messages sent to model`

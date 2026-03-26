@@ -4,7 +4,8 @@ import path from "node:path";
 import { parseTutorialScenario } from "../src/onboarding/catalogCore";
 import { applyTutorialStepEntry, evaluateTutorialStep } from "../src/onboarding/runtime";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../src/onboarding/types";
-import type { AgentConfig, ChatMessage } from "../src/types";
+import type { AgentConfig, ChatMessage, LoadBalancerConfig } from "../src/types";
+import type { ModelCredentialEntry } from "../src/storage/settingsStore";
 
 const TUTORIAL_DIR = path.resolve(import.meta.dirname, "../src/onboarding/tutorials");
 const TUTORIAL_FILES = [
@@ -16,13 +17,51 @@ const TUTORIAL_FILES = [
   "chatgpt-browser-skill.yaml"
 ];
 
+function makeTutorialCredential(): ModelCredentialEntry {
+  const now = Date.now();
+  return {
+    id: "credential-groq",
+    preset: "groq",
+    label: "Groq",
+    endpoint: "https://api.groq.com/openai/v1",
+    keys: [{ id: "credential-groq-key-1", apiKey: "test-key", createdAt: now, updatedAt: now }],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function makeTutorialLoadBalancer(): LoadBalancerConfig {
+  const now = Date.now();
+  return {
+    id: "lb-groq",
+    name: "Tutorial Groq LB",
+    instances: [
+      {
+        id: "lb-groq-instance-1",
+        credentialId: "credential-groq",
+        credentialKeyId: "credential-groq-key-1",
+        model: "moonshotai/kimi-k2-instruct-0905",
+        description: "",
+        maxRetries: 4,
+        delaySecond: 5,
+        failure: false,
+        failureCount: 0,
+        nextCheckTime: null,
+        createdAt: now,
+        updatedAt: now
+      }
+    ],
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function makeTutorialAgentBase(overrides?: Partial<AgentConfig>): AgentConfig {
   return {
     id: "agent-groq",
     name: "Tutorial Groq Agent",
     type: "openai_compat",
-    endpoint: "https://api.groq.com/openai/v1",
-    model: "moonshotai/kimi-k2-instruct-0905",
+    loadBalancerId: "lb-groq",
     enableDocs: false,
     enableMcp: false,
     enableBuiltInTools: false,
@@ -48,13 +87,14 @@ function makeState(patch?: Partial<TutorialRuntimeState>): TutorialRuntimeState 
     agents: [makeTutorialAgentBase()],
     skills: [],
     activeAgentId: "agent-groq",
-    credentials: [],
+    credentials: [makeTutorialCredential()],
     credentialTestResults: {},
     history: [],
     currentChatInput: "",
     historyMessageLimit: 10,
     builtInTools: [],
     docs: [],
+    loadBalancers: [makeTutorialLoadBalancer()],
     mcpServers: [],
     mcpToolsByServer: {},
     userProfile: {
@@ -115,10 +155,10 @@ async function assertApplyEntryUsesYamlSeed() {
     setSkillExecutionMode: [],
     setSkillVerifyMax: [],
     setSkillToolLoopMax: [],
-    setRetryDelaySec: [],
-    setRetryMax: [],
+    setAgentLoadBalancerRetryPolicy: [],
     setComposerSeed: [],
     clearChat: [],
+    seedTutorialLoadBalancerDraft: [],
     ensureTutorialSequentialSkill: [],
     ensureTutorialChatgptBrowserSkill: []
   };
@@ -130,10 +170,10 @@ async function assertApplyEntryUsesYamlSeed() {
     setSkillExecutionMode: (value) => calls.setSkillExecutionMode.push(value),
     setSkillVerifyMax: (value) => calls.setSkillVerifyMax.push(value),
     setSkillToolLoopMax: (value) => calls.setSkillToolLoopMax.push(value),
-    setRetryDelaySec: (value) => calls.setRetryDelaySec.push(value),
-    setRetryMax: (value) => calls.setRetryMax.push(value),
+    setAgentLoadBalancerRetryPolicy: (agentId, value) => calls.setAgentLoadBalancerRetryPolicy.push({ agentId, ...value }),
     setComposerSeed: (value) => calls.setComposerSeed.push(value),
     clearChat: () => calls.clearChat.push(true),
+    seedTutorialLoadBalancerDraft: (kind) => calls.seedTutorialLoadBalancerDraft.push(kind),
     ensureTutorialAgentBrowserMcpTools: () => {},
     ensureTutorialSequentialSkill: () => calls.ensureTutorialSequentialSkill.push(true),
     ensureTutorialChatgptBrowserSkill: () => calls.ensureTutorialChatgptBrowserSkill.push(true)
@@ -190,8 +230,8 @@ async function assertChatgptBrowserSkillAutomationExists() {
   assert.equal(step.automation?.skillExecutionMode, "multi_turn");
   assert.equal(step.automation?.skillToolLoopMax, 8);
   assert.equal(step.automation?.skillVerifyMax, 2);
-  assert.equal(step.automation?.retryDelaySec, 10);
-  assert.equal(step.automation?.retryMax, 10);
+  assert.equal(step.automation?.loadBalancerDelaySecond, 10);
+  assert.equal(step.automation?.loadBalancerMaxRetries, 10);
   assert.equal(step.automation?.composerSeed, "請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」");
   assert.equal(step.automation?.expect?.requireSkillTodo, true);
   assert.equal(step.automation?.expect?.requireSkillTodoProgress, true);

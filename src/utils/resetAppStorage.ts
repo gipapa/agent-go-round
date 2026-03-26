@@ -4,6 +4,7 @@ export const AGENT_GO_ROUND_LOCAL_STORAGE_KEYS = [
   "agr_mcp_aliases_v1",
   "agr_mcp_prompt_templates_v1",
   "agr_model_credentials_v1",
+  "agr_load_balancers_v1",
   "agr_agents_v1",
   "agr_built_in_tools_v1"
 ];

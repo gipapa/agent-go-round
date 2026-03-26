@@ -1,6 +1,6 @@
 id: first-agent-chat
 title: "[1] 自訂 Agent 並完成第一次對話"
-description: 從 Credentials、Agent 到第一句對話，完成 AgentGoRound 的第一次使用體驗。
+description: 從 Credentials、Load Balancer、Agent 到第一句對話，完成 AgentGoRound 的第一次使用體驗。
 exitTitle: 離開案例教學
 exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具與 skills。Agent、Credentials 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
 steps:
@@ -11,7 +11,7 @@ steps:
     instructionBody: |
       這個系統是 AgentGoRound，是一個 browser-first、frontend-only 的 agent playground。整個專案以純前端為核心，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
 
-      這個教學案例會帶你完成第一個最基本的 use case：先設定 provider credentials、建立自己的 Agent，再讓它完成第一次對話。
+      這個教學案例會帶你完成第一個最基本的 use case：先設定 provider credentials、建立 load balancer、建立自己的 Agent，再讓它完成第一次對話。
     actionLabel: 下一步
     behavior: manual_info
 
@@ -36,18 +36,34 @@ steps:
     targetId: chat-config-credentials-card
     behavior: setup_groq_credential
 
+  - id: create-single-load-balancer
+    title: 建立第一個 Load Balancer
+    checklistLabel: 建立單一 instance Load Balancer
+    instructionTitle: 第二步請建立第一個 Load Balancer
+    instructionBody: |
+      請前往 Chat Config，打開 Load Balancer 設定。
+
+      系統會直接依照你剛剛測試成功的 Groq credential，自動建立：
+      - Name：`教學用Load Balancer 1`
+      - 1 個 instance
+      - Model：`moonshotai/kimi-k2-instruct-0905`
+
+      這一步不需要再手動選 model、provider 或按 Save。確認它已出現在 Load Balancer 清單中後，就可以前往下一步。
+    completionLabel: 等待系統建立單一 instance Load Balancer
+    tab: chat_config
+    targetId: chat-config-load-balancer-card
+    behavior: create_single_load_balancer
+
   - id: create-agent
     title: 新增一個 Agent
-    checklistLabel: 建立第一個 Groq Agent
-    instructionTitle: 第二步請新增一個 Agent
+    checklistLabel: 建立第一個 Agent
+    instructionTitle: 第三步請新增一個 Agent
     instructionBody: |
       我已經幫你切到 Agents 頁面。
 
       請先按下 Add，接著在編輯視窗中完成以下設定：
       - Name：自行命名
-      - Provider：選擇 Groq
-      - 按下 Load Models
-      - Model：選擇 moonshotai/kimi-k2-instruct-0905
+      - Load Balancer：選擇 `教學用Load Balancer 1`
       - Access Control：先全部不要勾選
 
       最後按下 Save，完成你的第一個自訂 Agent。
@@ -59,7 +75,7 @@ steps:
   - id: first-chat
     title: 第一次對話
     checklistLabel: 讓 Agent 完成第一次對話
-    instructionTitle: 第三步進行簡單對話
+    instructionTitle: 第四步進行簡單對話
     instructionBody: |
       我已經幫你切到 Chat 頁面，並預先填入「告訴我一個笑話」。
 
@@ -68,7 +84,7 @@ steps:
       - 上方按鈕可匯出原始歷史、匯出濃縮歷史、匯入歷史與清除對話
 
       你現在只要送出這句話，並等待 Agent 回覆即可。這個案例不會檢查笑話內容是否真的好笑；只要有成功回覆、畫面正常運作，就算完成。
-    actionLabel: 完成案例教學
+    actionLabel: 下一步
     completionLabel: 等待 Agent 完成回覆
     tab: chat
     targetId: chat-input
@@ -79,4 +95,65 @@ steps:
       activeAgentPreset: tutorial_agent
       expect:
         userPrompt: 告訴我一個笑話
+        requireAssistant: true
+
+  - id: create-multi-load-balancer
+    title: 建立第二個 Load Balancer
+    checklistLabel: 建立三個 instance 的 Load Balancer
+    instructionTitle: 第五步建立第二個 Load Balancer
+    instructionBody: |
+      回到 Chat Config，打開 Credentials 設定。
+
+      這一步請先補出第二個可用來源：
+      - 新增第二把 key，或
+      - 新增另一個 provider
+
+      當系統偵測到第二個可用來源後，會自動建立 `教學用Load Balancer 2`，其中三個 instances 會是：
+      - Instance 1：沿用目前對話用的 provider / key，model=`moonshotai/kimi-k2-instruct-0905`
+      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound`
+      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`moonshotai/kimi-k2-instruct-0905`
+
+      這個案例不會驗證 failover 是否真的發生；只要第二個 load balancer 被系統建立完成即可。
+    completionLabel: 等待你新增第二把 key / 其他 provider，並讓系統建立第二個 Load Balancer
+    tab: chat_config
+    targetId: chat-config-credentials-card
+    behavior: create_multi_load_balancer
+
+  - id: switch-agent-load-balancer
+    title: 切換 Agent 使用第二個 Load Balancer
+    checklistLabel: 切換 Agent 到第二個 Load Balancer
+    instructionTitle: 第六步切換 Agent 使用第二個 Load Balancer
+    instructionBody: |
+      請前往 Agents，編輯剛剛建立的 Agent。
+
+      將它的 Load Balancer 改成：
+      - `教學用Load Balancer 2`
+
+      之後按下 Save。
+    completionLabel: 等待你把 Agent 改綁到第二個 Load Balancer
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: switch_tutorial_agent_to_multi_load_balancer
+
+  - id: second-chat
+    title: 使用第二個 Load Balancer 對話
+    checklistLabel: 使用第二個 Load Balancer 完成對話
+    instructionTitle: 第七步再次對話
+    instructionBody: |
+      我已經幫你切到 Chat 頁面，並預先填入「再告訴我一個笑話」。
+
+      這次的目標不是驗證 failover，而是確認：
+      - Agent 綁定第二個 load balancer 後仍可正常對話
+      - 畫面與對話流程都沒有壞掉
+    actionLabel: 完成案例教學
+    completionLabel: 等待 Agent 完成回覆
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_joke
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 再告訴我一個笑話
+      activeAgentPreset: tutorial_agent
+      expect:
+        userPrompt: 再告訴我一個笑話
         requireAssistant: true

@@ -27,12 +27,14 @@ const MCP_RPC_URL = "http://127.0.0.1:3334/mcp/rpc";
 const AGENT_BROWSER_SESSION = `agr_real_tutorial_${Date.now()}`;
 const LOCALHOST_GROQ_ENDPOINT = "https://api.groq.com/openai/v1";
 const MODEL_COOLDOWN_MS = 12000;
+const TUTORIAL_PRIMARY_LB_NAME = "教學用Load Balancer 1";
+const TUTORIAL_SECONDARY_LB_NAME = "教學用Load Balancer 2";
 const execFile = promisify(execFileCallback);
 const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
 
 type RealTutorialConfig = {
   provider: string;
-  apiKey: string;
+  apiKeys: string[];
   endpoint: string;
   model: string;
 };
@@ -48,11 +50,15 @@ async function readRealTutorialConfig(): Promise<RealTutorialConfig> {
   const raw = await fs.readFile(CONFIG_PATH, "utf8");
   const parsed = JSON.parse(raw) as Partial<RealTutorialConfig>;
   const provider = String(parsed.provider ?? "").trim();
-  const apiKey = String(parsed.apiKey ?? "").trim();
+  const apiKeys = Array.isArray(parsed.apiKey)
+    ? parsed.apiKey.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+    : typeof parsed.apiKey === "string" && parsed.apiKey.trim()
+    ? [parsed.apiKey.trim()]
+    : [];
   const endpoint = normalizeCredentialUrl(parsed.endpoint);
   const model = String(parsed.model ?? "").trim();
 
-  if (!provider || !apiKey || !endpoint || !model) {
+  if (!provider || apiKeys.length === 0 || !endpoint || !model) {
     throw new Error(".tutorial-test.local.json 缺少必要欄位：provider / apiKey / endpoint / model");
   }
 
@@ -64,7 +70,7 @@ async function readRealTutorialConfig(): Promise<RealTutorialConfig> {
     throw new Error('目前教學案例 1 需要 provider 設定為 "groq"。');
   }
 
-  return { provider, apiKey, endpoint, model };
+  return { provider, apiKeys, endpoint, model };
 }
 
 async function loadScenarios(): Promise<TutorialScenarioDefinition[]> {
@@ -394,6 +400,70 @@ async function setCheckboxByTutorialId(id: string, checked: boolean) {
   if (!changed) throw new Error(`找不到 checkbox ${id}`);
 }
 
+async function createLoadBalancerByTutorialUi(args: {
+  name: string;
+  description?: string;
+  instances: Array<{
+    credentialLabel: string;
+    keyLabel?: string;
+    model: string;
+    description?: string;
+    maxRetries?: number;
+    delaySecond?: number;
+  }>;
+}) {
+  await clickByTutorialId("chat-config-load-balancer-card");
+  await waitForSelector('[data-tutorial-id="load-balancer-new-button"]', 10000);
+  await clickByTutorialId("load-balancer-new-button");
+  await waitForSelector('[data-tutorial-id="load-balancer-editor-modal"]', 10000);
+  await setValueByTutorialId("load-balancer-name-input", args.name);
+  if (args.description) {
+    await setValueByTutorialId("load-balancer-description-input", args.description);
+  }
+  for (let index = 0; index < args.instances.length; index += 1) {
+    const instance = args.instances[index];
+    await clickByTutorialId("load-balancer-add-instance-button");
+    await waitForSelector(`[data-tutorial-id="load-balancer-instance-credential-${index}"]`, 10000);
+    await selectOptionByTutorialId(`load-balancer-instance-credential-${index}`, instance.credentialLabel);
+    if (instance.keyLabel) {
+      await selectOptionByTutorialId(`load-balancer-instance-key-${index}`, instance.keyLabel);
+    }
+    await setValueByTutorialId(`load-balancer-instance-model-${index}`, instance.model);
+    if (instance.description) {
+      await setValueByTutorialId(`load-balancer-instance-description-${index}`, instance.description);
+    }
+    if (typeof instance.maxRetries === "number") {
+      await setValueByTutorialId(`load-balancer-instance-max-retries-${index}`, String(instance.maxRetries));
+    }
+    if (typeof instance.delaySecond === "number") {
+      await setValueByTutorialId(`load-balancer-instance-delay-second-${index}`, String(instance.delaySecond));
+    }
+  }
+  await clickByTutorialId("load-balancer-save-button");
+}
+
+async function hasLoadBalancer(name: string) {
+  return browserEval<boolean>(`
+    (() => {
+      try {
+        const raw = localStorage.getItem("agr_load_balancers_v1");
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return false;
+        return parsed.some((entry) => String(entry?.name || "").trim() === ${literal(name)});
+      } catch {
+        return false;
+      }
+    })()
+  `);
+}
+
+async function hasCredentialKeyRow(rowIndex: number) {
+  return browserEval<boolean>(`
+    !!document.querySelector(${literal(`[data-tutorial-id="credential-groq-api-key-${rowIndex}"]`)})
+  `);
+}
+
 async function clickLabelContaining(scopeSelector: string, labelText: string) {
   const ok = await browserEval<boolean>(`
     (() => {
@@ -675,29 +745,58 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await clickByTutorialId("credential-add-groq");
       await waitForSelector('[data-tutorial-id="credential-groq-card"]', 10000);
       await setValueByTutorialId("credential-groq-label-input", "Groq");
-      await setValueByTutorialId("credential-groq-api-key", config.apiKey);
+      await setValueByTutorialId("credential-groq-api-key", config.apiKeys[0]);
+      for (let index = 1; index < config.apiKeys.length; index += 1) {
+        await clickByTutorialId("credential-groq-add-key");
+        await waitForSelector(`[data-tutorial-id="credential-groq-api-key-${index + 1}"]`, 10000);
+        await setValueByTutorialId(`credential-groq-api-key-${index + 1}`, config.apiKeys[index]);
+      }
       await clickByTutorialId("credential-groq-test");
       await waitForText("測試成功", 30000);
+      return;
+    case "create_single_load_balancer":
+      try {
+        await waitFor(() => hasLoadBalancer(TUTORIAL_PRIMARY_LB_NAME), 5000, "等待案例自動建立第一個 Load Balancer");
+      } catch {
+        await createLoadBalancerByTutorialUi({
+          name: TUTORIAL_PRIMARY_LB_NAME,
+          description: "教學用單一 instance Load Balancer",
+          instances: [
+            {
+              credentialLabel: "Groq",
+              keyLabel: "Key 1",
+              model: config.model,
+              description: "Primary tutorial instance",
+              maxRetries: 4,
+              delaySecond: 5
+            }
+          ]
+        });
+      }
       return;
     case "create_groq_agent":
       await clickByTutorialId("agents-add-button");
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
       await setValueByTutorialId("agent-name-input", "教學測試 Agent");
-      await selectOptionByTutorialId("agent-provider-select", "Groq");
-      await clickByTutorialId("agent-load-models");
-      await waitFor(
-        async () =>
-          browserEval<boolean>(`
-            (() => {
-              const select = document.querySelector(${literal('[data-tutorial-id="agent-model-select"]')});
-              if (!(select instanceof HTMLSelectElement)) return false;
-              return Array.from(select.options).some((option) => String(option.textContent || "").includes(${literal(config.model)}));
-            })()
-          `),
-        60000,
-        "等待模型列表載入"
-      );
-      await selectOptionByTutorialId("agent-model-select", config.model);
+      await selectOptionByTutorialId("agent-load-balancer-select", TUTORIAL_PRIMARY_LB_NAME);
+      await clickByTutorialId("agent-save-button");
+      return;
+    case "create_multi_load_balancer": {
+      await clickByTutorialId("chat-config-credentials-card");
+      await waitForSelector('[data-tutorial-id="credentials-modal"]', 10000);
+      const hasSecondKey = await hasCredentialKeyRow(2);
+      if (!hasSecondKey) {
+        await clickByTutorialId("credential-groq-add-key");
+        await waitForSelector('[data-tutorial-id="credential-groq-api-key-2"]', 10000);
+      }
+      await setValueByTutorialId("credential-groq-api-key-2", config.apiKeys[1] ?? config.apiKeys[0]);
+      await waitFor(() => hasLoadBalancer(TUTORIAL_SECONDARY_LB_NAME), 10000, "等待案例自動建立第二個 Load Balancer");
+      return;
+    }
+    case "switch_tutorial_agent_to_multi_load_balancer":
+      await clickByTutorialId("agents-edit-active-button");
+      await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
+      await selectOptionByTutorialId("agent-load-balancer-select", TUTORIAL_SECONDARY_LB_NAME);
       await clickByTutorialId("agent-save-button");
       return;
     case "create_tutorial_doc":
@@ -919,16 +1018,20 @@ async function executeScenario(scenario: TutorialScenarioDefinition, isLastScena
 }
 
 async function bootstrapScenarioOnly(targetScenarioId: string) {
-  if (targetScenarioId !== "chatgpt-browser-skill") return;
-  console.log("[bootstrap] 為案例 6 建立最小前置資源 ...");
+  if (targetScenarioId === "first-agent-chat") return;
+  console.log(`[bootstrap] 為案例 ${targetScenarioId} 建立最小前置資源 ...`);
   await clickTutorialNext();
   await waitForCurrentStep("setup-credentials", 10000);
   await performStepAction({ id: "bootstrap-credential", behavior: "setup_groq_credential", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
+  await clickTopTab("Chat Config");
+  await performStepAction({ id: "bootstrap-load-balancer", behavior: "create_single_load_balancer", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
   await clickTopTab("Agents");
   await performStepAction({ id: "bootstrap-agent", behavior: "create_groq_agent", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
-  await clickTopTab("Chat Config");
-  await performStepAction({ id: "bootstrap-mcp", behavior: "register_tutorial_agent_browser_mcp", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
-  console.log("[bootstrap] 案例 6 前置資源已建立。");
+  if (targetScenarioId === "agent-browser-mcp-chat" || targetScenarioId === "chatgpt-browser-skill") {
+    await clickTopTab("Chat Config");
+    await performStepAction({ id: "bootstrap-mcp", behavior: "register_tutorial_agent_browser_mcp", checklistLabel: "", title: "" } as TutorialStepDefinition, realConfig);
+  }
+  console.log(`[bootstrap] ${targetScenarioId} 前置資源已建立。`);
 }
 
 function indentBlock(text: string, prefix: string) {

@@ -313,6 +313,7 @@ return {
             JavaScript code：
             <pre style={exampleBlock}>{`const agents = JSON.parse(localStorage.getItem("agr_agents_v1") || "[]");
 const credentials = JSON.parse(localStorage.getItem("agr_model_credentials_v1") || "[]");
+const loadBalancers = JSON.parse(localStorage.getItem("agr_load_balancers_v1") || "[]");
 const agentName = String(input?.agentName ?? "").trim();
 const prompt = String(input?.prompt ?? "").trim();
 
@@ -330,27 +331,25 @@ if (!agent) {
   throw new Error(\`Agent \${agentName} not found.\`);
 }
 
-if (agent.type !== "openai_compat") {
-  throw new Error("This example expects an openai_compat agent.");
-}
+const loadBalancer = loadBalancers.find((item) => item.id === agent.loadBalancerId);
+const instance = loadBalancer?.instances?.[0];
+const credential = credentials.find((item) => item.id === instance?.credentialId);
+const key = credential?.keys?.find((item) => item.id === instance?.credentialKeyId) || credential?.keys?.[0];
+const endpoint = String(credential?.endpoint || "").replace(/\\/$/, "");
+const model = String(instance?.model || "").trim();
 
-const endpoint = String(agent.endpoint || "").replace(/\\/$/, "");
-const credential = credentials.find(
-  (item) => String(item.endpoint || "").replace(/\\/$/, "") === endpoint && item.apiKey
-);
-
-if (!credential) {
-  throw new Error(\`Credential for \${agentName} not found.\`);
+if (!endpoint || !key?.apiKey || !model) {
+  throw new Error(\`Load balancer for \${agentName} is not ready.\`);
 }
 
 const response = await fetch(\`\${endpoint}/chat/completions\`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    Authorization: \`Bearer \${credential.apiKey}\`
+    Authorization: \`Bearer \${key.apiKey}\`
   },
   body: JSON.stringify({
-    model: agent.model || "gpt-4o-mini",
+    model,
     messages: [{ role: "user", content: prompt }]
   })
 });
@@ -363,7 +362,7 @@ const json = await response.json();
 return {
   text: json.choices?.[0]?.message?.content ?? "",
   agent: agentName,
-  model: agent.model || "gpt-4o-mini"
+  model
 };`}</pre>
           </div>
           <hr style={divider} />
@@ -383,6 +382,7 @@ return {
             JavaScript code：
             <pre style={exampleBlock}>{`const agents = JSON.parse(localStorage.getItem("agr_agents_v1") || "[]");
 const credentials = JSON.parse(localStorage.getItem("agr_model_credentials_v1") || "[]");
+const loadBalancers = JSON.parse(localStorage.getItem("agr_load_balancers_v1") || "[]");
 const question = String(input?.question ?? "").trim();
 
 if (!question) {
@@ -396,27 +396,25 @@ if (!agent) {
   throw new Error(\`Agent \${agentName} not found.\`);
 }
 
-if (agent.type !== "openai_compat") {
-  throw new Error("This example expects an openai_compat agent.");
-}
+const loadBalancer = loadBalancers.find((item) => item.id === agent.loadBalancerId);
+const instance = loadBalancer?.instances?.[0];
+const credential = credentials.find((item) => item.id === instance?.credentialId);
+const key = credential?.keys?.find((item) => item.id === instance?.credentialKeyId) || credential?.keys?.[0];
+const endpoint = String(credential?.endpoint || "").replace(/\\/$/, "");
+const model = String(instance?.model || "").trim();
 
-const endpoint = String(agent.endpoint || "").replace(/\\/$/, "");
-const credential = credentials.find(
-  (item) => String(item.endpoint || "").replace(/\\/$/, "") === endpoint && item.apiKey
-);
-
-if (!credential) {
-  throw new Error(\`Credential for \${agentName} not found.\`);
+if (!endpoint || !key?.apiKey || !model) {
+  throw new Error(\`Load balancer for \${agentName} is not ready.\`);
 }
 
 const response = await fetch(\`\${endpoint}/chat/completions\`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
-    Authorization: \`Bearer \${credential.apiKey}\`
+    Authorization: \`Bearer \${key.apiKey}\`
   },
   body: JSON.stringify({
-    model: agent.model || "gpt-4o-mini",
+    model,
     messages: [{ role: "user", content: question }]
   })
 });

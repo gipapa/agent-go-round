@@ -21,7 +21,7 @@ steps:
       注意：
       - 這個案例需要本地端執行程式，建議使用 Windows 的 WSL、Linux、或 macOS 環境
       - 因為流程會依頁面狀態決定下一步，所以這裡會使用 multi-turn skill
-      - 這個案例依賴案例 5 已經完成：你需要先有 `教學用MCP`，而且其中要能使用 `browser_open`、`browser_snapshot`、`browser_click`、`browser_fill`、`browser_wait`
+      - 這個案例會在中途帶你註冊 `教學用MCP`，並授權給目前 Agent 使用
       - Google AI 模式可能會顯示登入、驗證或其他同意步驟；若出現，skill 會先詢問你是否改用 visible browser，再請你在那裡手動完成
     behavior: manual_info
     actionLabel: 下一步
@@ -33,7 +33,7 @@ steps:
     checklistLabel: 將對話歷史改為 1
     instructionTitle: 先把送給模型的歷史訊息數量改成 1
     instructionBody: |
-      這個案例會用到多輪 skill 與多步 MCP 工具流程，為了避免免費模型因為上下文過長而吃滿 context，請先前往 Chat Config > History & Retry。
+      這個案例會用到多輪 skill 與多步 MCP 工具流程，為了避免免費模型因為上下文過長而吃滿 context，請先前往 Chat Config > History。
 
       請把：
       - `Messages sent to model`
@@ -64,8 +64,8 @@ steps:
       - Skills runtime：`多輪 refine`
       - 工具步數上限：`8`
       - Verify 次數：`2`
-      - Retry delay：`10 秒`
-      - Retry 次數：`10`
+      - 教學用 load balancer instance delay：`10 秒`
+      - 教學用 load balancer instance retries：`10`
 
       你可以稍後到 Chat Config > Skills 查看這些設定。
     behavior: manual_info
@@ -75,8 +75,55 @@ steps:
       skillExecutionMode: multi_turn
       skillToolLoopMax: 8
       skillVerifyMax: 2
-      retryDelaySec: 10
-      retryMax: 10
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 10
+
+  - id: register_mcp
+    title: 註冊 agent-browser MCP
+    checklistLabel: 註冊教學用MCP
+    instructionTitle: 請先把 agent-browser MCP 註冊到系統中
+    instructionBody: |
+      請前往 Chat Config 頁籤，按下 MCP 進入設定視窗。
+
+      請新增一筆 MCP，建議名稱使用：
+      - `教學用MCP`
+
+      SSE URL 請填入你剛剛在本地端啟動 `./mcp-test/run.sh -agent_browser` 後看到的位址，例如：
+      - `http://127.0.0.1:3334/mcp/sse`
+      - 或 WSL IP 版本：`http://172.xx.xx.xx:3334/mcp/sse`
+
+      接著請按下：
+      - `Connect & List Tools`
+      - 確認列表中至少出現 `browser_open`、`browser_snapshot`、`browser_click`、`browser_fill`
+      - 最後按 `Save`
+    tab: chat_config
+    targetId: chat-config-mcp-card
+    behavior: register_tutorial_agent_browser_mcp
+    completionLabel: 等待完成教學用MCP註冊
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: enable_mcp_access
+    title: 讓 Agent 可以使用教學用MCP
+    checklistLabel: 開啟 Agent MCP 權限
+    instructionTitle: 到 Agents 頁把教學用MCP 授權給目前 Agent
+    instructionBody: |
+      請前往 Agents，編輯目前的 Agent。
+
+      在 Access Control 裡：
+      1. 打開 `MCP Tools`
+      2. 若你選擇 `All` 也可以
+      3. 若你選擇 `Custom selection`，請至少勾選 `教學用MCP`
+
+      完成後按下 `Save`。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_mcp_access
+    completionLabel: 等待 Agent 開啟教學用MCP 權限
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
 
   - id: create_browser_skill
     title: 建立 Google AI browser skill
@@ -103,8 +150,8 @@ steps:
       skillExecutionMode: multi_turn
       skillToolLoopMax: 8
       skillVerifyMax: 2
-      retryDelaySec: 10
-      retryMax: 10
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 10
 
   - id: enable_browser_skill
     title: 讓 Agent 可以使用 Google AI browser skill
@@ -129,8 +176,8 @@ steps:
       skillExecutionMode: multi_turn
       skillToolLoopMax: 8
       skillVerifyMax: 2
-      retryDelaySec: 10
-      retryMax: 10
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 10
 
   - id: run_chatgpt_flow
     title: 用一則對話完成 Google AI 流程
@@ -156,8 +203,8 @@ steps:
       skillExecutionMode: multi_turn
       skillToolLoopMax: 8
       skillVerifyMax: 2
-      retryDelaySec: 10
-      retryMax: 10
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 10
       composerSeed: 請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」
       activeAgentPreset: tutorial_agent_base
       expect:

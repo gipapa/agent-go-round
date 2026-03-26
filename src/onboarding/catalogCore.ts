@@ -14,8 +14,8 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
     skillExecutionMode: input.skillExecutionMode === "multi_turn" ? "multi_turn" : input.skillExecutionMode === "single_turn" ? "single_turn" : undefined,
     skillVerifyMax: typeof input.skillVerifyMax === "number" ? input.skillVerifyMax : undefined,
     skillToolLoopMax: typeof input.skillToolLoopMax === "number" ? input.skillToolLoopMax : undefined,
-    retryDelaySec: typeof input.retryDelaySec === "number" ? input.retryDelaySec : undefined,
-    retryMax: typeof input.retryMax === "number" ? input.retryMax : undefined,
+    loadBalancerDelaySecond: typeof input.loadBalancerDelaySecond === "number" ? input.loadBalancerDelaySecond : undefined,
+    loadBalancerMaxRetries: typeof input.loadBalancerMaxRetries === "number" ? input.loadBalancerMaxRetries : undefined,
     activeAgentPreset:
       input.activeAgentPreset === "tutorial_agent" || input.activeAgentPreset === "tutorial_agent_base"
         ? input.activeAgentPreset
@@ -44,8 +44,8 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
     !automation.skillExecutionMode &&
     automation.skillVerifyMax === undefined &&
     automation.skillToolLoopMax === undefined &&
-    automation.retryDelaySec === undefined &&
-    automation.retryMax === undefined &&
+    automation.loadBalancerDelaySecond === undefined &&
+    automation.loadBalancerMaxRetries === undefined &&
     !automation.activeAgentPreset &&
     !automation.expect
   ) {
