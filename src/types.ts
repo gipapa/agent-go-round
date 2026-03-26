@@ -30,6 +30,29 @@ export type SkillTodoItem = {
   updatedAt: number;
 };
 
+export type BrowserObservationTargetKind = "repo_link" | "input" | "button" | "link" | "generic";
+
+export type BrowserObservationTarget = {
+  ref: string;
+  role: string;
+  label: string;
+  kind: BrowserObservationTargetKind;
+  score: number;
+};
+
+export type BrowserObservationDigest = {
+  sourceTool: string;
+  pageKind: "ranked_list" | "repo_page" | "input_page" | "unknown";
+  blockedReason?: string;
+  repoName?: string;
+  url?: string;
+  title?: string;
+  rankedTargets: BrowserObservationTarget[];
+  inputTargets: BrowserObservationTarget[];
+  actionTargets: BrowserObservationTarget[];
+  contentHints: string[];
+};
+
 export type ChatMessage = {
   id: string;
   role: Role;
@@ -259,6 +282,8 @@ export type SkillRunState = {
   manualGate: "none" | "awaiting_user_confirmation" | "awaiting_manual_browser_step" | "resumable";
   completionStatus: "unknown" | "complete" | "incomplete";
   latestReason?: string;
+  lastBrowserObservation?: BrowserObservationDigest;
+  preferredMcpServerId?: string;
 };
 
 export type LoadedSkillReference = {

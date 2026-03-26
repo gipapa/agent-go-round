@@ -11,6 +11,34 @@ const MAX_LINE_LENGTH = 180;
 const MAX_DEPTH = 3;
 const PRIORITY_KEYS = ["title", "name", "url", "text", "content", "message", "summary", "result", "output", "data"];
 export type ToolPromptDetailMode = "default" | "actionable";
+const HIGH_SIGNAL_LINE_PATTERNS = [
+  /目前無法使用/i,
+  /無法使用 ai 模式/i,
+  /目前不可用/i,
+  /功能不可用/i,
+  /你的裝置或帳戶目前無法使用/i,
+  /your device or account currently can(?:not|'t) use/i,
+  /currently unavailable/i,
+  /feature is unavailable/i,
+  /not available/i,
+  /unusual traffic/i,
+  /security challenge/i,
+  /not a robot/i,
+  /recaptcha/i,
+  /驗證您是真人/i,
+  /安全驗證/i,
+  /我不是機器人/i,
+  /登入/i,
+  /sign in/i,
+  /consent/i,
+  /同意/i,
+  /\b\d+\s+[A-Za-z0-9_.-]+\s*\/\s*[A-Za-z0-9_.-]+/i,
+  /heading\s+"[^"]+\/[^"]+"/i,
+  /link\s+"[^"]+\/[^"]+"/i,
+  /combobox/i,
+  /textbox/i,
+  /textarea/i
+];
 
 function detailLimits(mode: ToolPromptDetailMode) {
   return mode === "actionable"
@@ -42,13 +70,17 @@ function normalizeText(text: string) {
   return stripAnsi(text).replace(/\r/g, "").trim();
 }
 
+function isHighSignalLine(line: string) {
+  return HIGH_SIGNAL_LINE_PATTERNS.some((pattern) => pattern.test(line));
+}
+
 function collectActionableTargetsFromText(text: string, limit = 10) {
   const normalized = normalizeText(text);
   if (!normalized) return [] as string[];
 
   const seen = new Set<string>();
   const lines = normalized.split("\n");
-  const targets: string[] = [];
+  const targets: Array<{ summary: string; score: number }> = [];
 
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+/g, " ").trim();
@@ -65,11 +97,21 @@ function collectActionableTargetsFromText(text: string, limit = 10) {
     const summary = `${ref} ${role} "${label}"`;
     if (seen.has(summary)) continue;
     seen.add(summary);
-    targets.push(summary);
-    if (targets.length >= limit) break;
+    let score = 0;
+    const haystack = `${line} ${summary}`.toLowerCase();
+    if (/heading\s+"[^"]+\/[^"]+"/i.test(line) || /link\s+"[^"]+\/[^"]+"/i.test(line)) score += 140;
+    if (/\b\d+\s+[A-Za-z0-9_.-]+\s*\/\s*[A-Za-z0-9_.-]+/i.test(line)) score += 130;
+    if (/combobox|textbox|textarea|input/i.test(haystack)) score += 120;
+    if (/send|submit|search|搜尋|ask|query|ai 模式|trending|repo|repository|readme/i.test(haystack)) score += 90;
+    if (/button|link/i.test(haystack)) score += 20;
+    if (/skip to content|homepage|platform|solutions|resources|pricing|sign in|登入|global|navigation menu/i.test(haystack)) score -= 120;
+    targets.push({ summary, score });
   }
 
-  return targets;
+  return targets
+    .sort((a, b) => b.score - a.score || a.summary.localeCompare(b.summary))
+    .slice(0, limit)
+    .map((item) => item.summary);
 }
 
 function extractActionableTargets(value: unknown, limit = 10): string[] {
@@ -114,12 +156,32 @@ function summarizeLongText(text: string, mode: ToolPromptDetailMode) {
 
   const seen = new Set<string>();
   const excerpt: string[] = [];
+  const priorityExcerpt: Array<{ line: string; score: number }> = [];
+
+  for (const line of lines) {
+    if (!isHighSignalLine(line)) continue;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    let score = 0;
+    if (/目前無法使用|currently unavailable|not available|安全驗證|recaptcha|unusual traffic/i.test(line)) score += 200;
+    if (/\b\d+\s+[A-Za-z0-9_.-]+\s*\/\s*[A-Za-z0-9_.-]+/i.test(line)) score += 160;
+    if (/heading\s+"[^"]+\/[^"]+"|link\s+"[^"]+\/[^"]+"/i.test(line)) score += 150;
+    if (/combobox|textbox|textarea|input/i.test(line)) score += 130;
+    if (/button|link/i.test(line)) score += 40;
+    priorityExcerpt.push({ line: truncate(line, limits.maxLineLength), score });
+  }
+
+  const topPriorityExcerpt = priorityExcerpt
+    .sort((a, b) => b.score - a.score || a.line.localeCompare(b.line))
+    .slice(0, Math.min(6, limits.maxExcerptLines))
+    .map((entry) => entry.line);
+
   for (const line of lines) {
     if (!/[A-Za-z0-9\u4e00-\u9fff]/.test(line)) continue;
     if (seen.has(line)) continue;
     seen.add(line);
     excerpt.push(truncate(line, limits.maxLineLength));
-    if (excerpt.length >= limits.maxExcerptLines) break;
+    if (topPriorityExcerpt.length + excerpt.length >= limits.maxExcerptLines) break;
   }
 
   if (!lines.length) {
@@ -134,6 +196,7 @@ function summarizeLongText(text: string, mode: ToolPromptDetailMode) {
     type: "text_summary",
     chars: normalized.length,
     lines: lines.length,
+    priorityExcerpt: topPriorityExcerpt,
     excerpt
   };
 }
@@ -206,6 +269,12 @@ function renderSummaryLines(value: unknown, indent = "", mode: ToolPromptDetailM
 
   if (obj.type === "text_summary" && Array.isArray(obj.excerpt)) {
     const lines = [`${indent}- 文字摘要：共 ${formatScalar(obj.lines)} 行，擷取重點如下`];
+    if (Array.isArray(obj.priorityExcerpt) && obj.priorityExcerpt.length) {
+      lines.push(`${indent}  - 關鍵狀態：`);
+      obj.priorityExcerpt.forEach((line) => {
+        lines.push(`${indent}    - ${String(line)}`);
+      });
+    }
     obj.excerpt.forEach((line) => {
       lines.push(`${indent}  - ${String(line)}`);
     });

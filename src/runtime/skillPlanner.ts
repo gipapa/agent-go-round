@@ -63,8 +63,11 @@ export function buildBootstrapPlanPrompt(args: {
   return [
     "Return JSON only. Do not add any other text.",
     "",
-    "Create a short internal todo plan for a multi-turn skill workflow.",
+    "Create a short internal execution plan for a multi-turn skill workflow.",
     "Generate 3 to 7 concise todo items. Each item should represent a meaningful user-visible or workflow-visible milestone.",
+    "If this is a browser task, also infer the most direct stable startUrl when it is reasonably obvious from the user request.",
+    "Prefer a direct canonical page over a generic homepage when it clearly shortens the workflow.",
+    "Example: for GitHub Trending, prefer https://github.com/trending instead of https://github.com.",
     "",
     `Skill: ${args.skill.name} (${args.skill.id})`,
     args.skill.description ? `Skill description: ${args.skill.description}` : "",
@@ -73,7 +76,7 @@ export function buildBootstrapPlanPrompt(args: {
     "User request:",
     args.userInput,
     "",
-    'Return: {"todo":["...","..."]}'
+    'Return: {"taskSummary":"...","startUrl":"https://... or empty string","todo":["...","..."]}'
   ]
     .filter(Boolean)
     .join("\n");

@@ -22,6 +22,7 @@
 - `src/runtime/skillState.ts`
 - `src/runtime/skillTodo.ts`
 - `src/runtime/skillTrace.ts`
+- `src/runtime/browserObservation.ts`
 
 現有的 `skillRuntime.ts` 仍然負責：
 
@@ -166,20 +167,25 @@ Todo 與 trace 是分開的：
 - todo 給人快速看進度
 - trace 給人 debug 與貼 log
 
-## Case 6: Google AI
+completion gate 通過後，runtime 會把剩餘未完成的 todo 自動收斂成 `completed`，避免 UI 停在 `in_progress`。
+
+## Case 6: GitHub Trending
 
 目前主要 acceptance case 是：
 
-- `[6] 使用多輪 Skill 操作 Google AI 模式`
+- `[6] 使用多輪 Skill 操作 GitHub Trending`
 
 這個案例做幾件事：
 
 - 建立專用 multi-turn browser skill
 - 使用案例 5 已註冊的 `agent-browser` MCP
-- 預設用 headless 流程
-- 若遇到登入、驗證、同意頁或 blocked/manual 狀態，改走 manual gate
+- 預設用 headless 流程；若使用者明確要求視窗模式，就直接用 headed
+- 直接打開 `https://github.com/trending`
+- 點進第一名 repo
+- 讀取 repo README / 描述區並整理內容摘要
+- 若遇到 blocked/manual 狀態，改走 manual gate
 - 接受兩條成功路徑：
-  - 實際完成 Google AI 流程
+  - 實際完成 GitHub Trending -> 第一名 repo -> 摘要
   - 正確辨識 blocked/manual 並整理成最終回覆
 
 目前 targeted real tutorial 驗證可用：

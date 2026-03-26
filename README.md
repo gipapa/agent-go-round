@@ -17,7 +17,7 @@
   - 不需要自建 app server 才能使用主要功能
 - Agent 管理
   - 新增 / 編輯 / 刪除 agent
-  - 設定名稱、描述、大頭照、provider、endpoint、model
+  - 設定名稱、描述、大頭照與 load balancer
   - 依 agent 控制可使用的 docs、MCP、built-in tools、skills
 - Chat
   - 支援一般聊天與 legacy 的 leader / team 協作模式
@@ -44,8 +44,14 @@
   - 支援單輪與多輪 skill runtime
 - Profile 與 Credentials
   - 可設定使用者名稱、自我描述、大頭照
-  - `Credentials` 集中管理 OpenAI / Groq / Custom provider keys
-  - 相同 endpoint 的 agent 可共用同一組 key
+  - `Credentials` 集中管理 OpenAI-compatible provider 與多把 keys
+  - 同一個 credential 可維護 key pool，供 load balancer instances 重複使用
+  - 相同 endpoint 的多個 instances 可共用同一組 credential
+- Load Balancer
+  - agent 不再直接綁 provider / endpoint / model，而是綁一個 load balancer
+  - 每個 load balancer 由多個有序 instances 組成
+  - instance 可設定 model、description、retry 與 delay
+  - 若 instance 失敗，runtime 會依序掃描下一個可用 instance
 
 ## 架構重點
 
@@ -67,8 +73,17 @@
 
 ### 1. Agents
 
-- 支援 `openai_compat`、`chrome_prompt`、`custom`
-- `openai_compat` 可從 `/models` 載入 active models
+- 遠端模型 agent 目前透過 load balancer 運作
+- agent 編輯頁主要設定：
+  - `Profile`
+  - `Load Balancer`
+  - `Access Control`
+- `Load Balancer` 會決定：
+  - provider / endpoint / key
+  - model
+  - retry / delay
+  - failover 行為
+- `chrome_prompt` 已改成 pseudo provider，可作為 load balancer instance 使用
 - 編輯視窗可設定：
   - `Profile`
   - `Access Control`
@@ -87,13 +102,39 @@
 - Active agent
 - Credentials
 - Mode
-- History & Retry
+- History
+- Load Balancer
 - Docs
 - MCP
 - Skills
 - Built-in Tools
 
-### 2.1 Onboarding / 案例教學
+### 2.1 Credentials
+
+- 一筆 credential 代表一個 provider/endpoint 設定
+- 每筆 credential 底下可維護多把 key
+- key 可逐把測試連線
+- load balancer instance 會選擇：
+  - credential
+  - credential key
+
+### 2.2 Load Balancer
+
+- `Chat Config > Load Balancer` 採列表 + `Edit/Delete` modal
+- 每個 load balancer 由多個有序 instances 組成
+- instance 可設定：
+  - credential
+  - credential key
+  - model
+  - description
+  - `maxRetries`
+  - `delaySecond`
+- runtime 每次都從第 1 個 instance 開始掃描：
+  - 若 instance 被標記 `failure` 且尚未到 `nextCheckTime`，會跳過
+  - 若已超過 `nextCheckTime`，會重新嘗試
+- 請求成功後會清掉 failure 狀態；失敗則累積 `failureCount`
+
+### 2.3 Onboarding / 案例教學
 
 - 入口在首頁 `使用案例教學`
 - 目前提供六個案例：
@@ -102,7 +143,7 @@
   - `[3] 使用 Built-in Tools 完成工具對話`
   - `[4] 使用 Sequential Thinking Skill 驗證單輪能力`
   - `[5] 使用 agent-browser MCP 讀取 GitHub Trending`
-  - `[6] 使用多輪 Skill 操作 Google AI 模式`
+  - `[6] 使用多輪 Skill 操作 GitHub Trending`
 - 教學模式特性：
   - 左側固定 checklist 與系統提示
   - 右側保留真實可操作的 app 介面
@@ -193,6 +234,7 @@ skill-name/
 - `multi_turn`
   - 採顯式 phase runtime，而不是單輪 tool decision 疊補丁
   - 會建立 todo 清單、追蹤 phase、在 chat 內顯示唯讀 todo 面板
+  - completion gate 通過後，剩餘 todo 會自動收斂成 `completed`
   - 適合 browser automation、需要 `observe -> act -> observe` 的 workflow
   - 可設定工具步數上限、verify 次數與 verifier agent
 
@@ -297,7 +339,7 @@ REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
 ```json
 {
   "provider": "groq",
-  "apiKey": "YOUR_GROQ_API_KEY",
+  "apiKey": ["YOUR_GROQ_API_KEY_1", "YOUR_GROQ_API_KEY_2"],
   "endpoint": "https://api.groq.com/openai/v1",
   "model": "moonshotai/kimi-k2-instruct-0905"
 }
@@ -308,7 +350,7 @@ REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
 - `test:real_tutorial` 目前是 `Groq-only`
 - 案例 5 只驗證 MCP / browser automation 流程能跑通，不驗證最終內容品質
 - 案例 6 的 acceptance 允許兩條成功路徑：
-  - 真正完成 Google AI 流程
+  - 真正完成 GitHub Trending -> 點第一名 repo -> 摘要內容
   - 正確辨識 blocked / manual 狀態並給出最終總結
 
 Vitest 全量測試：

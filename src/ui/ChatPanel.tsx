@@ -468,6 +468,22 @@ export default function ChatPanel(props: ChatPanelProps) {
                 {m.role === "assistant" && m.skillTrace && m.skillTrace.length > 0 ? (
                   <details className="chat-tool-details">
                     <summary>查看 skill 流程紀錄</summary>
+                    <div className="chat-trace-actions">
+                      <button
+                        type="button"
+                        className="chat-trace-copy-btn"
+                        onClick={async () => {
+                          const trace = m.skillTrace ?? [];
+                          await copyText(
+                            trace
+                              .map((entry) => `## ${entry.label}\n${entry.content}`)
+                              .join("\n\n")
+                          );
+                        }}
+                      >
+                        複製 skill debug
+                      </button>
+                    </div>
                     <div className="chat-trace-list">
                       {m.skillTrace.map((entry, traceIndex) => (
                         <SkillTraceBlock key={`${m.id}-skill-trace-${traceIndex}`} label={entry.label} content={entry.content} />

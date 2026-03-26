@@ -88,8 +88,9 @@ steps:
 
       在 Access Control 裡：
       1. 打開 `MCP Tools`
-      2. 若你選擇 `All` 也可以
-      3. 若你選擇 `Custom selection`，請至少勾選 `教學用MCP`
+      2. 這一步請不要開啟 `Docs`、`Built-in Tools`、`Skills`
+      3. 若你選擇 `All` 也可以
+      4. 若你選擇 `Custom selection`，請至少勾選 `教學用MCP`
 
       完成後按下 `Save`。
     tab: agents

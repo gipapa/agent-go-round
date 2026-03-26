@@ -195,23 +195,23 @@ describe("tutorial YAML automation linkage", () => {
     expect(step.automation?.skillVerifyMax).toBe(2);
     expect(step.automation?.loadBalancerDelaySecond).toBe(10);
     expect(step.automation?.loadBalancerMaxRetries).toBe(10);
-    expect(step.automation?.composerSeed).toBe("請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」");
+    expect(step.automation?.composerSeed).toBe("幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要");
     expect(step.automation?.expect?.requireSkillTodo).toBe(true);
     expect(step.automation?.expect?.requireSkillTodoProgress).toBe(true);
   });
 
-  it("uses multi-turn todo expectations for the Google AI browser skill step", () => {
+  it("uses multi-turn todo expectations for the browser workflow skill step", () => {
     const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
     const prompt = step.automation?.expect?.userPrompt ?? "";
     const assistant = makeAssistant("assistant-multi-turn", "這是多輪 skill 回覆", {
-      skillTrace: [{ label: "Skill load", content: "已載入 skill：google-ai-browser-multiturn" }],
+      skillTrace: [{ label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" }],
       skillTodo: [
-        { id: "todo-1", label: "打開 Google", status: "completed", source: "planner", updatedAt: Date.now() },
-        { id: "todo-2", label: "輸入問題", status: "in_progress", source: "planner", updatedAt: Date.now() }
+        { id: "todo-1", label: "打開 GitHub Trending", status: "completed", source: "planner", updatedAt: Date.now() },
+        { id: "todo-2", label: "點擊第一名 repo", status: "in_progress", source: "planner", updatedAt: Date.now() }
       ],
       skillPhase: "act"
     });
-    const tool = makeTool("MCP 教學用MCP -> browser_open");
+    const tool = makeTool("MCP 教學用MCP -> browser_click");
     const result = evaluateTutorialStep(step, makeState({ history: [makeUser(prompt), tool, assistant], openedToolResultMessageIds: [assistant.id] }));
     expect(result.completed).toBe(true);
   });

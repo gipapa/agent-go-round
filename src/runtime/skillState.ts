@@ -43,23 +43,37 @@ export function applyPlannerDecisionToState(state: SkillRunState, decision: Skil
   };
 }
 
-export function applyObservationToState(state: SkillRunState, observationSignature?: string): SkillRunState {
+export function applyObservationToState(
+  state: SkillRunState,
+  observationSignature?: string,
+  browserObservation?: SkillRunState["lastBrowserObservation"],
+  preferredMcpServerId?: string
+): SkillRunState {
   const recentObservationSignatures = observationSignature
     ? [...state.recentObservationSignatures, observationSignature].slice(-3)
     : state.recentObservationSignatures;
   return {
     ...state,
     phase: "sync_state",
-    recentObservationSignatures
+    recentObservationSignatures,
+    lastBrowserObservation: browserObservation ?? state.lastBrowserObservation,
+    preferredMcpServerId: preferredMcpServerId ?? state.preferredMcpServerId
   };
 }
 
-export function applyActionToState(state: SkillRunState, actionSignature?: string): SkillRunState {
+export function applyActionToState(
+  state: SkillRunState,
+  actionSignature?: string,
+  browserObservation?: SkillRunState["lastBrowserObservation"],
+  preferredMcpServerId?: string
+): SkillRunState {
   const recentActionSignatures = actionSignature ? [...state.recentActionSignatures, actionSignature].slice(-3) : state.recentActionSignatures;
   return {
     ...state,
     phase: "sync_state",
-    recentActionSignatures
+    recentActionSignatures,
+    lastBrowserObservation: browserObservation ?? state.lastBrowserObservation,
+    preferredMcpServerId: preferredMcpServerId ?? state.preferredMcpServerId
   };
 }
 
@@ -83,8 +97,18 @@ export function resumeManualGate(state: SkillRunState, reason: string): SkillRun
 
 export function applyCompletionDecisionToState(state: SkillRunState, decision: SkillCompletionDecision): SkillRunState {
   let todo = state.todo;
-  if (decision.todoIds?.length) {
-    todo = applyTodoStatus(todo, decision.todoIds, decision.type === "complete" ? "completed" : "blocked", decision.reason);
+  if (decision.type === "complete") {
+    const targetIds =
+      decision.todoIds?.length
+        ? decision.todoIds
+        : todo.filter((item) => item.status !== "completed").map((item) => item.id);
+    if (targetIds.length) {
+      todo = applyTodoStatus(todo, targetIds, "completed", decision.reason);
+    }
+  } else if (decision.todoIds?.length) {
+    todo = applyTodoStatus(todo, decision.todoIds, "in_progress", decision.reason);
+  } else if (!todo.some((item) => item.status === "in_progress")) {
+    todo = markFirstPendingTodoInProgress(todo, decision.reason);
   }
   return {
     ...state,

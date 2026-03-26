@@ -109,6 +109,7 @@ export type CredentialTestResultLike = {
 };
 
 export type TutorialRuntimeState = {
+  scenarioId?: string;
   agents: AgentConfig[];
   skills: SkillConfig[];
   activeAgentId: string;

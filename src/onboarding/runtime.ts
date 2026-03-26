@@ -593,7 +593,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `已建立教學 skill：${skill?.name}`
-          : "系統正在建立教學用 ChatGPT browser multi-turn skill，完成後即可前往下一步。"
+          : "系統正在建立教學用 Browser workflow multi-turn skill，完成後即可前往下一步。"
       };
     }
     case "enable_tutorial_skill_access": {
@@ -640,7 +640,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `目前 Agent 已允許使用 skill：${skill?.name}，且可使用所需的 MCP / Built-in Tools。`
-          : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許使用這個 ChatGPT browser multi-turn skill；啟用 Skills 後，MCP 與 Built-in Tools 應維持允許全部。"
+          : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許使用這個 Browser workflow multi-turn skill；啟用 Skills 後，MCP 與 Built-in Tools 應維持允許全部。"
       };
     }
     case "first_chat_skill_tone": {
@@ -680,7 +680,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         completed: false,
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
-        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 使用 browser_open 打開 ChatGPT。"
+        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 使用 browser_open 打開目標網站。"
       };
     }
     case "first_chat_skill_chatgpt_ask": {
@@ -688,7 +688,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         completed: false,
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
-        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 完成輸入、送出並讀取 ChatGPT 回應。"
+        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 完成開站、導航、點擊與內容摘要。"
       };
     }
     case "register_tutorial_agent_browser_mcp": {
@@ -711,11 +711,13 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
     case "enable_tutorial_mcp_access": {
       const agent = findTutorialAgentBase(state);
       const server = findTutorialMcpServer(state);
+      const mcpOnlyMode = state.scenarioId === "agent-browser-mcp-chat";
       const completed =
         !!agent &&
         !!server &&
         agent.enableMcp === true &&
-        (agent.allowedMcpServerIds === undefined || agent.allowedMcpServerIds.includes(server.id));
+        (agent.allowedMcpServerIds === undefined || agent.allowedMcpServerIds.includes(server.id)) &&
+        (!mcpOnlyMode || (agent.enableDocs !== true && agent.enableBuiltInTools !== true && agent.enableSkills !== true));
       return {
         completed,
         targetId:
@@ -724,7 +726,11 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
             : "agents-edit-active-button",
         canContinue: completed,
         statusText: completed
-          ? "目前 Agent 已允許使用教學用MCP。"
+          ? mcpOnlyMode
+            ? "目前 Agent 已只開啟教學用MCP 權限。"
+            : "目前 Agent 已允許使用教學用MCP。"
+          : mcpOnlyMode
+          ? "請到 Agents 頁編輯目前 Agent，只開啟 MCP 權限，並允許使用教學用MCP。Docs、Built-in Tools、Skills 請維持關閉。"
           : "請到 Agents 頁編輯目前 Agent，打開 MCP 權限，並允許使用教學用MCP。"
       };
     }

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   AgentConfig,
+  BrowserObservationDigest,
   BuiltInToolConfig,
   ChatTraceEntry,
   ChatMessage,
@@ -131,6 +132,7 @@ import {
   normalizeSkillStepDecision
 } from "../runtime/skillPlanner";
 import { runMultiTurnSkillRuntime } from "../runtime/multiTurnSkillRuntime";
+import { extractBrowserObservation, formatBrowserObservationDigest } from "../runtime/browserObservation";
 import { bootstrapTodoList, summarizeTodo } from "../runtime/skillTodo";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
@@ -178,6 +180,12 @@ type BuiltInToolAction = { type: "builtin_tool_call"; tool: string; input?: any 
 type ToolDecision = { type: "no_tool" } | McpAction | BuiltInToolAction;
 type SkillAction = { type: "skill_call"; skillId: string; input?: any };
 type SkillDecision = { type: "no_skill" } | SkillAction;
+type SkillBootstrapPlan = {
+  todo: string[];
+  taskSummary?: string;
+  startUrl?: string;
+  notes?: string[];
+};
 type PreparedSkillExecution = {
   baseInput: string;
   finalInput: string;
@@ -286,9 +294,50 @@ function normalizeSkillDecision(obj: any): SkillDecision | null {
   return null;
 }
 
-function normalizeSkillBootstrapTodo(obj: any): string[] | null {
+function normalizeSkillBootstrapPlan(obj: any): SkillBootstrapPlan | null {
   if (!obj || typeof obj !== "object" || !Array.isArray(obj.todo)) return null;
-  return obj.todo.filter((item: unknown) => typeof item === "string" && item.trim()).map((item: string) => item.trim()).slice(0, 7);
+  const todo = obj.todo.filter((item: unknown) => typeof item === "string" && item.trim()).map((item: string) => item.trim()).slice(0, 7);
+  if (!todo.length) return null;
+  const taskSummary = typeof obj.taskSummary === "string" && obj.taskSummary.trim() ? obj.taskSummary.trim() : undefined;
+  const startUrl = typeof obj.startUrl === "string" && obj.startUrl.trim() ? obj.startUrl.trim() : undefined;
+  const notes = Array.isArray(obj.notes)
+    ? obj.notes.filter((item: unknown) => typeof item === "string" && item.trim()).map((item: string) => item.trim()).slice(0, 5)
+    : undefined;
+  return { todo, taskSummary, startUrl, notes };
+}
+
+function extractFirstUrl(text: string) {
+  const direct = String(text ?? "").match(/https?:\/\/[^\s"'`)>]+/i)?.[0];
+  if (direct) return direct;
+  const www = String(text ?? "").match(/\bwww\.[^\s"'`)>]+/i)?.[0];
+  return www ? `https://${www}` : undefined;
+}
+
+function resolvePreferredBrowserHeadedMode(text: string) {
+  const normalized = String(text ?? "").toLowerCase();
+  if (!normalized.trim()) return false;
+
+  const headedPatterns = [
+    /視窗模式/,
+    /有視窗/,
+    /可見瀏覽器/,
+    /顯示瀏覽器/,
+    /headed/,
+    /\bhead mode\b/,
+    /head模式/,
+    /window mode/,
+    /visible browser/
+  ];
+  if (headedPatterns.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
+
+  const headlessPatterns = [/headless/, /無視窗/, /不要開視窗/, /hidden browser/];
+  if (headlessPatterns.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+
+  return false;
 }
 
 function stringifyAny(v: any): string {
@@ -589,6 +638,8 @@ type ToolAugmentationResult = {
   observationSignature?: string;
   decisionSummary?: string;
   toolOutput?: any;
+  browserObservation?: BrowserObservationDigest | null;
+  serverId?: string;
 };
 
 function stableStringify(value: unknown): string {
@@ -640,6 +691,77 @@ function hashString(value: string) {
 
 function buildObservationSignature(output: unknown) {
   return hashString(stableStringify(normalizeToolInputForSignature(output ?? {})));
+}
+
+function goalWantsFirstRankedTarget(text: string) {
+  const normalized = String(text ?? "").toLowerCase();
+  return /(第一名|第一個|首個|top|first)/i.test(normalized) && /(repo|repository|專案|trend|trending|熱門|排行)/i.test(normalized);
+}
+
+function goalWantsRepoSummary(text: string) {
+  return /(內容|摘要|summary|介紹|readme|repo|repository|專案)/i.test(String(text ?? ""));
+}
+
+function buildBrowserHeuristicDecision(args: {
+  state: SkillRunState;
+  userInput: string;
+  resolveMcpServerId: (toolName: string) => string | null;
+}) {
+  const observation = args.state.lastBrowserObservation;
+  if (!observation) return null;
+
+  if (goalWantsFirstRankedTarget(args.userInput) && observation.pageKind === "ranked_list" && observation.rankedTargets.length) {
+    const browserClickServerId = args.resolveMcpServerId("browser_click");
+    if (browserClickServerId) {
+      const topTarget = observation.rankedTargets[0];
+      return {
+        type: "act" as const,
+        reason: `Structured browser observation identified the top ranked target ${topTarget.label}; click it directly to advance the workflow.`,
+        toolKind: "mcp" as const,
+        toolName: "browser_click",
+        input: {
+          selector: topTarget.ref
+        }
+      };
+    }
+  }
+
+  if (goalWantsRepoSummary(args.userInput) && observation.pageKind === "repo_page") {
+    return {
+      type: "finish" as const,
+      reason:
+        observation.repoName && observation.contentHints.length
+          ? `Structured browser observation confirms the workflow is already on repo page ${observation.repoName} with content hints collected.`
+          : "Structured browser observation confirms the workflow reached the target repository page."
+    };
+  }
+
+  return null;
+}
+
+function buildBrowserHeuristicCompletion(args: {
+  state: SkillRunState;
+  userInput: string;
+}) {
+  const observation = args.state.lastBrowserObservation;
+  if (!observation) return null;
+  if (observation.blockedReason) {
+    return {
+      type: "complete" as const,
+      reason: observation.blockedReason,
+      todoIds: args.state.todo.map((item) => item.id)
+    };
+  }
+  if (goalWantsRepoSummary(args.userInput) && observation.pageKind === "repo_page") {
+    return {
+      type: "complete" as const,
+      reason:
+        observation.repoName && observation.contentHints.length
+          ? `Reached repository page ${observation.repoName} and collected page content hints for final summarization.`
+          : "Reached the requested repository page and observed its main content."
+    };
+  }
+  return null;
 }
 
 function classifyToolIntentFromText(name: string, description?: string): ToolIntent {
@@ -914,6 +1036,7 @@ export default function App() {
   const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number }>> | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
+      scenarioId: tutorialScenario?.id,
       agents,
       skills,
       activeAgentId,
@@ -951,7 +1074,8 @@ export default function App() {
       userName,
       userDescription,
       userAvatarUrl,
-      tutorialOpenedToolResultMessageIds
+      tutorialOpenedToolResultMessageIds,
+      tutorialScenario?.id
     ]
   );
   const tutorialEvaluations = useMemo<TutorialStepEvaluation[]>(
@@ -2435,7 +2559,8 @@ export default function App() {
     skill: SkillConfig;
     runtime: LoadedSkillRuntime;
     userInput: string;
-  }): Promise<SkillTodoItem[]> {
+    onTrace?: (label: string, content: string) => void;
+  }): Promise<SkillBootstrapPlan> {
     const prompt = buildBootstrapPlanPrompt({
       skill: args.skill,
       runtime: args.runtime,
@@ -2451,8 +2576,8 @@ export default function App() {
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
 
-      const todo = normalizeSkillBootstrapTodo(extractJsonObject(raw));
-      if (todo?.length) {
+      const parsed = normalizeSkillBootstrapPlan(extractJsonObject(raw));
+      if (parsed?.todo.length) {
         logNow({
           category: "skills",
           agent: args.agent.name,
@@ -2460,7 +2585,21 @@ export default function App() {
           message: "Skill bootstrap plan created",
           details: raw
         });
-        return bootstrapTodoList(todo);
+        args.onTrace?.("Bootstrap raw", raw);
+        args.onTrace?.(
+          "Bootstrap parsed",
+          [
+            parsed.taskSummary ? `Task summary: ${parsed.taskSummary}` : "",
+            parsed.startUrl ? `Start URL: ${parsed.startUrl}` : "Start URL: (none)",
+            parsed.notes?.length ? `Notes:\n- ${parsed.notes.join("\n- ")}` : "",
+            `Todo:\n${bootstrapTodoList(parsed.todo)
+              .map((item, index) => `${index + 1}. ${item.label}`)
+              .join("\n")}`
+          ]
+            .filter(Boolean)
+            .join("\n")
+        );
+        return parsed;
       }
 
       logNow({
@@ -2470,19 +2609,23 @@ export default function App() {
         message: `Skill bootstrap plan invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
+      args.onTrace?.("Bootstrap raw", raw);
 
       if (attempt < args.retry.max) {
         await sleep(args.retry.delaySec * 1000);
       }
     }
 
-    return bootstrapTodoList([
-      "載入 skill 與必要資源",
-      "觀察目前狀態",
-      "執行下一個工具操作",
-      "確認任務是否完成",
-      "整理最終回覆"
-    ]);
+    return {
+      todo: [
+        "載入 skill 與必要資源",
+        "觀察目前狀態",
+        "執行下一個工具操作",
+        "確認任務是否完成",
+        "整理最終回覆"
+      ],
+      startUrl: extractFirstUrl(args.userInput)
+    };
   }
 
   async function runSkillStepPlanner(args: {
@@ -2498,6 +2641,7 @@ export default function App() {
     mustObserve: boolean;
     mustAct: boolean;
     phaseHint?: string;
+    onTrace?: (label: string, content: string) => void;
   }): Promise<SkillStepDecision | null> {
     const prompt = buildPlannerStepPrompt({
       skill: args.skill,
@@ -2529,6 +2673,10 @@ export default function App() {
           message: `Skill planner step: ${decision.type}`,
           details: raw
         });
+        args.onTrace?.(
+          `Planner raw ${args.state.stepIndex + 1}`,
+          [`Raw:\n${raw}`, "", `Normalized: ${JSON.stringify(decision, null, 2)}`].join("\n")
+        );
         return decision;
       }
 
@@ -2539,6 +2687,7 @@ export default function App() {
         message: `Skill planner step invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
+      args.onTrace?.(`Planner raw ${args.state.stepIndex + 1}`, [`Raw:\n${raw}`, "", "Normalized: invalid"].join("\n"));
 
       if (attempt < args.retry.max) {
         await sleep(args.retry.delaySec * 1000);
@@ -2558,6 +2707,7 @@ export default function App() {
     userInput: string;
     currentContext: string;
     toolScopeSummary: string;
+    onTrace?: (label: string, content: string) => void;
   }): Promise<SkillCompletionDecision | null> {
     const prompt = buildCompletionGatePrompt({
       skill: args.skill,
@@ -2585,6 +2735,10 @@ export default function App() {
           message: `Skill completion gate: ${decision.type}`,
           details: raw
         });
+        args.onTrace?.(
+          `Completion raw ${args.state.stepIndex}`,
+          [`Raw:\n${raw}`, "", `Normalized: ${JSON.stringify(decision, null, 2)}`].join("\n")
+        );
         return decision;
       }
 
@@ -2595,6 +2749,7 @@ export default function App() {
         message: `Skill completion gate invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
+      args.onTrace?.(`Completion raw ${args.state.stepIndex}`, [`Raw:\n${raw}`, "", "Normalized: invalid"].join("\n"));
 
       if (attempt < args.retry.max) {
         await sleep(args.retry.delaySec * 1000);
@@ -2762,6 +2917,10 @@ export default function App() {
         });
         const toolIntent = classifyBuiltInToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
+        const browserObservation = extractBrowserObservation({
+          toolName: normalizedDecision.tool,
+          output: toolOutput
+        });
         const toolSummaryForQuestion = buildToolResultPromptBlock({
           kind: "builtin",
           toolName: normalizedDecision.tool,
@@ -2792,7 +2951,8 @@ export default function App() {
           toolIntent,
           observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
           decisionSummary: `builtin:${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
-          toolOutput
+          toolOutput,
+          browserObservation
         };
       } catch (e: any) {
         const briefError = String(e?.message ?? e);
@@ -2854,6 +3014,10 @@ export default function App() {
         const toolOutput = await callTool(client, normalizedDecision.tool, normalizedDecision.input ?? {});
         const toolIntent = classifyMcpToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
+        const browserObservation = extractBrowserObservation({
+          toolName: normalizedDecision.tool,
+          output: toolOutput
+        });
         toolSummaryForQuestion = buildToolResultPromptBlock({
           kind: "mcp",
           serverName: targetServer.name,
@@ -2885,7 +3049,9 @@ export default function App() {
           toolIntent,
           observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
           decisionSummary: `mcp:${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"}/${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
-          toolOutput
+          toolOutput,
+          browserObservation,
+          serverId: targetServer.id
         };
       } catch (e: any) {
         const briefError = String(e?.message ?? e);
@@ -3024,25 +3190,35 @@ export default function App() {
     ];
 
     const updateAssistantProgress = (todo: SkillTodoItem[], phase: SkillPhase, trace?: ChatTraceEntry[]) => {
-      patchMessage(args.assistantMessageId, {
+      const patch: Partial<ChatMessage> = {
         skillGoal: args.userInput,
         skillTodo: todo.length ? todo : undefined,
         skillPhase: phase,
-        skillTrace: trace?.length ? trace : undefined,
         statusText: formatSkillPhaseStatus(phase),
         isStreaming: true,
         hideWhileStreaming: false
-      });
+      };
+      if (trace) {
+        patch.skillTrace = trace.length ? trace : undefined;
+      }
+      patchMessage(args.assistantMessageId, patch);
     };
 
-    const resolveMcpServerId = (toolName: string) => {
-      const match = args.prepared.scopedMcpTools
+    let bootstrapPlanMeta: SkillBootstrapPlan | null = null;
+
+    const resolveMcpServerId = (toolName: string, preferredServerId?: string | null) => {
+      const matches = args.prepared.scopedMcpTools
         .flatMap((entry) => entry.tools.map((tool) => ({ server: entry.server, tool })))
-        .find((entry) => entry.tool.name === toolName);
-      return match?.server.id ?? null;
+        .filter((entry) => entry.tool.name === toolName);
+      if (!matches.length) return null;
+      if (preferredServerId) {
+        const preferred = matches.find((entry) => entry.server.id === preferredServerId);
+        if (preferred) return preferred.server.id;
+      }
+      return matches[0]?.server.id ?? null;
     };
 
-    const chooseObservationSelection = (): BuiltInToolAction | McpAction | null => {
+    const chooseObservationSelection = (preferredServerId?: string | null): BuiltInToolAction | McpAction | null => {
       const observeScope = filterPreparedToolScopeByIntent(args.prepared, new Set<ToolIntent>(["observe"]));
       const ranked = observeScope.toolEntries
         .map((entry) => {
@@ -3056,6 +3232,7 @@ export default function App() {
           if (haystack.includes("list") || haystack.includes("query") || haystack.includes("inspect")) score += 40;
           if (haystack.includes("screenshot")) score += 20;
           if (entry.kind === "mcp") score += 10;
+          if (preferredServerId && entry.kind === "mcp" && entry.server.id === preferredServerId) score += 500;
           return { entry, score };
         })
         .sort((a, b) => b.score - a.score);
@@ -3079,12 +3256,15 @@ export default function App() {
       };
     };
 
-    const buildSelectionForDecision = (decision: Extract<SkillStepDecision, { type: "act" }>): BuiltInToolAction | McpAction | null => {
+    const buildSelectionForDecision = (
+      decision: Extract<SkillStepDecision, { type: "act" }>,
+      preferredServerId?: string | null
+    ): BuiltInToolAction | McpAction | null => {
       if (decision.toolKind === "builtin") {
         const tool = args.prepared.scopedBuiltInTools.find((item) => item.name === decision.toolName);
         return tool ? { type: "builtin_tool_call", tool: tool.name, input: decision.input ?? {} } : null;
       }
-      const serverId = resolveMcpServerId(decision.toolName);
+      const serverId = resolveMcpServerId(decision.toolName, preferredServerId);
       return serverId ? { type: "mcp_call", serverId, tool: decision.toolName, input: decision.input ?? {} } : null;
     };
 
@@ -3138,21 +3318,71 @@ export default function App() {
             summary: formatToolScopeSummary(scopedToolEntries),
             toolCount: scopedToolEntries.length
           }),
-          bootstrapPlan: async () =>
-            await runSkillBootstrapPlan({
+          bootstrapPlan: async () => {
+            const bootstrap = await runSkillBootstrapPlan({
               agent: args.agent,
               adapter: args.adapter,
               retry: getRetryPolicyForAgent(args.agent),
               skill: args.skill,
               runtime: args.prepared.runtime,
-              userInput: args.userInput
-            }),
+              userInput: args.userInput,
+              onTrace: (label, content) => {
+                pushSkillTrace(trace, label, content);
+                updateAssistantProgress(bootstrapPlanMeta?.todo?.length ? bootstrapTodoList(bootstrapPlanMeta.todo) : [], "bootstrap_plan", trace);
+              }
+            });
+            bootstrapPlanMeta = bootstrap;
+            return bootstrapTodoList(bootstrap.todo);
+          },
           decideNextStep: async ({ state, currentContext, toolScopeSummary, mustObserve, mustAct, phaseHint }) => {
+            pushSkillTrace(
+              trace,
+              `Runtime snapshot ${state.stepIndex + 1}`,
+              [
+                `phase=${state.phase}`,
+                `mustObserve=${mustObserve}`,
+                `mustAct=${mustAct}`,
+                `manualGate=${state.manualGate}`,
+                `completionStatus=${state.completionStatus}`,
+                state.preferredMcpServerId ? `preferredMcpServerId=${state.preferredMcpServerId}` : "",
+                state.latestReason ? `latestReason=${state.latestReason}` : "",
+                state.recentActionSignatures.length ? `recentActionSignatures=${state.recentActionSignatures.join(" | ")}` : "",
+                state.recentObservationSignatures.length ? `recentObservationSignatures=${state.recentObservationSignatures.join(" | ")}` : "",
+                state.lastBrowserObservation ? `lastBrowserObservation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : "",
+                bootstrapPlanMeta?.taskSummary ? `taskSummary=${bootstrapPlanMeta.taskSummary}` : "",
+                bootstrapPlanMeta?.startUrl ? `startUrl=${bootstrapPlanMeta.startUrl}` : "",
+                phaseHint ? `phaseHint=${phaseHint}` : "",
+                `currentContext:\n${String(currentContext ?? "").slice(0, 2200)}`
+              ]
+                .filter(Boolean)
+                .join("\n")
+            );
+
             if (mustObserve) {
               return {
                 type: "observe",
                 reason: phaseHint?.trim() || "Runtime requires an observation step immediately after a state-changing action."
               };
+            }
+
+            const heuristicDecision = buildBrowserHeuristicDecision({
+              state,
+              userInput: args.userInput,
+              resolveMcpServerId: (toolName) => resolveMcpServerId(toolName, state.preferredMcpServerId)
+            });
+            if (heuristicDecision) {
+              pushSkillTrace(
+                trace,
+                `Heuristic step ${state.stepIndex + 1}`,
+                [
+                  `Decision: ${heuristicDecision.type}`,
+                  `Reason: ${heuristicDecision.reason}`,
+                  state.lastBrowserObservation ? `Observation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : ""
+                ]
+                  .filter(Boolean)
+                  .join("\n")
+              );
+              return heuristicDecision;
             }
 
             const fastPathScope = mustAct
@@ -3181,6 +3411,24 @@ export default function App() {
                   toolKind: bootstrap.toolKind,
                   toolName: bootstrap.toolName,
                   input: bootstrap.input ?? {}
+                };
+              }
+            }
+
+            if (state.stepIndex === 0 && !mustAct && bootstrapPlanMeta?.startUrl && fastPathScope.toolEntries.length > 0) {
+              const browserOpenServerId = resolveMcpServerId("browser_open", state.preferredMcpServerId);
+              if (browserOpenServerId) {
+                return {
+                  type: "act",
+                  reason:
+                    bootstrapPlanMeta.taskSummary?.trim() ||
+                    "Use the bootstrap plan start URL to begin the browser workflow with the most direct stable page.",
+                  toolKind: "mcp",
+                  toolName: "browser_open",
+                  input: {
+                    url: bootstrapPlanMeta.startUrl,
+                    headed: resolvePreferredBrowserHeadedMode(args.userInput)
+                  }
                 };
               }
             }
@@ -3235,11 +3483,15 @@ export default function App() {
               toolScopeSummary,
               mustObserve,
               mustAct,
-              phaseHint
+              phaseHint,
+              onTrace: (label, content) => {
+                pushSkillTrace(trace, label, content);
+                updateAssistantProgress(state.todo, "plan_next_step", trace);
+              }
             });
           },
-          runObservation: async ({ currentContext }) => {
-            const selection = chooseObservationSelection();
+          runObservation: async ({ state, currentContext }) => {
+            const selection = chooseObservationSelection(state.preferredMcpServerId);
             if (!selection) {
               return {
                 context: currentContext,
@@ -3259,13 +3511,17 @@ export default function App() {
 
             return {
               context: result.input,
-              detail: result.detail,
+              detail: result.browserObservation
+                ? [result.detail, formatBrowserObservationDigest(result.browserObservation)].filter(Boolean).join("\n\n")
+                : result.detail,
               observationSignature: result.observationSignature,
-              actionSignature: result.actionSignature
+              actionSignature: result.actionSignature,
+              browserObservation: result.browserObservation,
+              preferredMcpServerId: result.serverId
             };
           },
-          runAction: async ({ decision, currentContext }) => {
-            const selection = buildSelectionForDecision(decision);
+          runAction: async ({ decision, state, currentContext }) => {
+            const selection = buildSelectionForDecision(decision, state.preferredMcpServerId);
             if (!selection) {
               const detail = `找不到可用工具：${decision.toolKind}/${decision.toolName}`;
               return {
@@ -3288,11 +3544,15 @@ export default function App() {
 
             return {
               context: result.input,
-              detail: result.detail,
+              detail: result.browserObservation
+                ? [result.detail, formatBrowserObservationDigest(result.browserObservation)].filter(Boolean).join("\n\n")
+                : result.detail,
               toolLabel: result.toolLabel,
               actionSignature: result.actionSignature,
               observationSignature: result.observationSignature,
-              confirmed: typeof result.toolOutput?.confirmed === "boolean" ? result.toolOutput.confirmed : null
+              confirmed: typeof result.toolOutput?.confirmed === "boolean" ? result.toolOutput.confirmed : null,
+              browserObservation: result.browserObservation,
+              preferredMcpServerId: result.serverId
             };
           },
           runManualGate: async ({ decision, currentContext }) => {
@@ -3330,21 +3590,47 @@ export default function App() {
               detail: manualResult.detail ?? decision.message,
               toolLabel: manualResult.toolLabel,
               actionSignature: manualResult.actionSignature,
-              confirmed: typeof manualResult.toolOutput?.confirmed === "boolean" ? manualResult.toolOutput.confirmed : null
+              confirmed: typeof manualResult.toolOutput?.confirmed === "boolean" ? manualResult.toolOutput.confirmed : null,
+              browserObservation: manualResult.browserObservation,
+              preferredMcpServerId: manualResult.serverId
             };
           },
           checkCompletion: async ({ state, currentContext, toolScopeSummary }) =>
-            await runSkillCompletionGate({
-              agent: args.agent,
-              adapter: args.adapter,
-              retry: getRetryPolicyForAgent(args.agent),
-              state,
-              skill: args.skill,
-              runtime: args.prepared.runtime,
-              userInput: args.userInput,
-              currentContext,
-              toolScopeSummary
-            })
+            {
+              const heuristicCompletion = buildBrowserHeuristicCompletion({
+                state,
+                userInput: args.userInput
+              });
+              if (heuristicCompletion) {
+                pushSkillTrace(
+                  trace,
+                  `Heuristic completion ${state.stepIndex}`,
+                  [
+                    `Decision: ${heuristicCompletion.type}`,
+                    heuristicCompletion.reason ? `Reason: ${heuristicCompletion.reason}` : "",
+                    state.lastBrowserObservation ? `Observation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : ""
+                  ]
+                    .filter(Boolean)
+                    .join("\n")
+                );
+                return heuristicCompletion;
+              }
+              return await runSkillCompletionGate({
+                agent: args.agent,
+                adapter: args.adapter,
+                retry: getRetryPolicyForAgent(args.agent),
+                state,
+                skill: args.skill,
+                runtime: args.prepared.runtime,
+                userInput: args.userInput,
+                currentContext,
+                toolScopeSummary,
+                onTrace: (label, content) => {
+                  pushSkillTrace(trace, label, content);
+                  updateAssistantProgress(state.todo, "completion_gate", trace);
+                }
+              });
+            }
         }
       });
     }
@@ -4907,6 +5193,7 @@ export default function App() {
                 builtInTools={allBuiltInTools}
                 skills={skills}
                 loadBalancers={loadBalancerSlots}
+                lockToMcpOnly={tutorialScenario?.id === "agent-browser-mcp-chat" && currentTutorialStep?.behavior === "enable_tutorial_mcp_access"}
               />
             </div>
           </div>

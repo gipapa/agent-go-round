@@ -1,6 +1,6 @@
 id: chatgpt-browser-skill
-title: "[6] 使用多輪 Skill 操作 Google AI 模式"
-description: 使用 multi-turn skill 結合 agent-browser MCP，以單一對話完成 Google AI Mode 自動化流程：先 headless 開站、必要時用系統工具詢問是否切 visible browser，再輸入問題並讀取回應。
+title: "[6] 使用多輪 Skill 操作 GitHub Trending"
+description: 使用 multi-turn skill 結合 agent-browser MCP，以單一對話完成瀏覽器自動化流程：直接開啟 GitHub Trending、點進第一名 repo，最後整理頁面內容回報給使用者。
 exitTitle: 離開案例教學
 exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
 steps:
@@ -11,18 +11,19 @@ steps:
     instructionBody: |
       這個案例會帶你完成：
       - 建立一個專門操作瀏覽器的 multi-turn skill
-      - 讓 skill 使用案例 5 已註冊好的 `agent-browser` MCP
-      - 用一則對話完成：直接打開 Google AI 模式、輸入「你是什麼模型，還有今天台北天氣如何」、最後讀回回應
-      - 預設先嘗試 headless 瀏覽器
+      - 讓 skill 使用 `agent-browser` MCP
+      - 用一則對話完成：直接打開 GitHub Trending、點進第一名 repo、最後讀回 repo 內容摘要
+      - 使用者若明確要求「視窗模式 / headed mode」，就直接照要求用可見瀏覽器開啟
+      - 若使用者沒有特別指定，預設先嘗試 headless 瀏覽器
       - 若頁面出現登入、驗證、同意頁或其他人工關卡，先用系統工具詢問你是否改用可見瀏覽器
       - 只有你確認同意後，才改用可見瀏覽器並請你手動完成
-      - 若目前環境明確顯示「無法使用 AI 模式」，也會把這個 blocked 狀態整理成最終回覆，避免無限重試
+      - 若頁面明確顯示目前環境無法繼續操作，也會把 blocked 狀態整理成最終回覆，避免無限重試
 
       注意：
       - 這個案例需要本地端執行程式，建議使用 Windows 的 WSL、Linux、或 macOS 環境
       - 因為流程會依頁面狀態決定下一步，所以這裡會使用 multi-turn skill
       - 這個案例會在中途帶你註冊 `教學用MCP`，並授權給目前 Agent 使用
-      - Google AI 模式可能會顯示登入、驗證或其他同意步驟；若出現，skill 會先詢問你是否改用 visible browser，再請你在那裡手動完成
+      - GitHub Trending 一般比 Google AI 或登入型網站穩定，更適合驗證多輪 browser workflow
     behavior: manual_info
     actionLabel: 下一步
     automation:
@@ -78,6 +79,48 @@ steps:
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
 
+  - id: create-multi-load-balancer
+    title: 建立第二個 Load Balancer
+    checklistLabel: 建立三個 instance 的 Load Balancer
+    instructionTitle: 先補更多 key，建立給案例 6 用的第二個 Load Balancer
+    instructionBody: |
+      這個案例的 multi-turn skill 比一般單輪對話更容易吃到模型額度，所以建議先準備更多可切換的 instances。
+
+      請回到 Chat Config，打開 Credentials 設定。
+
+      這一步請先補出第二個可用來源：
+      - 新增第二把 key，或
+      - 新增另一個 provider
+
+      當系統偵測到第二個可用來源後，會自動建立 `教學用Load Balancer 2`，其中三個 instances 會是：
+      - Instance 1：沿用目前對話用的 provider / key，model=`moonshotai/kimi-k2-instruct-0905`
+      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound`
+      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`moonshotai/kimi-k2-instruct-0905`
+
+      這個案例不會驗證 failover 是否真的發生；這一步只確認第二個 load balancer 已建立完成。
+    completionLabel: 等待你新增第二把 key / 其他 provider，並讓系統建立第二個 Load Balancer
+    tab: chat_config
+    targetId: chat-config-credentials-card
+    behavior: create_multi_load_balancer
+    actionLabel: 下一步
+
+  - id: switch-agent-load-balancer
+    title: 切換 Agent 使用第二個 Load Balancer
+    checklistLabel: 切換 Agent 到第二個 Load Balancer
+    instructionTitle: 先把目前 Agent 切到第二個 Load Balancer
+    instructionBody: |
+      請前往 Agents，編輯目前的 Agent。
+
+      將它的 Load Balancer 改成：
+      - `教學用Load Balancer 2`
+
+      之後按下 Save。
+    completionLabel: 等待你把 Agent 改綁到第二個 Load Balancer
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: switch_tutorial_agent_to_multi_load_balancer
+    actionLabel: 下一步
+
   - id: register_mcp
     title: 註冊 agent-browser MCP
     checklistLabel: 註冊教學用MCP
@@ -126,24 +169,26 @@ steps:
       activeAgentPreset: tutorial_agent_base
 
   - id: create_browser_skill
-    title: 建立 Google AI browser skill
-    checklistLabel: 建立 Google AI browser skill
+    title: 建立 Browser workflow skill
+    checklistLabel: 建立 Browser workflow skill
     instructionTitle: 系統會自動建立一個 multi-turn browser skill
     instructionBody: |
       這個 skill 會包含：
       - `SKILL.md`
-      - `references/google-ai-browser-playbook.md`
-      - `assets/google-ai-browser-report-template.md`
+      - `references/browser-workflow-playbook.md`
+      - `assets/browser-workflow-report-template.md`
 
       它的重點是：
-      - 先用 headless browser 直接開啟 Google AI 模式
+      - 先為任務建立起始網址與 todo
+      - 若使用者明確要求視窗模式，就直接用 headed browser 開始流程
+      - 若使用者沒有特別指定，預設先用 headless browser 開始流程
       - 只有遇到登入、驗證或 consent 關卡才用系統工具詢問是否切成 headed browser
-      - 若頁面明確表示 AI 模式目前不可用，會直接總結 blocked 狀態
-      - 否則再繼續 snapshot / fill / click / wait / 讀取回應
+      - 若頁面明確表示目前不可用，會直接總結 blocked 狀態
+      - 否則再繼續 snapshot / click / fill / wait / 讀取回應
     tab: chat_config
     targetId: chat-config-skills-card
     behavior: ensure_tutorial_chatgpt_browser_skill
-    completionLabel: 等待系統建立教學用 Google AI browser skill
+    completionLabel: 等待系統建立教學用 Browser workflow skill
     actionLabel: 下一步
     automation:
       activeAgentPreset: tutorial_agent_base
@@ -154,7 +199,7 @@ steps:
       loadBalancerMaxRetries: 10
 
   - id: enable_browser_skill
-    title: 讓 Agent 可以使用 Google AI browser skill
+    title: 讓 Agent 可以使用 Browser workflow skill
     checklistLabel: 開啟 Agent 的 browser skill 權限
     instructionTitle: 到 Agents 頁把 browser skill 授權給目前 Agent
     instructionBody: |
@@ -163,13 +208,13 @@ steps:
       在 Access Control 裡：
       1. 打開 `Skills`
       2. 若你選擇 `All` 也可以
-      3. 若你選擇 `Custom selection`，請至少勾選 `Google AI Browser Multi-turn Skill`
+      3. 若你選擇 `Custom selection`，請至少勾選 `Browser Workflow Multi-turn Skill`
 
       完成後按下 `Save`。
     tab: agents
     targetId: agents-edit-active-button
     behavior: enable_tutorial_chatgpt_browser_skill_access
-    completionLabel: 等待 Agent 開啟 Google AI browser skill 權限
+    completionLabel: 等待 Agent 開啟 Browser workflow skill 權限
     actionLabel: 下一步
     automation:
       activeAgentPreset: tutorial_agent_base
@@ -180,23 +225,30 @@ steps:
       loadBalancerMaxRetries: 10
 
   - id: run_chatgpt_flow
-    title: 用一則對話完成 Google AI 流程
-    checklistLabel: 使用 skill 完成開站、輸入、送出與讀取回應
-    instructionTitle: 單一對話：完成整個 Google AI 瀏覽器流程
+    title: 用一則對話完成 GitHub Trending 流程
+    checklistLabel: 使用 skill 完成開站、點擊與摘要
+    instructionTitle: 單一對話：完成整個 GitHub Trending 瀏覽器流程
     instructionBody: |
       我已經幫你切到 Chat，並填好測試問題。
 
       這一題想測的是：
       - skill 是否會真的載入
-      - 是否會先用 `browser_open` 的 headless 模式打開 `https://google.com/ai`
-      - 若頁面正常可用，是否會繼續使用 `browser_snapshot` / `browser_fill` / `browser_click` / `browser_wait`
-      - 若頁面明確顯示目前環境無法使用 AI 模式，是否會把這個 blocked 狀態整理成最終回答
+      - 是否會先用 `browser_open` 打開最直接的 GitHub Trending 網址
+      - 是否會繼續使用 `browser_snapshot` / `browser_click` / `browser_wait`
+      - 是否會點進第一名 repo，而不是停在列表頁
+      - 是否會把 repo 頁面的標題、描述與主要內容整理成最終回答
       - 若頁面出現登入、驗證、同意頁或其他人工關卡，是否會先使用系統工具詢問，再改用可見瀏覽器並請你手動完成
-      - 最後是否會把真正讀到的回答整理給你，而不是停在「我幫你打開網站了」
+
+      你也可以額外試試看這句：
+      - `用視窗模式幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要`
+
+      這一句會用來確認：
+      - skill 會依照使用者明確要求，直接用可見瀏覽器啟動
+      - 而不是一律先走 headless
     tab: chat
     targetId: chat-input
     behavior: first_chat_skill_chatgpt_ask
-    completionLabel: 等待 Agent 使用 multi-turn skill 完成整個 Google AI 流程，必要時展開 tool result 查看細節
+    completionLabel: 等待 Agent 使用 multi-turn skill 完成整個 GitHub Trending 流程，必要時展開 tool result 查看細節
     actionLabel: 完成案例教學
     automation:
       clearChatOnEnter: true
@@ -205,26 +257,25 @@ steps:
       skillVerifyMax: 2
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
-      composerSeed: 請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」
+      composerSeed: 幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要
       activeAgentPreset: tutorial_agent_base
       expect:
-        userPrompt: 請幫我打開 Google AI 模式並詢問「你是什麼模型，還有今天台北天氣如何」
+        userPrompt: 幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要
         requireAssistant: true
         requireSkillTodo: true
         requireSkillTodoProgress: true
         successfulToolMessageIncludes:
           - MCP 教學用MCP -> browser_open
           - MCP 教學用MCP -> browser_snapshot
+          - MCP 教學用MCP -> browser_click
         requireOpenedToolResult: true
         skillLoadContainsAny:
-          - google-ai-browser-multiturn
-          - google-ai-browser-multi-turn-skill
+          - browser-workflow-multiturn
+          - browser-workflow-multi-turn-skill
         assistantContentIncludesAny:
-          - 你是什麼模型
-          - AI 模式
-          - 無法使用 AI 模式
-          - 目前無法使用 AI 模式
-          - unusual traffic
-          - reCAPTCHA
-          - 驗證你是真人
-          - 安全驗證
+          - GitHub
+          - repo
+          - repository
+          - README
+          - 專案
+          - blocked

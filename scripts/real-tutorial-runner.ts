@@ -31,6 +31,7 @@ const TUTORIAL_PRIMARY_LB_NAME = "教學用Load Balancer 1";
 const TUTORIAL_SECONDARY_LB_NAME = "教學用Load Balancer 2";
 const execFile = promisify(execFileCallback);
 const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
+const REAL_TUTORIAL_PROMPT_OVERRIDE = process.env.REAL_TUTORIAL_PROMPT_OVERRIDE?.trim() || "";
 
 type RealTutorialConfig = {
   provider: string;
@@ -715,7 +716,7 @@ async function waitForChatReply(timeoutMs: number, step?: TutorialStepDefinition
           console.log(
             `[reply:${step.id}] ${Math.round(elapsedMs / 1000)}s status=${statusText || "(empty)"} assistant=${truncateForLog(
               assistant
-            )} todo=${truncateForLog(todo)} trace=${truncateForLog(trace, 240)} tool=${truncateForLog(toolResults, 240)} logs=${truncateForLog(logs, 240)}`
+            )} todo=${truncateForLog(todo, 360)} trace=${truncateForLog(trace, 2200)} tool=${truncateForLog(toolResults, 1200)} logs=${truncateForLog(logs, 800)}`
           );
         }
       : undefined
@@ -920,9 +921,15 @@ return {
       const replyTimeout = isMultiTurn ? 600000 : 180000;
       const toolSummaryTimeout = isMultiTurn ? 180000 : 30000;
       await clickByTutorialId("tab-chat");
-      const prompt = step.automation?.composerSeed ?? "";
+      const prompt =
+        REAL_TUTORIAL_PROMPT_OVERRIDE && step.behavior === "first_chat_skill_chatgpt_ask"
+          ? REAL_TUTORIAL_PROMPT_OVERRIDE
+          : step.automation?.composerSeed ?? "";
       const previousToolResultCount = step.automation?.expect?.requireOpenedToolResult ? await getToolResultSummaryCount() : 0;
       if (prompt) {
+        if (REAL_TUTORIAL_PROMPT_OVERRIDE && step.behavior === "first_chat_skill_chatgpt_ask") {
+          await setValueByTutorialId("chat-input", prompt);
+        }
         await waitFor(
           () =>
             browserEval<boolean>(`

@@ -1,4 +1,5 @@
 import {
+  BrowserObservationDigest,
   ChatTraceEntry,
   LoadedSkillRuntime,
   SkillCompletionDecision,
@@ -9,6 +10,13 @@ import {
 } from "../types";
 import { applyCompletionDecisionToState, applyObservationToState, applyActionToState, applyManualGateToState, applyPlannerDecisionToState, createSkillRunState, resumeManualGate } from "./skillState";
 import { pushSkillPhaseTrace, pushSkillTodoTrace } from "./skillTrace";
+import { formatBrowserObservationDigest } from "./browserObservation";
+
+function compactTraceText(text: string, max = 1200) {
+  const normalized = String(text ?? "").replace(/\r/g, "").trim();
+  if (!normalized) return "(empty)";
+  return normalized.length <= max ? normalized : `${normalized.slice(0, Math.max(0, max - 1))}…`;
+}
 
 function decisionSatisfiesConstraints(decision: SkillStepDecision, mustObserve: boolean, mustAct: boolean) {
   if (mustObserve) {
@@ -30,6 +38,8 @@ export type MultiTurnObservationResult = {
   detail?: string;
   observationSignature?: string;
   actionSignature?: string;
+  browserObservation?: BrowserObservationDigest | null;
+  preferredMcpServerId?: string;
 };
 
 export type MultiTurnActionResult = {
@@ -39,6 +49,8 @@ export type MultiTurnActionResult = {
   actionSignature?: string;
   observationSignature?: string;
   confirmed?: boolean | null;
+  browserObservation?: BrowserObservationDigest | null;
+  preferredMcpServerId?: string;
 };
 
 export type MultiTurnSkillCallbacks = {
@@ -78,7 +90,12 @@ export type MultiTurnSkillRuntimeResult = {
   finalAnswerOverride?: string;
 };
 
-function detectTerminalBlockedContext(text: string) {
+function detectTerminalBlockedContext(text: string, browserObservation?: BrowserObservationDigest | null) {
+  if (browserObservation?.blockedReason) {
+    return {
+      reason: browserObservation.blockedReason
+    };
+  }
   const normalized = String(text ?? "").toLowerCase();
   if (!normalized.trim()) return null;
 
@@ -260,6 +277,11 @@ export async function runMultiTurnSkillRuntime(args: {
     );
 
     if (!decision) {
+      pushSkillPhaseTrace(
+        trace,
+        "sync_state",
+        [`Step ${round}`, "Planner returned no valid decision. The runtime will leave the tool loop here."].join("\n")
+      );
       break;
     }
 
@@ -280,9 +302,28 @@ export async function runMultiTurnSkillRuntime(args: {
       );
       currentContext = observation?.context ?? currentContext;
       const last = state.recentObservationSignatures.at(-1) ?? null;
-      state = applyObservationToState(state, observation?.observationSignature);
+      state = applyObservationToState(
+        state,
+        observation?.observationSignature,
+        observation?.browserObservation ?? undefined,
+        observation?.preferredMcpServerId
+      );
       args.callbacks.onStateChange?.(state);
-      const terminalBlock = detectTerminalBlockedContext(currentContext);
+      pushSkillPhaseTrace(
+        trace,
+        "sync_state",
+        [
+          `Step ${round}`,
+          observation?.observationSignature ? `observationSignature=${observation.observationSignature}` : "observationSignature=(none)",
+          observation?.actionSignature ? `actionSignature=${observation.actionSignature}` : "",
+          observation?.browserObservation ? `browserObservation:\n${formatBrowserObservationDigest(observation.browserObservation)}` : "",
+          observation?.preferredMcpServerId ? `preferredMcpServerId=${observation.preferredMcpServerId}` : "",
+          `currentContext:\n${compactTraceText(currentContext)}`
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+      const terminalBlock = detectTerminalBlockedContext(currentContext, observation?.browserObservation);
       if (terminalBlock) {
         const allTodoIds = state.todo.map((item) => item.id);
         pushSkillPhaseTrace(
@@ -324,8 +365,22 @@ export async function runMultiTurnSkillRuntime(args: {
         ].join("\n")
       );
       currentContext = action?.context ?? currentContext;
-      state = applyActionToState(state, action?.actionSignature);
+      state = applyActionToState(state, action?.actionSignature, action?.browserObservation ?? undefined, action?.preferredMcpServerId);
       args.callbacks.onStateChange?.(state);
+      pushSkillPhaseTrace(
+        trace,
+        "sync_state",
+        [
+          `Step ${round}`,
+          action?.actionSignature ? `actionSignature=${action.actionSignature}` : "actionSignature=(none)",
+          action?.observationSignature ? `observationSignature=${action.observationSignature}` : "",
+          action?.browserObservation ? `browserObservation:\n${formatBrowserObservationDigest(action.browserObservation)}` : "",
+          action?.preferredMcpServerId ? `preferredMcpServerId=${action.preferredMcpServerId}` : "",
+          `currentContext:\n${compactTraceText(currentContext)}`
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
       mustObserve = true;
       mustAct = false;
       phaseHint = "上一個動作已改變狀態，下一步請先 observe。";
@@ -352,6 +407,15 @@ export async function runMultiTurnSkillRuntime(args: {
       if (manual?.confirmed === true) {
         state = resumeManualGate(state, decision.reason);
         args.callbacks.onStateChange?.(state);
+        pushSkillPhaseTrace(
+          trace,
+          "sync_state",
+          [
+            `Step ${round}`,
+            "Manual gate resume approved.",
+            `currentContext:\n${compactTraceText(currentContext)}`
+          ].join("\n")
+        );
         mustObserve = true;
         mustAct = false;
         phaseHint = "manual gate 已通過，請先 observe 目前狀態，再決定下一步。";
@@ -390,6 +454,11 @@ export async function runMultiTurnSkillRuntime(args: {
     );
 
     if (!completion) {
+      pushSkillPhaseTrace(
+        trace,
+        "sync_state",
+        [`Step ${round}`, "Completion gate returned no valid decision; the runtime will continue only if a later refine pass is triggered."].join("\n")
+      );
       break;
     }
 
