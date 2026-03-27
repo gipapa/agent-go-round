@@ -4,6 +4,8 @@ import { loadUiState } from "../storage/settingsStore";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestSavedAgentForQuestion } from "../utils/agentDirectoryTool";
+import { createToolDashboardHelpers } from "../utils/toolDashboard";
+import { TUTORIAL_CLOCK_TOOL_CODE } from "../onboarding/tutorialBuiltInToolTemplate";
 import HelpModal from "./HelpModal";
 
 function emptyTool(index: number): BuiltInToolConfig {
@@ -126,6 +128,9 @@ export default function BuiltInToolsPanel(props: {
             const confirmed = window.confirm(String(message ?? "").trim() || "是否繼續？");
             return { confirmed };
           }
+        },
+        ui: {
+          dashboard: createToolDashboardHelpers()
         }
       });
       setTestResult(stringifyAny(output));
@@ -193,8 +198,9 @@ export default function BuiltInToolsPanel(props: {
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
           Register browser-side JavaScript tools for agents. Tool code runs in the same page context, so it can call globals
-          such as <code>alert</code>, <code>window</code>, and <code>document</code>. Return a value if you want the model to
-          receive structured tool output.
+          such as <code>alert</code>, <code>window</code>, and <code>document</code>. You can also use the injected
+          <code>dashboard</code> helper to create a live floating panel. Return a value if you want the model to receive
+          structured tool output.
         </div>
         <button
           type="button"
@@ -227,6 +233,7 @@ export default function BuiltInToolsPanel(props: {
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
             這些程式碼會直接跑在瀏覽器中，因此可以使用 <code>alert</code>、<code>window</code>、<code>document</code> 等全域物件。
+            系統也會注入 <code>dashboard</code> helper，讓你建立可重用的浮動 dashboard。
             目前沒有 sandbox，請只使用你信任的程式碼。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
@@ -263,6 +270,16 @@ return {
   now,
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
 };`}</pre>
+          </div>
+          <hr style={divider} />
+          <div style={{ ...helpText, marginTop: 8 }}>
+            <div style={exampleTitle}>範例：浮動時鐘 dashboard</div>
+            這個工具會在頁面右下角開一個可持續更新的時鐘，適合做 dashboard 類工具。
+            <br />
+            Input schema：
+            <pre style={exampleBlock}>{`{}`}</pre>
+            JavaScript code：
+            <pre style={exampleBlock}>{TUTORIAL_CLOCK_TOOL_CODE}</pre>
           </div>
           <hr style={divider} />
           <div style={{ ...helpText, marginTop: 8 }}>

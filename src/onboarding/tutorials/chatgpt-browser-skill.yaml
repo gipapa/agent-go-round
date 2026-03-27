@@ -233,14 +233,19 @@ steps:
 
       這一題想測的是：
       - skill 是否會真的載入
-      - 是否會先用 `browser_open` 打開最直接的 GitHub Trending 網址
+      - 是否會先用 `browser_open` 打開最直接且固定為今日榜的 GitHub Trending 網址
       - 是否會繼續使用 `browser_snapshot` / `browser_click` / `browser_wait`
       - 是否會點進第一名 repo，而不是停在列表頁
       - 是否會把 repo 頁面的標題、描述與主要內容整理成最終回答
       - 若頁面出現登入、驗證、同意頁或其他人工關卡，是否會先使用系統工具詢問，再改用可見瀏覽器並請你手動完成
 
+      這個案例會固定使用：
+      - `https://github.com/trending?since=daily`
+      - `language = any`
+      - `spoken language = any`
+
       你也可以額外試試看這句：
-      - `用視窗模式幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要`
+      - `用視窗模式幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要`
 
       這一句會用來確認：
       - skill 會依照使用者明確要求，直接用可見瀏覽器啟動
@@ -257,10 +262,10 @@ steps:
       skillVerifyMax: 2
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
-      composerSeed: 幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要
+      composerSeed: 幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要
       activeAgentPreset: tutorial_agent_base
       expect:
-        userPrompt: 幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要
+        userPrompt: 幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要
         requireAssistant: true
         requireSkillTodo: true
         requireSkillTodoProgress: true

@@ -2,7 +2,7 @@
 
 **AgentGoRound is a browser-first, frontend-only agent playground.** It runs entirely in the browser with no required backend, making it easy to experiment with multi-agent chat, docs context, MCP tools, and browser-side built-in tools, then deploy directly to GitHub Pages.
 
-**AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。** 整個專案以純前端為核心，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
+**AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。** 整個專案以純前端為核心，希望從網頁前端直接提供agentic所需能力，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
 
 ## 專案特色
 
@@ -38,6 +38,8 @@
   - 可直接撰寫瀏覽器端 JavaScript 工具
   - 可在編輯器內直接測試
   - 支援系統工具，例如 `get_user_profile`、`pick_best_agent_for_question`
+  - 提供一個即時渲染的tool寫法，但因為可能有較大的失敗率所以不放在案例中[agentic.md](render_anything.md)
+
 - Skills
   - 使用 `skill-name/SKILL.md + references/ + scripts/ + assets/` 格式
   - 技能包與 skill references 透過 IndexedDB abstraction layer 儲存

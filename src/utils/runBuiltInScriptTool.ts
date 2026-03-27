@@ -1,10 +1,14 @@
 import { BuiltInToolConfig } from "../types";
+import type { ToolDashboardHelpers } from "./toolDashboard";
 
 export type BuiltInToolHelpers = {
   system?: {
     get_user_profile?: () => Promise<any> | any;
     pick_best_agent_for_question?: (question: string) => Promise<string> | string;
     request_user_confirmation?: (message: string) => Promise<any> | any;
+  };
+  ui?: {
+    dashboard?: ToolDashboardHelpers;
   };
 };
 
@@ -15,9 +19,11 @@ export async function runBuiltInScriptTool(tool: Pick<BuiltInToolConfig, "code">
     `
       "use strict";
       const system = helpers.system ?? {};
+      const ui = helpers.ui ?? {};
       const pick_best_agent_for_question = system.pick_best_agent_for_question;
       const get_user_profile = system.get_user_profile;
       const request_user_confirmation = system.request_user_confirmation;
+      const dashboard = ui.dashboard;
       return (async () => {
         ${tool.code}
       })();

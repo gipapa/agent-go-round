@@ -5,6 +5,11 @@ import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseTutorialScenario } from "../src/onboarding/catalogCore";
 import type { TutorialScenarioDefinition, TutorialStepDefinition } from "../src/onboarding/types";
+import {
+  TUTORIAL_TIME_TOOL_CODE,
+  TUTORIAL_TIME_TOOL_DESCRIPTION,
+  TUTORIAL_TIME_TOOL_NAME
+} from "../src/onboarding/tutorialBuiltInToolTemplate";
 import { AGENT_GO_ROUND_INDEXED_DB_TARGETS, AGENT_GO_ROUND_LOCAL_STORAGE_KEYS } from "../src/utils/resetAppStorage";
 import { normalizeCredentialUrl } from "../src/utils/credential";
 
@@ -265,6 +270,16 @@ async function browserCommand(args: string[], stdin?: string) {
     }
     proc.stdin.end();
   });
+}
+
+async function hasBuiltInToolNamed(name: string) {
+  return browserEval<boolean>(`
+    (() => {
+      const raw = localStorage.getItem("agr_built_in_tools_v1") || "[]";
+      const tools = JSON.parse(raw);
+      return Array.isArray(tools) && tools.some((tool) => String(tool?.name || "").trim() === ${literal(name)});
+    })()
+  `);
 }
 
 async function browserOpen(url: string) {
@@ -816,23 +831,17 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await clickByTutorialId("agent-save-button");
       return;
     case "create_tutorial_time_tool":
+      if (await hasBuiltInToolNamed(TUTORIAL_TIME_TOOL_NAME)) {
+        return;
+      }
       await clickByTutorialId("chat-config-tools-card");
       await waitForSelector('[data-tutorial-id="built-in-tools-add-button"]', 10000);
       await clickByTutorialId("built-in-tools-add-button");
       await waitForSelector('[data-tutorial-id="built-in-tools-modal"]', 10000);
-      await setValueByTutorialId("built-in-tool-name-input", "教學用時間工具");
-      await setValueByTutorialId("built-in-tool-description-input", "取得目前瀏覽器時間與時區，適合回答現在幾點或目前時區等問題。");
+      await setValueByTutorialId("built-in-tool-name-input", TUTORIAL_TIME_TOOL_NAME);
+      await setValueByTutorialId("built-in-tool-description-input", TUTORIAL_TIME_TOOL_DESCRIPTION);
       await setValueByTutorialId("built-in-tool-schema-input", "{}");
-      await setValueByTutorialId(
-        "built-in-tool-code-input",
-        `const now = new Date();
-
-return {
-  isoTime: now.toISOString(),
-  localeTime: now.toLocaleString(),
-  timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
-};`
-      );
+      await setValueByTutorialId("built-in-tool-code-input", TUTORIAL_TIME_TOOL_CODE);
       await clickByTutorialId("built-in-tool-save-button");
       return;
     case "set_history_limit_to_one":
@@ -850,7 +859,7 @@ return {
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
       await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
       await clickByTutorialId("agent-access-builtins-custom");
-      await clickLabelContaining('[data-tutorial-id="agent-access-builtins-section"]', "教學用時間工具");
+      await clickLabelContaining('[data-tutorial-id="agent-access-builtins-section"]', TUTORIAL_TIME_TOOL_NAME);
       await clickLabelContaining('[data-tutorial-id="agent-access-builtins-section"]', "[系統工具]允許存取使用者資訊(get_user_profile)");
       await clickByTutorialId("agent-save-button");
       return;

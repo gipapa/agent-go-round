@@ -4,6 +4,18 @@ import { normalizeCredentialUrl } from "../utils/credential";
 import { SYSTEM_REQUEST_CONFIRMATION_TOOL_ID, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 import { AgentConfig } from "../types";
 import {
+  TUTORIAL_TIME_TOOL_CODE,
+  TUTORIAL_TIME_TOOL_DESCRIPTION,
+  TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
+  TUTORIAL_TIME_TOOL_NAME
+} from "./tutorialBuiltInToolTemplate";
+export {
+  TUTORIAL_TIME_TOOL_CODE,
+  TUTORIAL_TIME_TOOL_DESCRIPTION,
+  TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
+  TUTORIAL_TIME_TOOL_NAME
+} from "./tutorialBuiltInToolTemplate";
+import {
   TUTORIAL_CHATGPT_BROWSER_ASSET_PATH,
   TUTORIAL_CHATGPT_BROWSER_REFERENCE_PATH,
   TUTORIAL_CHATGPT_BROWSER_SKILL_NAME,
@@ -26,14 +38,6 @@ import {
 
 export const TUTORIAL_DOC_NAME = "教學用DOC";
 export const TUTORIAL_DOC_CONTENT = "你是個說話結尾都會喵喵叫的助手。每次回答的結尾都要補上一句喵。";
-export const TUTORIAL_TIME_TOOL_NAME = "教學用時間工具";
-export const TUTORIAL_TIME_TOOL_DESCRIPTION = "取得目前瀏覽器時間與時區，適合回答現在幾點或目前時區等問題。";
-export const TUTORIAL_TIME_TOOL_INPUT_SCHEMA = {};
-export const TUTORIAL_TIME_TOOL_CODE = `const now = new Date().toISOString();
-return {
-  now,
-  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-};`;
 export const TUTORIAL_MCP_NAME = "教學用MCP";
 export const TUTORIAL_PRIMARY_LOAD_BALANCER_NAME = "教學用Load Balancer 1";
 export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
@@ -502,7 +506,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `已建立工具：${tool?.name}`
-          : "系統正在建立教學用時間工具。"
+          : "系統正在建立教學用時鐘工具。"
       };
     }
     case "set_history_limit_to_one": {
@@ -541,8 +545,8 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
             : "agents-edit-active-button",
         canContinue: completed,
         statusText: completed
-          ? "目前 Agent 已允許使用教學用時間工具與 get_user_profile。"
-          : "請在 Agent 的 Built-in Tools 中勾選 Custom selection，並允許教學用時間工具與 get_user_profile。"
+          ? "目前 Agent 已允許使用教學用時鐘工具與 get_user_profile。"
+          : "請在 Agent 的 Built-in Tools 中勾選 Custom selection，並允許教學用時鐘工具與 get_user_profile。"
       };
     }
     case "first_chat_time_tool": {

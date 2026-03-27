@@ -1,6 +1,6 @@
 id: built-in-tools-chat
 title: "[3] 使用 Built-in Tools 完成工具對話"
-description: 建立一個自訂時間工具、啟用系統工具 get_user_profile，並透過兩段對話驗證工具真的有被呼叫。
+description: 建立一個會在畫面右下角彈出即時時鐘的自訂工具、啟用系統工具 get_user_profile，並透過兩段對話驗證工具真的有被呼叫。
 exitTitle: 離開案例教學
 exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
 steps:
@@ -12,7 +12,7 @@ steps:
       Built-in Tools 是在瀏覽器端執行的 JavaScript 工具，可以讓 agent 在對話過程中呼叫你定義好的能力。
 
       這個案例會帶你完成兩種工具使用方式：
-      - 自訂工具：讓 agent 可以取得目前時間
+      - 自訂工具：讓 agent 可以打開一個即時更新的時鐘 dashboard
       - 系統工具：讓 agent 能讀取你在 Profile 頁設定的使用者資訊
 
       其中系統工具不需要你自己撰寫程式；只要在 Agent 權限中允許使用，就可以直接被呼叫。
@@ -45,20 +45,20 @@ steps:
       activeAgentPreset: tutorial_agent_base
 
   - id: create-time-tool
-    title: 建立時間工具
-    checklistLabel: 建立教學用時間工具
-    instructionTitle: 第一步：系統會自動建立一個取得目前時間的自訂工具
+    title: 建立時鐘工具
+    checklistLabel: 建立教學用時鐘工具
+    instructionTitle: 第一步：系統會自動建立一個可持續更新的時鐘工具
     instructionBody: |
       我已經幫你切到 Chat Config，並會自動建立這個工具。
 
       工具內容固定為：
-      - Tool name：教學用時間工具
-      - Description：取得目前瀏覽器時間與時區，適合回答現在幾點或目前時區等問題。
+      - Tool name：教學用時鐘工具
+      - Description：在頁面右下角打開可持續更新的時鐘 dashboard，顯示目前時間與時區。
       - Input schema：{}
-      - JavaScript code：Built-in Tools help 裡「範例：取得目前時間」的版本
+      - JavaScript code：Built-in Tools help 裡「範例：浮動時鐘 dashboard」的版本
 
       你可以按下 Built-in Tools 檢查工具內容是否正確；只要內容一致，這一步就算完成。
-    completionLabel: 等待系統建立教學用時間工具
+    completionLabel: 等待系統建立教學用時鐘工具
     tab: chat_config
     targetId: chat-config-tools-card
     behavior: create_tutorial_time_tool
@@ -92,7 +92,7 @@ steps:
       在 Access Control 的 Built-in Tools 區塊中：
       - 勾選 Built-in Tools
       - 選擇 Custom selection
-      - 勾選「教學用時間工具」
+      - 勾選「教學用時鐘工具」
       - 勾選「[系統工具]允許存取使用者資訊(get_user_profile)」
 
       儲存後，這個 Agent 才能在 normal 對話模式下呼叫這兩個工具。
@@ -104,28 +104,28 @@ steps:
       activeAgentPreset: tutorial_agent_base
 
   - id: chat-time-tool
-    title: 用對話呼叫時間工具
-    checklistLabel: 用時間工具完成第一次工具對話
-    instructionTitle: 第四步：請用對話測試自訂時間工具
+    title: 用對話呼叫時鐘工具
+    checklistLabel: 用時鐘工具完成第一次工具對話
+    instructionTitle: 第四步：請用對話測試自訂時鐘工具
     instructionBody: |
       請前往 Chat 頁籤，送出這句話：
-      - 請使用工具告訴我現在幾點，並補上時區
+      - 請使用工具打開一個會持續更新的時鐘 dashboard，並告訴我目前時區。
 
       這一步除了要等 agent 正常回覆，也請你展開下方的「查看 tool result」，確認工具真的有被呼叫。
       只要有成功回覆、畫面正常，且你有打開 tool result，就算完成。
-    completionLabel: 等待 Agent 使用教學用時間工具並顯示 tool result
+    completionLabel: 等待 Agent 使用教學用時鐘工具並顯示 tool result
     tab: chat
     targetId: chat-input
     behavior: first_chat_time_tool
     automation:
       clearChatOnEnter: true
-      composerSeed: 請使用工具告訴我現在幾點，並補上時區
+      composerSeed: 請使用工具打開一個會持續更新的時鐘 dashboard，並告訴我目前時區。
       activeAgentPreset: tutorial_agent_base
       expect:
-        userPrompt: 請使用工具告訴我現在幾點，並補上時區
+        userPrompt: 請使用工具打開一個會持續更新的時鐘 dashboard，並告訴我目前時區。
         requireAssistant: true
         successfulToolMessageIncludes:
-          - Built-in tool -> 教學用時間工具
+          - Built-in tool -> 教學用時鐘工具
         requireOpenedToolResult: true
 
   - id: chat-user-profile-tool

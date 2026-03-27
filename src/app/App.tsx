@@ -64,6 +64,7 @@ import { runOneToOne } from "../orchestrators/oneToOne";
 import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
 import { McpSseClient } from "../mcp/sseClient";
 import { callTool, listTools } from "../mcp/toolRegistry";
+import { createToolDashboardHelpers } from "../utils/toolDashboard";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
@@ -700,6 +701,25 @@ function goalWantsFirstRankedTarget(text: string) {
 
 function goalWantsRepoSummary(text: string) {
   return /(內容|摘要|summary|介紹|readme|repo|repository|專案)/i.test(String(text ?? ""));
+}
+
+function normalizeBrowserWorkflowStartUrl(userInput: string, startUrl: string) {
+  const raw = String(startUrl ?? "").trim();
+  if (!raw) return raw;
+  try {
+    const url = new URL(raw);
+    const isGitHubTrending = /(^|\.)github\.com$/i.test(url.hostname) && url.pathname === "/trending";
+    if (isGitHubTrending && goalWantsFirstRankedTarget(userInput)) {
+      url.searchParams.delete("language");
+      url.searchParams.delete("spoken_language_code");
+      url.searchParams.delete("spokenLanguage");
+      url.searchParams.delete("dateRange");
+      url.searchParams.set("since", "daily");
+    }
+    return url.toString();
+  } catch {
+    return raw;
+  }
 }
 
 function buildBrowserHeuristicDecision(args: {
@@ -2913,7 +2933,10 @@ export default function App() {
         }
 
         const toolOutput = await runBuiltInScriptTool(targetTool, normalizedDecision.input ?? {}, {
-          system: allowedSystemHelpers
+          system: allowedSystemHelpers,
+          ui: {
+            dashboard: createToolDashboardHelpers()
+          }
         });
         const toolIntent = classifyBuiltInToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
@@ -3418,6 +3441,7 @@ export default function App() {
             if (state.stepIndex === 0 && !mustAct && bootstrapPlanMeta?.startUrl && fastPathScope.toolEntries.length > 0) {
               const browserOpenServerId = resolveMcpServerId("browser_open", state.preferredMcpServerId);
               if (browserOpenServerId) {
+                const normalizedStartUrl = normalizeBrowserWorkflowStartUrl(args.userInput, bootstrapPlanMeta.startUrl);
                 return {
                   type: "act",
                   reason:
@@ -3426,7 +3450,7 @@ export default function App() {
                   toolKind: "mcp",
                   toolName: "browser_open",
                   input: {
-                    url: bootstrapPlanMeta.startUrl,
+                    url: normalizedStartUrl,
                     headed: resolvePreferredBrowserHeadedMode(args.userInput)
                   }
                 };

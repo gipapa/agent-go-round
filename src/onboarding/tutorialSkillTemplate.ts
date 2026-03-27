@@ -149,6 +149,7 @@ Goal: finish a browser task across multiple MCP steps.
 - If the user explicitly asks for a visible window or headed mode, start with \`headed: true\`.
 - If the user explicitly asks for headless mode, keep \`headed: false\`.
 - If the user does not specify browser visibility, default to \`headed: false\`.
+- For GitHub Trending tasks, prefer \`https://github.com/trending?since=daily\` and keep language / spoken language at the default any filters unless the user explicitly asks otherwise.
 - After any page-changing action, immediately use \`browser_snapshot\`.
 - If the page is usable, continue in the same run:
   1. identify the current page and target
@@ -211,7 +212,7 @@ Use this file only when you need a short reminder for a browser workflow.
 
 ## Example: GitHub Trending first repo
 
-1. Prefer \`https://github.com/trending\` over the GitHub homepage.
+1. Prefer \`https://github.com/trending?since=daily\` over the GitHub homepage or an unfixed Trending URL.
 2. Take a snapshot.
 3. Identify the first ranked repository link.
 4. Click it.

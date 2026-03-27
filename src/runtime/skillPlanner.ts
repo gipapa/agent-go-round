@@ -67,7 +67,7 @@ export function buildBootstrapPlanPrompt(args: {
     "Generate 3 to 7 concise todo items. Each item should represent a meaningful user-visible or workflow-visible milestone.",
     "If this is a browser task, also infer the most direct stable startUrl when it is reasonably obvious from the user request.",
     "Prefer a direct canonical page over a generic homepage when it clearly shortens the workflow.",
-    "Example: for GitHub Trending, prefer https://github.com/trending instead of https://github.com.",
+    "Example: for GitHub Trending, prefer https://github.com/trending?since=daily instead of https://github.com or an unfixed Trending URL.",
     "",
     `Skill: ${args.skill.name} (${args.skill.id})`,
     args.skill.description ? `Skill description: ${args.skill.description}` : "",
