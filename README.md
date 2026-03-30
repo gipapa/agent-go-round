@@ -4,6 +4,8 @@
 
 **AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。** 整個專案以純前端為核心，希望從網頁前端直接提供agentic所需能力，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
 
+- 產品介紹導覽頁：[線上瀏覽](https://gipapa.github.io/agent-go-round/intro/) ｜ [PPTX](./public/intro/agent-go-round.pptx)
+
 ## 專案特色
 
 - Landing / Onboarding
