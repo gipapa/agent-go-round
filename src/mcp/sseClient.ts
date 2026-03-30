@@ -4,6 +4,9 @@ import { generateId } from "../utils/id";
 type RpcReq = { id: string; method: string; params?: any };
 type RpcRes = { id: string; result?: any; error?: any };
 
+const DEFAULT_MCP_TOOL_TIMEOUT_SECOND = 30;
+const DEFAULT_MCP_HEARTBEAT_SECOND = 30;
+
 /**
  * MCP over SSE (client side)
  *
@@ -20,19 +23,57 @@ export class McpSseClient {
   private es?: EventSource;
   private pending = new Map<string, (res: RpcRes) => void>();
   private connected = false;
+  private onLog?: (msg: string) => void;
+  private lastHealthyAt = 0;
+  private connectTimeoutId: number | null = null;
+  private healthCheckPromise: Promise<void> | null = null;
 
   constructor(private cfg: McpServerConfig) {}
 
+  private getToolTimeoutMs() {
+    const seconds =
+      typeof this.cfg.toolTimeoutSecond === "number" && Number.isFinite(this.cfg.toolTimeoutSecond)
+        ? Math.max(1, Math.round(this.cfg.toolTimeoutSecond))
+        : DEFAULT_MCP_TOOL_TIMEOUT_SECOND;
+    return seconds * 1000;
+  }
+
+  private getHeartbeatMs() {
+    const seconds =
+      typeof this.cfg.heartbeatSecond === "number" && Number.isFinite(this.cfg.heartbeatSecond)
+        ? Math.max(0, Math.round(this.cfg.heartbeatSecond))
+        : DEFAULT_MCP_HEARTBEAT_SECOND;
+    return seconds * 1000;
+  }
+
+  private markHealthy() {
+    this.lastHealthyAt = Date.now();
+  }
+
   connect(onLog?: (msg: string) => void) {
     if (this.connected) return;
+    this.onLog = onLog;
     this.es = new EventSource(this.cfg.sseUrl);
     this.connected = true;
+    this.connectTimeoutId = window.setTimeout(() => {
+      this.onLog?.(`MCP SSE open timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s`);
+    }, this.getToolTimeoutMs());
 
-    this.es.onopen = () => onLog?.(`MCP SSE connected: ${this.cfg.sseUrl}`);
-    this.es.onerror = () => onLog?.("MCP SSE error");
+    this.es.onopen = () => {
+      if (this.connectTimeoutId !== null) {
+        window.clearTimeout(this.connectTimeoutId);
+        this.connectTimeoutId = null;
+      }
+      this.markHealthy();
+      onLog?.(`MCP SSE connected: ${this.cfg.sseUrl}`);
+    };
+    this.es.onerror = () => {
+      onLog?.("MCP SSE error");
+    };
 
     this.es.onmessage = (ev) => {
       try {
+        this.markHealthy();
         const msg = JSON.parse(ev.data) as RpcRes;
         const cb = this.pending.get(msg.id);
         if (cb) {
@@ -48,28 +89,75 @@ export class McpSseClient {
   close() {
     this.es?.close();
     this.connected = false;
+    if (this.connectTimeoutId !== null) {
+      window.clearTimeout(this.connectTimeoutId);
+      this.connectTimeoutId = null;
+    }
   }
 
   private async postRpc(req: RpcReq): Promise<RpcRes> {
     const url = new URL(this.cfg.sseUrl);
     url.pathname = url.pathname.replace(/\/sse$/, "/rpc");
     const postUrl = url.toString();
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), this.getToolTimeoutMs());
 
-    const res = await fetch(postUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req)
+    try {
+      const res = await fetch(postUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        return { id: req.id, error: `HTTP ${res.status}` };
+      }
+      const parsed = await res.json();
+      this.markHealthy();
+      return parsed;
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        return { id: req.id, error: `MCP RPC timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s` };
+      }
+      return { id: req.id, error: String(error?.message ?? error) };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  private async ensureHealthy() {
+    const heartbeatMs = this.getHeartbeatMs();
+    if (!heartbeatMs) return;
+    if (!this.lastHealthyAt) return;
+    if (Date.now() - this.lastHealthyAt < heartbeatMs) return;
+    if (this.healthCheckPromise) return this.healthCheckPromise;
+
+    this.healthCheckPromise = (async () => {
+      const probe = await this.postRpc({ id: generateId(), method: "tools/list" });
+      if (probe.error) {
+        this.onLog?.(`MCP heartbeat failed: ${probe.error}`);
+        throw new Error(String(probe.error));
+      }
+      this.onLog?.(`MCP heartbeat OK: ${this.cfg.sseUrl}`);
+    })().finally(() => {
+      this.healthCheckPromise = null;
     });
 
-    if (!res.ok) {
-      return { id: req.id, error: `HTTP ${res.status}` };
-    }
-    return await res.json();
+    return this.healthCheckPromise;
   }
 
   async request(method: string, params?: any): Promise<RpcRes> {
     const id = generateId();
     const req: RpcReq = { id, method, params };
+
+    if (method !== "tools/list") {
+      try {
+        await this.ensureHealthy();
+      } catch (error: any) {
+        return { id, error: `MCP heartbeat failed: ${String(error?.message ?? error)}` };
+      }
+    }
 
     const httpRes = await this.postRpc(req);
     if (httpRes?.result !== undefined || httpRes?.error !== undefined) return httpRes;

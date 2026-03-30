@@ -426,6 +426,7 @@ async function createLoadBalancerByTutorialUi(args: {
     description?: string;
     maxRetries?: number;
     delaySecond?: number;
+    resumeMinute?: number;
   }>;
 }) {
   await clickByTutorialId("chat-config-load-balancer-card");
@@ -453,6 +454,9 @@ async function createLoadBalancerByTutorialUi(args: {
     }
     if (typeof instance.delaySecond === "number") {
       await setValueByTutorialId(`load-balancer-instance-delay-second-${index}`, String(instance.delaySecond));
+    }
+    if (typeof instance.resumeMinute === "number") {
+      await setValueByTutorialId(`load-balancer-instance-resume-minute-${index}`, String(instance.resumeMinute));
     }
   }
   await clickByTutorialId("load-balancer-save-button");

@@ -6,10 +6,15 @@ const BLOCKED_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 ];
 
 const TARGET_NOISE = /skip to content|homepage|sign in|sign up|pricing|platform|solutions|resources|open source|enterprise|appearance settings|search or jump/i;
-const CONTENT_NOISE = /skip to content|navigation menu|footer|terms|privacy|security|status|community|docs|contact|pricing|sign in|sign up|首頁|登入|服務條款|隱私權/i;
+const CONTENT_NOISE =
+  /skip to content|navigation menu|footer|terms|privacy|security|status|community|docs|contact|pricing|sign in|sign up|首頁|登入|服務條款|隱私權|permalink:|you must be signed in|watch|fork \d+|issues \d+|pull requests \d+|actions|projects|insights|security/i;
 
 function normalizeText(text: string) {
   return String(text ?? "").replace(/\u001b\[[0-9;]*m/g, "").replace(/\r/g, "").trim();
+}
+
+function normalizeRepoLabel(value: string) {
+  return normalizeText(value).replace(/\s*\/\s*/g, "/").replace(/\.git$/i, "");
 }
 
 function parseTargets(snapshot: string) {
@@ -83,10 +88,19 @@ function detectBlockedReason(text: string) {
 
 function detectRepoName(text: string) {
   const normalized = normalizeText(text);
+  const urlMatch = normalized.match(/https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/i);
+  if (urlMatch?.[1]) return normalizeRepoLabel(urlMatch[1]);
+  const titleMatch = normalized.match(/github\s*-\s*([^:\n]+\/[^:\n]+)\s*:/i);
+  if (titleMatch?.[1]) return normalizeRepoLabel(titleMatch[1]);
+  const headingSpacedMatch = normalized.match(/heading "([^"]+?)"/i)?.[1];
+  if (headingSpacedMatch && /^[A-Za-z0-9_.-]+\s*\/\s*[A-Za-z0-9_.-]+$/.test(headingSpacedMatch)) {
+    return normalizeRepoLabel(headingSpacedMatch);
+  }
   const headingMatch = normalized.match(/heading "([^"]+\/[^"]+)"/i);
-  if (headingMatch?.[1]) return headingMatch[1].trim();
+  if (headingMatch?.[1]) return normalizeRepoLabel(headingMatch[1]);
   const linkMatch = normalized.match(/link "([^"]+\/[^"]+)"/i);
-  return linkMatch?.[1]?.trim();
+  if (linkMatch?.[1]) return normalizeRepoLabel(linkMatch[1]);
+  return undefined;
 }
 
 function detectPageKind(text: string, targets: BrowserObservationTarget[]) {
@@ -106,24 +120,68 @@ function detectPageKind(text: string, targets: BrowserObservationTarget[]) {
 
 function collectContentHints(text: string, limit = 8) {
   const seen = new Set<string>();
-  const hints: string[] = [];
+  const candidates: Array<{ value: string; score: number }> = [];
+
   for (const rawLine of normalizeText(text).split("\n")) {
     const line = rawLine.replace(/\s+/g, " ").trim();
     if (!line) continue;
     const textMatch =
-      line.match(/StaticText "([^"]+)"/) ??
-      line.match(/heading "([^"]+)"/i) ??
-      line.match(/paragraph "([^"]+)"/i) ??
-      line.match(/link "([^"]+)"/i);
-    const value = textMatch?.[1]?.trim();
-    if (!value || value.length < 6) continue;
+      line.match(/(StaticText|heading|paragraph|link)\s+"([^"]+)"/i) ??
+      line.match(/(StaticText|heading|paragraph|link)\s+'([^']+)'/i);
+    if (!textMatch) continue;
+
+    const role = textMatch[1].toLowerCase();
+    const value = textMatch[2]?.trim();
+    if (!value || value.length < 8) continue;
     if (CONTENT_NOISE.test(value)) continue;
+    if (/^[A-Za-z]+$/.test(value) && value.length < 12) continue;
+
+    let score = 0;
+    if (role === "paragraph") score += 160;
+    else if (role === "statictext") score += 120;
+    else if (role === "heading") score += 90;
+    else if (role === "link") score += 30;
+
+    if (value.length >= 24) score += 35;
+    if (/[a-z].+[a-z]/.test(value) || /[一-龥]/.test(value)) score += 25;
+    if (/\b(readme|install|usage|overview|feature|license|python|javascript|api|tool|crawler|search|query)\b/i.test(value)) score += 40;
+    if (/^(platform|solutions|resources|open source|enterprise|homepage)$/i.test(value)) score -= 100;
+    if (/^\w+\s+\d+$/.test(value)) score -= 50;
+
+    if (score <= 0) continue;
     if (seen.has(value)) continue;
     seen.add(value);
-    hints.push(value);
-    if (hints.length >= limit) break;
+    candidates.push({ value, score });
   }
-  return hints;
+
+  return candidates
+    .sort((a, b) => b.score - a.score || b.value.length - a.value.length)
+    .slice(0, limit)
+    .map((entry) => entry.value);
+}
+
+export function mergeBrowserObservationDigest(
+  previous: BrowserObservationDigest | undefined,
+  next: BrowserObservationDigest | undefined
+): BrowserObservationDigest | undefined {
+  if (!previous) return next;
+  if (!next) return previous;
+
+  const pageKind = next.pageKind !== "unknown" ? next.pageKind : previous.pageKind;
+  const preservePriorContext = next.pageKind === "unknown";
+
+  return {
+    sourceTool: next.sourceTool || previous.sourceTool,
+    pageKind,
+    blockedReason: next.blockedReason ?? (preservePriorContext ? previous.blockedReason : undefined),
+    repoName: next.repoName ?? (pageKind === "repo_page" || preservePriorContext ? previous.repoName : undefined),
+    url: next.url ?? (preservePriorContext ? previous.url : undefined),
+    title: next.title ?? (preservePriorContext ? previous.title : undefined),
+    rankedTargets: next.rankedTargets.length ? next.rankedTargets : pageKind === "ranked_list" || preservePriorContext ? previous.rankedTargets : [],
+    inputTargets: next.inputTargets.length ? next.inputTargets : preservePriorContext ? previous.inputTargets : [],
+    actionTargets: next.actionTargets.length ? next.actionTargets : preservePriorContext ? previous.actionTargets : [],
+    contentHints: next.contentHints.length ? next.contentHints : pageKind === "repo_page" || preservePriorContext ? previous.contentHints : []
+  };
 }
 
 export function extractBrowserObservation(args: { toolName: string; output: unknown }): BrowserObservationDigest | null {

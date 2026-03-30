@@ -1,4 +1,5 @@
 import { SkillCompletionDecision, SkillPhase, SkillRunState, SkillStepDecision, SkillTodoItem } from "../types";
+import { mergeBrowserObservationDigest } from "./browserObservation";
 import { applyTodoStatus, markFirstPendingTodoInProgress } from "./skillTodo";
 
 export function createSkillRunState(args: {
@@ -56,7 +57,7 @@ export function applyObservationToState(
     ...state,
     phase: "sync_state",
     recentObservationSignatures,
-    lastBrowserObservation: browserObservation ?? state.lastBrowserObservation,
+    lastBrowserObservation: mergeBrowserObservationDigest(state.lastBrowserObservation, browserObservation),
     preferredMcpServerId: preferredMcpServerId ?? state.preferredMcpServerId
   };
 }
@@ -72,7 +73,7 @@ export function applyActionToState(
     ...state,
     phase: "sync_state",
     recentActionSignatures,
-    lastBrowserObservation: browserObservation ?? state.lastBrowserObservation,
+    lastBrowserObservation: mergeBrowserObservationDigest(state.lastBrowserObservation, browserObservation),
     preferredMcpServerId: preferredMcpServerId ?? state.preferredMcpServerId
   };
 }

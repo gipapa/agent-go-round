@@ -84,6 +84,7 @@ export type LoadBalancerInstance = {
   description: string;
   maxRetries: number;
   delaySecond: number;
+  resumeMinute: number;
   failure: boolean;
   failureCount: number;
   nextCheckTime?: number | null;
@@ -161,6 +162,8 @@ export type McpServerConfig = {
   name: string;
   sseUrl: string; // MCP over SSE endpoint
   authHint?: string; // Optional note (EventSource can't set headers)
+  toolTimeoutSecond?: number;
+  heartbeatSecond?: number;
 };
 
 export type McpTool = {

@@ -156,8 +156,12 @@ import {
   createLoadBalancerInstance,
   DEFAULT_INSTANCE_DELAY_SECOND,
   DEFAULT_INSTANCE_MAX_RETRIES,
+  DEFAULT_INSTANCE_RESUME_MINUTE,
+  describeCredentialPreset,
+  getLoadBalancerResumeMs,
   migrateAgentsToLoadBalancers,
   resolveLoadBalancerCandidates,
+  ResolvedLoadBalancerInstance,
   setLoadBalancerRetryPolicy
 } from "../utils/loadBalancer";
 
@@ -632,6 +636,7 @@ function formatSkillPhaseStatus(phase: SkillPhase) {
 type ToolAugmentationResult = {
   input: string;
   status: "no_entries" | "decision_failed" | "no_tool" | "tool_called";
+  ok?: boolean;
   toolLabel?: string;
   detail?: string;
   actionSignature?: string;
@@ -681,6 +686,38 @@ function buildToolActionSignature(args: {
   return `${args.kind}:${args.serverId ?? ""}:${args.toolName}:${stableStringify(normalizeToolInputForSignature(args.input ?? {}))}`;
 }
 
+const DEFAULT_MCP_TOOL_TIMEOUT_MS = 30000;
+
+function getMcpToolTimeoutMs(server: McpServerConfig, toolName: string) {
+  if (typeof server.toolTimeoutSecond === "number" && Number.isFinite(server.toolTimeoutSecond)) {
+    return Math.max(1000, Math.round(server.toolTimeoutSecond) * 1000);
+  }
+  const normalized = String(toolName ?? "").trim().toLowerCase();
+  if (!normalized) return DEFAULT_MCP_TOOL_TIMEOUT_MS;
+  if (normalized.includes("open")) return 45000;
+  if (normalized.includes("wait")) return 45000;
+  if (normalized.includes("snapshot") || normalized.includes("screenshot")) return 30000;
+  return DEFAULT_MCP_TOOL_TIMEOUT_MS;
+}
+
+async function callMcpToolWithTimeout(client: McpSseClient, name: string, input: unknown, timeoutMs: number) {
+  let timeoutId: number | null = null;
+  try {
+    return await Promise.race([
+      callTool(client, name, input ?? {}),
+      new Promise<never>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error(`MCP tool timed out after ${Math.round(timeoutMs / 1000)}s`));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  }
+}
+
 function hashString(value: string) {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i++) {
@@ -701,6 +738,63 @@ function goalWantsFirstRankedTarget(text: string) {
 
 function goalWantsRepoSummary(text: string) {
   return /(內容|摘要|summary|介紹|readme|repo|repository|專案)/i.test(String(text ?? ""));
+}
+
+function normalizeRepoLabel(value: string) {
+  return String(value ?? "").replace(/\s*\/\s*/g, "/").replace(/\.git$/i, "").trim();
+}
+
+function getMeaningfulContentHints(observation?: BrowserObservationDigest | null) {
+  if (!observation) return [];
+  return observation.contentHints
+    .map((hint) => String(hint ?? "").trim())
+    .filter(Boolean)
+    .filter((hint) => !/^(homepage|platform|solutions|resources|open source|enterprise)$/i.test(hint))
+    .filter((hint) => !/^(sign in|sign up|登入|註冊)$/i.test(hint))
+    .filter((hint) => !/^(issues \d+|pull requests \d+|fork \d+|actions|projects|security|insights)$/i.test(hint))
+    .filter((hint) => !/^permalink:/i.test(hint));
+}
+
+function hasGroundedRepoSummary(observation?: BrowserObservationDigest | null) {
+  if (!observation || observation.pageKind !== "repo_page") return false;
+  return !!observation.repoName || getMeaningfulContentHints(observation).length > 0;
+}
+
+function buildGroundedRepoSummaryAnswer(observation?: BrowserObservationDigest | null) {
+  if (!hasGroundedRepoSummary(observation)) return null;
+  const repoName = observation?.repoName ? normalizeRepoLabel(observation.repoName) : "目前頁面上的目標 repository";
+  const hints = getMeaningfulContentHints(observation).slice(0, 6);
+
+  return [
+    "【目前狀態】",
+    `已成功進入目標 repository 頁面：${repoName}。`,
+    "",
+    "【頁面內容摘要】",
+    `專案名稱：${repoName}`,
+    hints.length ? `可見重點：\n- ${hints.join("\n- ")}` : "這一輪已確認進入 repo 頁面，但沒有擷取到足夠的 README 文字重點。",
+    "",
+    "【說明】",
+    "以上摘要直接根據目前頁面可見內容整理，避免引用未觀察到的 README 細節。"
+  ].join("\n");
+}
+
+function detectTerminalAgentFailure(text: string) {
+  const normalized = String(text ?? "").trim();
+  if (!normalized) return null;
+  if (/^Request failed:/i.test(normalized)) return normalized;
+  if (/^HTTP \d+/i.test(normalized)) return normalized;
+  if (/rate_limit_exceeded|insufficient_quota|quota|api key|invalid api key/i.test(normalized)) return normalized;
+  if (/Chrome Prompt API not available/i.test(normalized)) return normalized;
+  return null;
+}
+
+function buildAgentFailureContent(errorText: string, task?: string) {
+  const lines = ["【執行失敗】", "這一輪請求沒有成功完成，系統已停止重試。"];
+  if (task) {
+    lines.push("", "【原始任務】", task);
+  }
+  lines.push("", "【錯誤訊息】", String(errorText ?? "").trim());
+  return lines.join("\n");
 }
 
 function normalizeBrowserWorkflowStartUrl(userInput: string, startUrl: string) {
@@ -746,12 +840,12 @@ function buildBrowserHeuristicDecision(args: {
     }
   }
 
-  if (goalWantsRepoSummary(args.userInput) && observation.pageKind === "repo_page") {
+  if (goalWantsRepoSummary(args.userInput) && hasGroundedRepoSummary(observation)) {
     return {
       type: "finish" as const,
       reason:
-        observation.repoName && observation.contentHints.length
-          ? `Structured browser observation confirms the workflow is already on repo page ${observation.repoName} with content hints collected.`
+        observation.repoName && getMeaningfulContentHints(observation).length
+          ? `Structured browser observation confirms the workflow is already on repo page ${observation.repoName} with grounded content hints collected.`
           : "Structured browser observation confirms the workflow reached the target repository page."
     };
   }
@@ -772,16 +866,42 @@ function buildBrowserHeuristicCompletion(args: {
       todoIds: args.state.todo.map((item) => item.id)
     };
   }
-  if (goalWantsRepoSummary(args.userInput) && observation.pageKind === "repo_page") {
+  if (goalWantsRepoSummary(args.userInput) && hasGroundedRepoSummary(observation)) {
     return {
       type: "complete" as const,
       reason:
-        observation.repoName && observation.contentHints.length
-          ? `Reached repository page ${observation.repoName} and collected page content hints for final summarization.`
+        observation.repoName && getMeaningfulContentHints(observation).length
+          ? `Reached repository page ${observation.repoName} and collected grounded page content hints for final summarization.`
           : "Reached the requested repository page and observed its main content."
     };
   }
   return null;
+}
+
+function enrichActionBrowserObservation(args: {
+  state: SkillRunState;
+  decision: Extract<SkillStepDecision, { type: "act" }>;
+  browserObservation?: BrowserObservationDigest | null;
+}) {
+  const observation = args.browserObservation ? { ...args.browserObservation } : null;
+  if (!observation) return observation;
+
+  if (args.decision.toolName === "browser_click" && typeof args.decision.input?.selector === "string") {
+    const selector = String(args.decision.input.selector).trim();
+    const clickedTarget = args.state.lastBrowserObservation?.rankedTargets.find((target) => target.ref === selector) ?? null;
+    if (clickedTarget && !observation.repoName) {
+      observation.repoName = normalizeRepoLabel(clickedTarget.label);
+    }
+    if (/^done$/i.test(String(observation.title ?? "").trim())) {
+      observation.title = undefined;
+    }
+    if (observation.pageKind === "ranked_list" && !observation.rankedTargets.length && !observation.url) {
+      observation.pageKind = "unknown";
+      observation.contentHints = [];
+    }
+  }
+
+  return observation;
 }
 
 function classifyToolIntentFromText(name: string, description?: string): ToolIntent {
@@ -1053,7 +1173,7 @@ export default function App() {
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
-  const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number }>> | null>(null);
+  const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
       scenarioId: tutorialScenario?.id,
@@ -1354,7 +1474,9 @@ export default function App() {
           delaySecond:
             typeof value.delaySecond === "number" ? Math.max(0, Math.min(30, Math.round(value.delaySecond))) : undefined,
           maxRetries:
-            typeof value.maxRetries === "number" ? Math.max(0, Math.min(20, Math.round(value.maxRetries))) : undefined
+            typeof value.maxRetries === "number" ? Math.max(0, Math.min(20, Math.round(value.maxRetries))) : undefined,
+          resumeMinute:
+            typeof value.resumeMinute === "number" ? Math.max(0, Math.min(1440, Math.round(value.resumeMinute))) : undefined
         }),
       clearChat: () => {
         setHistory([]);
@@ -1586,7 +1708,7 @@ export default function App() {
     return configuredSkillVerifierAgent ? hydrateAgentCredentials(configuredSkillVerifierAgent) : hydrateAgentCredentials(active);
   }
 
-  function setAgentLoadBalancerRetryPolicy(agentId: string, patch: { delaySecond?: number; maxRetries?: number }) {
+  function setAgentLoadBalancerRetryPolicy(agentId: string, patch: { delaySecond?: number; maxRetries?: number; resumeMinute?: number }) {
     const agent = agents.find((entry) => entry.id === agentId) ?? null;
     if (!agent?.loadBalancerId) return;
 
@@ -1601,7 +1723,8 @@ export default function App() {
         tutorialLoadBalancerRetryRestoreRef.current[loadBalancer.id] = loadBalancer.instances.map((instance) => ({
           instanceId: instance.id,
           maxRetries: instance.maxRetries,
-          delaySecond: instance.delaySecond
+          delaySecond: instance.delaySecond,
+          resumeMinute: instance.resumeMinute
         }));
       }
 
@@ -1609,7 +1732,8 @@ export default function App() {
         loadBalancers: prev,
         loadBalancerId: loadBalancer.id,
         maxRetries: patch.maxRetries,
-        delaySecond: patch.delaySecond
+        delaySecond: patch.delaySecond,
+        resumeMinute: patch.resumeMinute
       });
     });
   }
@@ -1751,6 +1875,7 @@ export default function App() {
         description: "Primary provider / model baseline",
         maxRetries: existing?.instances[0]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[0]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+        resumeMinute: existing?.instances[0]?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
@@ -1764,6 +1889,7 @@ export default function App() {
         description: "Same key with alternate model",
         maxRetries: existing?.instances[1]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[1]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+        resumeMinute: existing?.instances[1]?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
@@ -1778,6 +1904,7 @@ export default function App() {
           secondaryCredential.id === primaryCredential.id ? "Different key with same model" : "Different provider with same model",
         maxRetries: existing?.instances[2]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[2]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+        resumeMinute: existing?.instances[2]?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
@@ -1854,6 +1981,78 @@ export default function App() {
     return null;
   }
 
+  function formatLoadBalancerDateTime(ts?: number | null) {
+    if (typeof ts !== "number" || !Number.isFinite(ts)) return "-";
+    return new Date(ts).toLocaleString();
+  }
+
+  function formatCredentialKeyLabel(credential: ModelCredentialEntry, key?: ModelCredentialEntry["keys"][number]) {
+    if (credential.preset === "chrome_prompt") return "not_required";
+    if (!key) return "missing";
+    const slot = credential.keys.findIndex((entry) => entry.id === key.id);
+    const suffix = key.apiKey.trim() ? `…${key.apiKey.trim().slice(-4)}` : "empty";
+    const keyIdShort = key.id.slice(0, 8);
+    return `slot=${slot >= 0 ? slot + 1 : "?"}/${credential.keys.length || "?"}, suffix=${suffix}, id=${keyIdShort}`;
+  }
+
+  function describeResolvedLoadBalancerCandidate(candidate: ResolvedLoadBalancerInstance) {
+    const instanceIndex = Math.max(
+      0,
+      candidate.loadBalancer.instances.findIndex((entry) => entry.id === candidate.instance.id)
+    );
+    const provider = describeCredentialPreset(candidate.credential.preset, candidate.credential.endpoint);
+    return [
+      `load_balancer=${candidate.loadBalancer.name}`,
+      `instance=${instanceIndex + 1}/${candidate.loadBalancer.instances.length}`,
+      `provider=${provider}`,
+      `credential=${candidate.credential.label}`,
+      `endpoint=${candidate.credential.endpoint || "-"}`,
+      `model=${candidate.instance.model || "-"}`,
+      `description=${candidate.instance.description.trim() || "-"}`,
+      `key=${formatCredentialKeyLabel(candidate.credential, candidate.key)}`,
+      `max_retries=${candidate.instance.maxRetries}`,
+      `delay_second=${candidate.instance.delaySecond}`,
+      `resume_minute=${candidate.instance.resumeMinute}`,
+      `failure=${candidate.instance.failure}`,
+      `failure_count=${candidate.instance.failureCount}`,
+      `next_check_time=${formatLoadBalancerDateTime(candidate.instance.nextCheckTime)}`
+    ].join("\n");
+  }
+
+  function describeLoadBalancerAvailability(agent: AgentConfig) {
+    if (!agent.loadBalancerId) return "agent has no load balancer";
+    const loadBalancer = loadBalancers.find((entry) => entry.id === agent.loadBalancerId) ?? null;
+    if (!loadBalancer) return `load balancer not found: ${agent.loadBalancerId}`;
+    if (!loadBalancer.instances.length) return `load_balancer=${loadBalancer.name}\ninstances=0`;
+    const now = Date.now();
+    return [
+      `load_balancer=${loadBalancer.name}`,
+      ...loadBalancer.instances.map((instance, index) => {
+        const credential = modelCredentials.find((entry) => entry.id === instance.credentialId) ?? null;
+        const key = credential?.keys.find((entry) => entry.id === instance.credentialKeyId) ?? credential?.keys[0];
+        const provider = credential ? describeCredentialPreset(credential.preset, credential.endpoint) : "missing_credential";
+        const coolingDown =
+          instance.failure === true &&
+          typeof instance.nextCheckTime === "number" &&
+          Number.isFinite(instance.nextCheckTime) &&
+          now < instance.nextCheckTime;
+        return [
+          `instance=${index + 1}/${loadBalancer.instances.length}`,
+          `status=${coolingDown ? "cooldown_skip" : "eligible"}`,
+          `provider=${provider}`,
+          `credential=${credential?.label ?? "(missing)"}`,
+          `endpoint=${credential?.endpoint ?? "-"}`,
+          `model=${instance.model || "-"}`,
+          `description=${instance.description.trim() || "-"}`,
+          `key=${credential ? formatCredentialKeyLabel(credential, key) : "missing"}`,
+          `failure=${instance.failure}`,
+          `failure_count=${instance.failureCount}`,
+          `next_check_time=${formatLoadBalancerDateTime(instance.nextCheckTime)}`
+        ].join("\n");
+      })
+    ].join("\n\n");
+  }
+
   async function runOneToOneWithLoadBalancer(args: {
     logicalAgent: AgentConfig;
     input: string;
@@ -1861,9 +2060,18 @@ export default function App() {
     system?: string;
     onDelta: (text: string) => void;
     onLog?: (text: string) => void;
+    requestLabel?: string;
   }) {
+    const requestLabel = args.requestLabel ?? "chat response";
     let candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
     if (!candidates.length) {
+      logNow({
+        category: "load_balancer",
+        agent: args.logicalAgent.name,
+        ok: false,
+        message: `LB no available instance [${requestLabel}]`,
+        details: describeLoadBalancerAvailability(args.logicalAgent)
+      });
       const fallbackAgent = hydrateAgentCredentials(args.logicalAgent);
       return runOneToOne({
         adapter: pickAdapter(fallbackAgent),
@@ -1878,7 +2086,13 @@ export default function App() {
     }
 
     let lastFailureText = "No available load balancer instance.";
-    for (const candidate of candidates) {
+    for (const [candidateIndex, candidate] of candidates.entries()) {
+      logNow({
+        category: "load_balancer",
+        agent: args.logicalAgent.name,
+        message: `LB selected [${requestLabel}]`,
+        details: describeResolvedLoadBalancerCandidate(candidate)
+      });
       const retry = {
         delaySec: Math.max(0, candidate.instance.delaySecond),
         max: Math.max(0, candidate.instance.maxRetries)
@@ -1896,6 +2110,12 @@ export default function App() {
       const failure = classifyRetryableAgentFailure(text);
       if (failure?.retryable) {
         lastFailureText = text;
+        const nextCandidate = candidates[candidateIndex + 1] ?? null;
+        const failureUpdateDetails = failure.markFailure
+          ? `updated_failure_count=${candidate.instance.failureCount + 1}\nupdated_next_check_time=${formatLoadBalancerDateTime(
+              Date.now() + getLoadBalancerResumeMs(candidate.instance)
+            )}`
+          : "";
         if (failure.markFailure) {
           setLoadBalancers((prev) =>
             applyInstanceFailure({
@@ -1904,15 +2124,36 @@ export default function App() {
               instanceId: candidate.instance.id
             })
           );
-          logNow({
-            category: "load_balancer",
-            agent: args.logicalAgent.name,
-            ok: false,
-            message: `Instance failed: ${candidate.loadBalancer.name}`,
-            details: `${candidate.credential.label} / ${candidate.instance.model}\n${text}`
-          });
         }
+        logNow({
+          category: "load_balancer",
+          agent: args.logicalAgent.name,
+          ok: false,
+          message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${requestLabel}]`,
+          details: [
+            describeResolvedLoadBalancerCandidate(candidate),
+            `error=${text}`,
+            `marked_failure=${failure.markFailure}`,
+            failureUpdateDetails,
+            nextCandidate
+              ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}`
+              : "next_candidate: none"
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        });
         continue;
+      }
+
+      if (failure && !failure.retryable) {
+        logNow({
+          category: "load_balancer",
+          agent: args.logicalAgent.name,
+          ok: false,
+          message: `LB terminal error [${requestLabel}]`,
+          details: [describeResolvedLoadBalancerCandidate(candidate), `error=${text}`].join("\n\n")
+        });
+        return text;
       }
 
       setLoadBalancers((prev) =>
@@ -1922,22 +2163,49 @@ export default function App() {
           instanceId: candidate.instance.id
         })
       );
+      logNow({
+        category: "load_balancer",
+        agent: args.logicalAgent.name,
+        ok: true,
+        message: `LB success [${requestLabel}]`,
+        details: [describeResolvedLoadBalancerCandidate(candidate), `response_length=${text.length}`].join("\n\n")
+      });
       return text;
     }
 
+    logNow({
+      category: "load_balancer",
+      agent: args.logicalAgent.name,
+      ok: false,
+      message: `LB final failure [${requestLabel}]`,
+      details: lastFailureText
+    });
     return lastFailureText;
   }
 
   async function detectWithLoadBalancer(agent: AgentConfig): Promise<DetectResult> {
     const candidates = resolveLoadBalancerPlanForAgent(agent);
     if (!candidates.length) {
+      logNow({
+        category: "load_balancer",
+        agent: agent.name,
+        ok: false,
+        message: "LB no available instance [detect]",
+        details: describeLoadBalancerAvailability(agent)
+      });
       const fallbackAgent = hydrateAgentCredentials(agent);
       const adapter = pickAdapter(fallbackAgent);
       return adapter.detect ? await adapter.detect(fallbackAgent) : { ok: false, detectedType: "unknown" as const, notes: "No detect()" };
     }
 
     let lastResult: DetectResult = { ok: false, detectedType: "unknown", notes: "No available instance" };
-    for (const candidate of candidates) {
+    for (const [candidateIndex, candidate] of candidates.entries()) {
+      logNow({
+        category: "load_balancer",
+        agent: agent.name,
+        message: "LB selected [detect]",
+        details: describeResolvedLoadBalancerCandidate(candidate)
+      });
       const adapter = pickAdapter(candidate.hydratedAgent);
       const result = adapter.detect
         ? await adapter.detect(candidate.hydratedAgent)
@@ -1950,6 +2218,13 @@ export default function App() {
             instanceId: candidate.instance.id
           })
         );
+        logNow({
+          category: "load_balancer",
+          agent: agent.name,
+          ok: true,
+          message: "LB success [detect]",
+          details: [describeResolvedLoadBalancerCandidate(candidate), `detect_result=${JSON.stringify(result, null, 2)}`].join("\n\n")
+        });
         return result;
       }
       lastResult = result;
@@ -1963,10 +2238,36 @@ export default function App() {
           })
         );
       }
+      logNow({
+        category: "load_balancer",
+        agent: agent.name,
+        ok: false,
+        message: `${failure?.retryable ? "LB failover" : "LB terminal error"} [detect]`,
+        details: [
+          describeResolvedLoadBalancerCandidate(candidate),
+          `detect_result=${JSON.stringify(result, null, 2)}`,
+          failure?.retryable
+            ? `next_candidate=${
+                candidates[candidateIndex + 1]
+                  ? `\n${describeResolvedLoadBalancerCandidate(candidates[candidateIndex + 1])}`
+                  : "none"
+              }`
+            : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      });
       if (!failure?.retryable) {
         return result;
       }
     }
+    logNow({
+      category: "load_balancer",
+      agent: agent.name,
+      ok: false,
+      message: "LB final failure [detect]",
+      details: JSON.stringify(lastResult, null, 2)
+    });
     return lastResult;
   }
 
@@ -2237,6 +2538,7 @@ export default function App() {
                   ...instance,
                   maxRetries: restore.maxRetries,
                   delaySecond: restore.delaySecond,
+                  resumeMinute: restore.resumeMinute,
                   updatedAt: Date.now()
                 }
               : instance;
@@ -2434,9 +2736,22 @@ export default function App() {
         logicalAgent: args.agent,
         input: decisionPrompt,
         history: [],
+        requestLabel: "tool decision",
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
+
+      const terminalFailure = detectTerminalAgentFailure(raw);
+      if (terminalFailure) {
+        logNow({
+          category: "mcp",
+          agent: args.agent.name,
+          ok: false,
+          message: "Tool decision failed after model retries",
+          details: terminalFailure
+        });
+        return null;
+      }
 
       const decision = normalizeToolDecision(extractJsonObject(raw));
       if (decision) {
@@ -2482,9 +2797,22 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestLabel: "skill decision",
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
+
+      const terminalFailure = detectTerminalAgentFailure(raw);
+      if (terminalFailure) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: false,
+          message: "Skill decision failed after model retries",
+          details: terminalFailure
+        });
+        return null;
+      }
 
       const decision = normalizeSkillDecision(extractJsonObject(raw));
       if (decision) {
@@ -2540,9 +2868,22 @@ export default function App() {
         logicalAgent: args.verifierAgent,
         input: prompt,
         history: [],
+        requestLabel: `skill verify round ${args.round}`,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, message: t })
       });
+
+      const terminalFailure = detectTerminalAgentFailure(raw);
+      if (terminalFailure) {
+        logNow({
+          category: "skills",
+          agent: args.answeringAgent.name,
+          ok: false,
+          message: `Skill verify round ${args.round} failed after model retries`,
+          details: terminalFailure
+        });
+        return null;
+      }
 
       const decision = normalizeSkillVerifyDecision(extractJsonObject(raw));
       if (decision) {
@@ -2592,9 +2933,23 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestLabel: "skill bootstrap plan",
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
+
+      const terminalFailure = detectTerminalAgentFailure(raw);
+      if (terminalFailure) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: false,
+          message: "Skill bootstrap plan failed after model retries",
+          details: terminalFailure
+        });
+        args.onTrace?.("Bootstrap raw", raw);
+        break;
+      }
 
       const parsed = normalizeSkillBootstrapPlan(extractJsonObject(raw));
       if (parsed?.todo.length) {
@@ -2680,9 +3035,23 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestLabel: `skill planner step ${args.state.stepIndex + 1}`,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
+
+      const terminalFailure = detectTerminalAgentFailure(raw);
+      if (terminalFailure) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: false,
+          message: `Skill planner step ${args.state.stepIndex + 1} failed after model retries`,
+          details: terminalFailure
+        });
+        args.onTrace?.(`Planner raw ${args.state.stepIndex + 1}`, [`Raw:\n${raw}`, "", "Normalized: invalid (terminal failure)"].join("\n"));
+        return null;
+      }
 
       const decision = normalizeSkillStepDecision(extractJsonObject(raw));
       if (decision) {
@@ -2742,9 +3111,23 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestLabel: `skill completion gate ${args.state.stepIndex}`,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
+
+      const terminalFailure = detectTerminalAgentFailure(raw);
+      if (terminalFailure) {
+        logNow({
+          category: "skills",
+          agent: args.agent.name,
+          ok: false,
+          message: `Skill completion gate step ${args.state.stepIndex} failed after model retries`,
+          details: terminalFailure
+        });
+        args.onTrace?.(`Completion raw ${args.state.stepIndex}`, [`Raw:\n${raw}`, "", "Normalized: invalid (terminal failure)"].join("\n"));
+        return null;
+      }
 
       const decision = normalizeSkillCompletionDecision(extractJsonObject(raw));
       if (decision) {
@@ -2884,6 +3267,7 @@ export default function App() {
         });
         return {
           input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
+          ok: false,
           status: "tool_called",
           toolLabel: `Built-in ${normalizedDecision.tool}`,
           detail: toolSummaryForQuestion,
@@ -2910,6 +3294,7 @@ export default function App() {
           });
           return {
             input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
+            ok: false,
             status: "tool_called",
             toolLabel: `Built-in ${normalizedDecision.tool}`,
             detail: toolSummaryForQuestion,
@@ -2967,6 +3352,7 @@ export default function App() {
         });
         return {
           input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+          ok: true,
           status: "tool_called",
           toolLabel: `Built-in ${normalizedDecision.tool}`,
           detail: toolSummaryForQuestion,
@@ -2990,6 +3376,7 @@ export default function App() {
         });
         return {
           input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
+          ok: false,
           status: "tool_called",
           toolLabel: `Built-in ${normalizedDecision.tool}`,
           detail: toolSummaryForQuestion,
@@ -3034,7 +3421,8 @@ export default function App() {
       try {
         const client = new McpSseClient(targetServer);
         client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
-        const toolOutput = await callTool(client, normalizedDecision.tool, normalizedDecision.input ?? {});
+        const timeoutMs = getMcpToolTimeoutMs(targetServer, normalizedDecision.tool);
+        const toolOutput = await callMcpToolWithTimeout(client, normalizedDecision.tool, normalizedDecision.input ?? {}, timeoutMs);
         const toolIntent = classifyMcpToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
         const browserObservation = extractBrowserObservation({
@@ -3065,6 +3453,7 @@ export default function App() {
         );
         return {
           input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+          ok: true,
           status: "tool_called",
           toolLabel: `MCP ${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
           detail: toolSummaryForQuestion,
@@ -3093,12 +3482,13 @@ export default function App() {
     return toolSummaryForQuestion
       ? {
           input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+          ok: false,
           status: "tool_called",
           toolLabel: `MCP ${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
           detail: toolSummaryForQuestion,
           actionSignature
         }
-      : { input: args.input, status: "no_tool", detail: "沒有產生可回填的工具摘要。" };
+      : { input: args.input, ok: false, status: "no_tool", detail: "沒有產生可回填的工具摘要。" };
   }
 
   async function resolveToolAugmentedInput(args: {
@@ -3535,6 +3925,7 @@ export default function App() {
 
             return {
               context: result.input,
+              failed: result.ok === false,
               detail: result.browserObservation
                 ? [result.detail, formatBrowserObservationDigest(result.browserObservation)].filter(Boolean).join("\n\n")
                 : result.detail,
@@ -3566,16 +3957,23 @@ export default function App() {
               promptDetail: "actionable"
             });
 
+            const enrichedBrowserObservation = enrichActionBrowserObservation({
+              state,
+              decision,
+              browserObservation: result.browserObservation
+            });
+
             return {
               context: result.input,
-              detail: result.browserObservation
-                ? [result.detail, formatBrowserObservationDigest(result.browserObservation)].filter(Boolean).join("\n\n")
+              failed: result.ok === false,
+              detail: enrichedBrowserObservation
+                ? [result.detail, formatBrowserObservationDigest(enrichedBrowserObservation)].filter(Boolean).join("\n\n")
                 : result.detail,
               toolLabel: result.toolLabel,
               actionSignature: result.actionSignature,
               observationSignature: result.observationSignature,
               confirmed: typeof result.toolOutput?.confirmed === "boolean" ? result.toolOutput.confirmed : null,
-              browserObservation: result.browserObservation,
+              browserObservation: enrichedBrowserObservation,
               preferredMcpServerId: result.serverId
             };
           },
@@ -3611,6 +4009,7 @@ export default function App() {
 
             return {
               context: manualResult.input,
+              failed: manualResult.ok === false,
               detail: manualResult.detail ?? decision.message,
               toolLabel: manualResult.toolLabel,
               actionSignature: manualResult.actionSignature,
@@ -3621,6 +4020,29 @@ export default function App() {
           },
           checkCompletion: async ({ state, currentContext, toolScopeSummary }) =>
             {
+              if (
+                goalWantsRepoSummary(args.userInput) &&
+                state.lastBrowserObservation?.pageKind === "repo_page" &&
+                !hasGroundedRepoSummary(state.lastBrowserObservation)
+              ) {
+                pushSkillTrace(
+                  trace,
+                  `Heuristic completion ${state.stepIndex}`,
+                  [
+                    "Decision: incomplete",
+                    "Reason: Reached repository page, but grounded repo summary fields are still insufficient.",
+                    "Suggested focus: Read visible README or repo description before finishing.",
+                    state.lastBrowserObservation ? `Observation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : ""
+                  ]
+                    .filter(Boolean)
+                    .join("\n")
+                );
+                return {
+                  type: "incomplete" as const,
+                  reason: "已到達 repository 頁面，但還沒有足夠的 grounded 內容可直接整理摘要。",
+                  suggestedFocus: "請優先讀取目前頁面可見的 README 或 repo 描述，再決定是否完成。"
+                };
+              }
               const heuristicCompletion = buildBrowserHeuristicCompletion({
                 state,
                 userInput: args.userInput
@@ -3690,15 +4112,42 @@ export default function App() {
       };
     }
 
+    const groundedHeuristicAnswer = buildGroundedRepoSummaryAnswer(runtimeResult.lastBrowserObservation);
+    if (groundedHeuristicAnswer && goalWantsRepoSummary(args.userInput)) {
+      pushSkillTrace(trace, "Final answer", "已由 grounded browser observation 直接產生最終摘要，避免 LLM 脫離實際頁面內容。");
+      currentPhase = "final_answer";
+      updateAssistantProgress(currentTodo, currentPhase, trace);
+      return {
+        finalInput: currentInput,
+        trace,
+        todo: currentTodo,
+        phase: currentPhase,
+        finalAnswerOverride: groundedHeuristicAnswer
+      };
+    }
+
     args.onStatus?.("正在依 skill 產生初版回答中…");
     let currentAnswer = await runOneToOneWithLoadBalancer({
       logicalAgent: args.agent,
       input: currentInput,
       history: limitHistory(history),
       system: args.prepared.system,
+      requestLabel: "skill final answer round 1",
       onDelta: () => {},
       onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
     });
+
+    const firstAnswerFailure = detectTerminalAgentFailure(currentAnswer);
+    if (firstAnswerFailure) {
+      pushSkillTrace(trace, "Final answer", `最終回答模型呼叫失敗，已直接回傳錯誤內容。\n${firstAnswerFailure}`);
+      return {
+        finalInput: currentInput,
+        trace,
+        todo: currentTodo,
+        phase: "final_answer",
+        finalAnswerOverride: buildAgentFailureContent(firstAnswerFailure, args.userInput)
+      };
+    }
 
     pushSkillTrace(trace, "Skill answer round 1", currentAnswer);
     currentPhase = "final_answer";
@@ -3780,15 +4229,42 @@ export default function App() {
         };
       }
 
+      const refinedGroundedAnswer = buildGroundedRepoSummaryAnswer(runtimeResult.lastBrowserObservation);
+      if (refinedGroundedAnswer && goalWantsRepoSummary(args.userInput)) {
+        pushSkillTrace(trace, "Final answer", "refine 後已由 grounded browser observation 直接產生最終摘要。");
+        currentPhase = "final_answer";
+        updateAssistantProgress(currentTodo, currentPhase, trace);
+        return {
+          finalInput: currentInput,
+          trace,
+          todo: currentTodo,
+          phase: currentPhase,
+          finalAnswerOverride: refinedGroundedAnswer
+        };
+      }
+
       args.onStatus?.(`正在產生第 ${round + 1} 輪回答中…`);
       currentAnswer = await runOneToOneWithLoadBalancer({
         logicalAgent: args.agent,
         input: currentInput,
         history: limitHistory(history),
         system: args.prepared.system,
+        requestLabel: `skill final answer round ${round + 1}`,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
       });
+
+      const refinedAnswerFailure = detectTerminalAgentFailure(currentAnswer);
+      if (refinedAnswerFailure) {
+        pushSkillTrace(trace, "Final answer", `refine 後最終回答模型呼叫失敗，已直接回傳錯誤內容。\n${refinedAnswerFailure}`);
+        return {
+          finalInput: currentInput,
+          trace,
+          todo: currentTodo,
+          phase: "final_answer",
+          finalAnswerOverride: buildAgentFailureContent(refinedAnswerFailure, args.userInput)
+        };
+      }
 
       pushSkillTrace(trace, `Skill answer round ${round + 1}`, currentAnswer);
       currentPhase = "final_answer";
@@ -3876,11 +4352,13 @@ export default function App() {
     append(userMsg);
     const baseHistory = [...history, userMsg];
     const modelHistory = limitHistory(baseHistory);
+    let streamingAssistantId: string | null = null;
 
     try {
       if (mode === "one_to_one") {
         logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
         const assistantId = generateId();
+        streamingAssistantId = assistantId;
         append({
           id: assistantId,
           role: "assistant",
@@ -4071,6 +4549,7 @@ export default function App() {
             skillTrace.length = 0;
             skillTrace.push(...executed.trace);
             if (executed.finalAnswerOverride) {
+              const runtimeOverrideFailed = executed.finalAnswerOverride.startsWith("【執行失敗】");
               finalizeAssistant({
                 content: executed.finalAnswerOverride,
                 skillTrace: executed.trace.length ? executed.trace : undefined,
@@ -4081,8 +4560,8 @@ export default function App() {
               logNow({
                 category: "chat",
                 agent: activeAgent.name,
-                ok: true,
-                message: "normal talking completed via multi-turn runtime override",
+                ok: !runtimeOverrideFailed,
+                message: runtimeOverrideFailed ? "normal talking failed via multi-turn runtime override" : "normal talking completed via multi-turn runtime override",
                 details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
               });
               return;
@@ -4126,9 +4605,27 @@ export default function App() {
           input: finalInput,
           history: limitHistory(history),
           system: finalSystem,
+          requestLabel: "chat response",
           onDelta,
           onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
         });
+        const terminalFailure = detectTerminalAgentFailure(full);
+        if (terminalFailure) {
+          const failureContent = buildAgentFailureContent(terminalFailure, input);
+          finalizeAssistant({
+            content: failureContent,
+            skillTrace: skillTrace.length ? skillTrace : undefined,
+            skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined
+          });
+          logNow({
+            category: "chat",
+            agent: activeAgent.name,
+            ok: false,
+            message: "normal talking failed",
+            details: terminalFailure
+          });
+          return;
+        }
         finalizeAssistant({
           content: full,
           skillTrace: skillTrace.length ? skillTrace : undefined,
@@ -4308,7 +4805,17 @@ export default function App() {
         details: `elapsed_ms=${Date.now() - startedAt}`
       });
     } catch (e: any) {
-      append(msg("assistant", `[ERROR]\n${e?.message ?? String(e)}`, "system", { displayName: "System" }));
+      const errorText = buildAgentFailureContent(String(e?.message ?? e), input);
+      if (streamingAssistantId) {
+        patchMessage(streamingAssistantId, {
+          content: errorText,
+          statusText: undefined,
+          isStreaming: false,
+          hideWhileStreaming: false
+        });
+      } else {
+        append(msg("assistant", errorText, "system", { displayName: "System" }));
+      }
       logNow({ category: "chat", agent: activeAgent?.name, ok: false, message: "Send failed", details: String(e?.message ?? e) });
     }
   }
@@ -4598,6 +5105,7 @@ export default function App() {
         history,
         system:
           "You are preparing a conversation carry-over note. Write in Traditional Chinese when possible. Do not include markdown code fences.",
+        requestLabel: "summary export",
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
       });

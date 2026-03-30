@@ -412,7 +412,18 @@ export default function LoadBalancersPanel(props: {
                         <label style={label}>delaySecond</label>
                         <input type="number" min={0} max={60} value={instance.delaySecond} onChange={(e) => updateInstance(instance.id, { delaySecond: Math.max(0, Number(e.target.value) || 0) })} style={inp} data-tutorial-id={`load-balancer-instance-delay-second-${index}`} />
                       </div>
-                      <div />
+                      <div>
+                        <label style={label}>resumeMinute</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1440}
+                          value={instance.resumeMinute}
+                          onChange={(e) => updateInstance(instance.id, { resumeMinute: Math.max(0, Number(e.target.value) || 0) })}
+                          style={inp}
+                          data-tutorial-id={`load-balancer-instance-resume-minute-${index}`}
+                        />
+                      </div>
                     </div>
                   </div>
                 );

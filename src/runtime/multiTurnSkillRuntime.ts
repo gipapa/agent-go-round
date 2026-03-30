@@ -36,6 +36,7 @@ export type MultiTurnToolScopeSummary = {
 export type MultiTurnObservationResult = {
   context: string;
   detail?: string;
+  failed?: boolean;
   observationSignature?: string;
   actionSignature?: string;
   browserObservation?: BrowserObservationDigest | null;
@@ -46,6 +47,7 @@ export type MultiTurnActionResult = {
   context: string;
   detail?: string;
   toolLabel?: string;
+  failed?: boolean;
   actionSignature?: string;
   observationSignature?: string;
   confirmed?: boolean | null;
@@ -87,6 +89,7 @@ export type MultiTurnSkillRuntimeResult = {
   trace: ChatTraceEntry[];
   todo: SkillTodoItem[];
   phase: SkillRunState["phase"];
+  lastBrowserObservation?: BrowserObservationDigest;
   finalAnswerOverride?: string;
 };
 
@@ -162,6 +165,33 @@ function buildTerminalBlockedAnswer(goal: string, currentContext: string) {
     "",
     "【取得的回應】",
     reason
+  ].join("\n");
+}
+
+function buildRuntimeFailureAnswer(goal: string, stage: "planner" | "completion_gate", currentContext: string) {
+  const stageLabel = stage === "planner" ? "規劃下一步" : "完成判斷";
+  return [
+    "【執行失敗】",
+    `多輪流程在「${stageLabel}」階段沒有取得有效結果，系統已停止自動重試。`,
+    "",
+    "【原始任務】",
+    goal,
+    "",
+    "【最後狀態】",
+    compactTraceText(currentContext, 900)
+  ].join("\n");
+}
+
+function buildRuntimeToolFailureAnswer(goal: string, stageLabel: string, currentContext: string, detail?: string) {
+  return [
+    "【執行失敗】",
+    `多輪流程在「${stageLabel}」階段失敗，系統已停止自動重試。`,
+    "",
+    "【原始任務】",
+    goal,
+    "",
+    "【最後狀態】",
+    detail ? compactTraceText(detail, 900) : compactTraceText(currentContext, 900)
   ].join("\n");
 }
 
@@ -282,7 +312,14 @@ export async function runMultiTurnSkillRuntime(args: {
         "sync_state",
         [`Step ${round}`, "Planner returned no valid decision. The runtime will leave the tool loop here."].join("\n")
       );
-      break;
+      return {
+        finalInput: currentContext,
+        trace,
+        todo: state.todo,
+        phase: state.phase,
+        lastBrowserObservation: state.lastBrowserObservation,
+        finalAnswerOverride: buildRuntimeFailureAnswer(args.userInput, "planner", currentContext)
+      };
     }
 
     state = applyPlannerDecisionToState(state, decision);
@@ -301,6 +338,16 @@ export async function runMultiTurnSkillRuntime(args: {
         ].join("\n")
       );
       currentContext = observation?.context ?? currentContext;
+      if (observation?.failed) {
+        return {
+          finalInput: currentContext,
+          trace,
+          todo: state.todo,
+          phase: state.phase,
+          lastBrowserObservation: state.lastBrowserObservation,
+          finalAnswerOverride: buildRuntimeToolFailureAnswer(args.userInput, "頁面觀察", currentContext, observation.detail)
+        };
+      }
       const last = state.recentObservationSignatures.at(-1) ?? null;
       state = applyObservationToState(
         state,
@@ -343,6 +390,7 @@ export async function runMultiTurnSkillRuntime(args: {
           trace,
           todo: state.todo,
           phase: state.phase,
+          lastBrowserObservation: state.lastBrowserObservation,
           finalAnswerOverride: buildTerminalBlockedAnswer(args.userInput, currentContext)
         };
       }
@@ -365,6 +413,16 @@ export async function runMultiTurnSkillRuntime(args: {
         ].join("\n")
       );
       currentContext = action?.context ?? currentContext;
+      if (action?.failed) {
+        return {
+          finalInput: currentContext,
+          trace,
+          todo: state.todo,
+          phase: state.phase,
+          lastBrowserObservation: state.lastBrowserObservation,
+          finalAnswerOverride: buildRuntimeToolFailureAnswer(args.userInput, "工具執行", currentContext, action.detail)
+        };
+      }
       state = applyActionToState(state, action?.actionSignature, action?.browserObservation ?? undefined, action?.preferredMcpServerId);
       args.callbacks.onStateChange?.(state);
       pushSkillPhaseTrace(
@@ -427,7 +485,8 @@ export async function runMultiTurnSkillRuntime(args: {
         finalInput: currentContext,
         trace,
         todo: state.todo,
-        phase: state.phase
+        phase: state.phase,
+        lastBrowserObservation: state.lastBrowserObservation
       };
     }
 
@@ -459,7 +518,14 @@ export async function runMultiTurnSkillRuntime(args: {
         "sync_state",
         [`Step ${round}`, "Completion gate returned no valid decision; the runtime will continue only if a later refine pass is triggered."].join("\n")
       );
-      break;
+      return {
+        finalInput: currentContext,
+        trace,
+        todo: state.todo,
+        phase: state.phase,
+        lastBrowserObservation: state.lastBrowserObservation,
+        finalAnswerOverride: buildRuntimeFailureAnswer(args.userInput, "completion_gate", currentContext)
+      };
     }
 
     state = applyCompletionDecisionToState(state, completion);
@@ -471,7 +537,8 @@ export async function runMultiTurnSkillRuntime(args: {
         finalInput: currentContext,
         trace,
         todo: state.todo,
-        phase: state.phase
+        phase: state.phase,
+        lastBrowserObservation: state.lastBrowserObservation
       };
     }
 
@@ -484,6 +551,7 @@ export async function runMultiTurnSkillRuntime(args: {
     finalInput: currentContext,
     trace,
     todo: state.todo,
-    phase: state.phase
+    phase: state.phase,
+    lastBrowserObservation: state.lastBrowserObservation
   };
 }

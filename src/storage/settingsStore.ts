@@ -121,7 +121,27 @@ export function loadMcpServers(): McpServerConfig[] {
   try {
     const raw = localStorage.getItem(MCP_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as McpServerConfig[];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item): item is Partial<McpServerConfig> & { id: string; name: string; sseUrl: string } =>
+          !!item && typeof item.id === "string" && typeof item.name === "string" && typeof item.sseUrl === "string"
+      )
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        sseUrl: item.sseUrl,
+        authHint: typeof item.authHint === "string" ? item.authHint : undefined,
+        toolTimeoutSecond:
+          typeof item.toolTimeoutSecond === "number" && Number.isFinite(item.toolTimeoutSecond)
+            ? item.toolTimeoutSecond
+            : undefined,
+        heartbeatSecond:
+          typeof item.heartbeatSecond === "number" && Number.isFinite(item.heartbeatSecond)
+            ? item.heartbeatSecond
+            : undefined
+      }));
   } catch {
     return [];
   }
@@ -222,13 +242,24 @@ export function loadLoadBalancers(): LoadBalancerConfig[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is LoadBalancerConfig =>
-        item &&
-        typeof item.id === "string" &&
-        typeof item.name === "string" &&
-        Array.isArray(item.instances)
-    );
+    return parsed
+      .filter(
+        (item): item is LoadBalancerConfig =>
+          item &&
+          typeof item.id === "string" &&
+          typeof item.name === "string" &&
+          Array.isArray(item.instances)
+      )
+      .map((item) => ({
+        ...item,
+        instances: item.instances.map((instance: any) => ({
+          ...instance,
+          resumeMinute:
+            typeof instance?.resumeMinute === "number" && Number.isFinite(instance.resumeMinute)
+              ? instance.resumeMinute
+              : 60
+        }))
+      }));
   } catch {
     return [];
   }

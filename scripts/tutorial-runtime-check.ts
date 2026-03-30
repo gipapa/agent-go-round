@@ -44,6 +44,7 @@ function makeTutorialLoadBalancer(): LoadBalancerConfig {
         description: "",
         maxRetries: 4,
         delaySecond: 5,
+        resumeMinute: 60,
         failure: false,
         failureCount: 0,
         nextCheckTime: null,

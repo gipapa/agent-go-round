@@ -6,7 +6,7 @@ import { generateId } from "./id";
 export const CHROME_PROMPT_CREDENTIAL_ENDPOINT = "chrome-prompt://local";
 export const DEFAULT_INSTANCE_MAX_RETRIES = 4;
 export const DEFAULT_INSTANCE_DELAY_SECOND = 5;
-export const DEFAULT_INSTANCE_COOLDOWN_MS = 60 * 60 * 1000;
+export const DEFAULT_INSTANCE_RESUME_MINUTE = 60;
 
 export type ResolvedLoadBalancerInstance = {
   loadBalancer: LoadBalancerConfig;
@@ -107,6 +107,7 @@ export function createLoadBalancerInstance(seed?: Partial<LoadBalancerInstance>)
     description: seed?.description ?? "",
     maxRetries: typeof seed?.maxRetries === "number" ? seed.maxRetries : DEFAULT_INSTANCE_MAX_RETRIES,
     delaySecond: typeof seed?.delaySecond === "number" ? seed.delaySecond : DEFAULT_INSTANCE_DELAY_SECOND,
+    resumeMinute: typeof seed?.resumeMinute === "number" ? seed.resumeMinute : DEFAULT_INSTANCE_RESUME_MINUTE,
     failure: seed?.failure ?? false,
     failureCount: typeof seed?.failureCount === "number" ? seed.failureCount : 0,
     nextCheckTime: seed?.nextCheckTime ?? null,
@@ -224,6 +225,14 @@ export function shouldSkipInstance(instance: LoadBalancerInstance, now = Date.no
   return instance.failure && !!instance.nextCheckTime && now < instance.nextCheckTime;
 }
 
+export function getLoadBalancerResumeMs(instance: LoadBalancerInstance) {
+  const resumeMinute =
+    typeof instance.resumeMinute === "number" && Number.isFinite(instance.resumeMinute)
+      ? Math.max(0, Math.round(instance.resumeMinute))
+      : DEFAULT_INSTANCE_RESUME_MINUTE;
+  return resumeMinute * 60 * 1000;
+}
+
 export function hydrateAgentForResolvedInstance(agent: AgentConfig, resolved: {
   credential: ModelCredentialEntry;
   key?: ModelCredentialKeyEntry;
@@ -292,7 +301,7 @@ export function applyInstanceFailure(args: {
         ...instance,
         failureCount,
         failure: true,
-        nextCheckTime: now + DEFAULT_INSTANCE_COOLDOWN_MS,
+        nextCheckTime: now + getLoadBalancerResumeMs(instance),
         updatedAt: now
       };
     });
@@ -330,7 +339,7 @@ export function updateInstanceRetryFailureState(instance: LoadBalancerInstance, 
     ...instance,
     failureCount,
     failure: true,
-    nextCheckTime: now + DEFAULT_INSTANCE_COOLDOWN_MS,
+    nextCheckTime: now + getLoadBalancerResumeMs(instance),
     updatedAt: now
   };
 }
@@ -340,6 +349,7 @@ export function setLoadBalancerRetryPolicy(args: {
   loadBalancerId: string;
   maxRetries?: number;
   delaySecond?: number;
+  resumeMinute?: number;
   now?: number;
 }) {
   const now = args.now ?? Date.now();
@@ -349,6 +359,8 @@ export function setLoadBalancerRetryPolicy(args: {
       ...instance,
       maxRetries: typeof args.maxRetries === "number" ? Math.max(0, Math.round(args.maxRetries)) : instance.maxRetries,
       delaySecond: typeof args.delaySecond === "number" ? Math.max(0, Math.round(args.delaySecond)) : instance.delaySecond,
+      resumeMinute:
+        typeof args.resumeMinute === "number" ? Math.max(0, Math.round(args.resumeMinute)) : instance.resumeMinute,
       updatedAt: now
     }));
     return { ...loadBalancer, instances, updatedAt: now };

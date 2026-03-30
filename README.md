@@ -38,7 +38,7 @@
   - 可直接撰寫瀏覽器端 JavaScript 工具
   - 可在編輯器內直接測試
   - 支援系統工具，例如 `get_user_profile`、`pick_best_agent_for_question`
-  - 提供一個即時渲染的tool寫法，但因為可能有較大的失敗率所以不放在案例中[agentic.md](render_anything.md)
+  - 提供一個即時渲染的 tool 寫法，但因為可能有較大的失敗率所以不放在案例中：[render_anything.md](render_anything.md)
 
 - Skills
   - 使用 `skill-name/SKILL.md + references/ + scripts/ + assets/` 格式
@@ -131,9 +131,11 @@
   - description
   - `maxRetries`
   - `delaySecond`
+  - `resumeMinute`
 - runtime 每次都從第 1 個 instance 開始掃描：
   - 若 instance 被標記 `failure` 且尚未到 `nextCheckTime`，會跳過
   - 若已超過 `nextCheckTime`，會重新嘗試
+- `resumeMinute` 代表 instance 被標記 failure 後，要等多久才允許重新嘗試
 - 請求成功後會清掉 failure 狀態；失敗則累積 `failureCount`
 
 ### 2.3 Onboarding / 案例教學
@@ -194,6 +196,11 @@ src/onboarding/
 
 - 透過 SSE 連接 MCP server
 - 支援列出工具與手動 call tool
+- 每個 MCP server 可設定：
+  - `toolTimeoutSecond`
+  - `heartbeatSecond`
+- `toolTimeoutSecond` 會中止卡住的 RPC，避免工具無限執行中
+- `heartbeatSecond` 代表閒置超過多久後，下一次工具呼叫前先做一次 `tools/list` 存活檢查；設為 `0` 可停用
 - 自動工具判斷會先跑 `Tool Decision Prompt`
 - 如果 model 回傳合法 schema，前端才會代呼叫 MCP 並把結果回填到最終問題中
 
@@ -415,6 +422,8 @@ agent-browser:
 ```
 
 如果你是在 Windows 瀏覽器 + WSL server 的環境中測試，通常應優先使用 WSL IP，而不是 `127.0.0.1`。
+
+如果你的環境有全域 `HTTP_PROXY / HTTPS_PROXY`，記得把本機 MCP 加進 `NO_PROXY`，不然 `127.0.0.1` 的請求可能會被代理攔走。
 
 ## 資料儲存
 

@@ -78,7 +78,9 @@ export default function McpPanel(props: {
       const next: McpServerConfig = {
         id: generateId(),
         name: `MCP ${props.servers.length + 1}`,
-        sseUrl: ""
+        sseUrl: "",
+        toolTimeoutSecond: 30,
+        heartbeatSecond: 30
       };
       setEditingServerId(next.id);
       setServerDraft(next);
@@ -208,7 +210,9 @@ export default function McpPanel(props: {
     const nextServer: McpServerConfig = {
       ...serverDraft,
       name: serverDraft.name.trim() || `MCP ${props.servers.length + 1}`,
-      sseUrl: serverDraft.sseUrl.trim()
+      sseUrl: serverDraft.sseUrl.trim(),
+      toolTimeoutSecond: Math.max(1, Math.round(serverDraft.toolTimeoutSecond ?? 30)),
+      heartbeatSecond: Math.max(0, Math.round(serverDraft.heartbeatSecond ?? 30))
     };
     const exists = props.servers.some((server) => server.id === nextServer.id);
     const nextServers = exists
@@ -407,6 +411,31 @@ export default function McpPanel(props: {
               />
             </div>
 
+            <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div>
+                <label style={label}>toolTimeoutSecond</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={600}
+                  value={serverDraft.toolTimeoutSecond ?? 30}
+                  onChange={(e) => updateDraft({ toolTimeoutSecond: Math.max(1, Number(e.target.value) || 30) })}
+                  style={inp}
+                />
+              </div>
+              <div>
+                <label style={label}>heartbeatSecond</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={600}
+                  value={serverDraft.heartbeatSecond ?? 30}
+                  onChange={(e) => updateDraft({ heartbeatSecond: Math.max(0, Number(e.target.value) || 0) })}
+                  style={inp}
+                />
+              </div>
+            </div>
+
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button type="button" onClick={() => void connectAndListDraft()} style={btnPrimarySmall} disabled={isConnecting || !serverDraft.sseUrl.trim()} data-tutorial-id="mcp-connect-list-tools">
                 {isConnecting ? "Connecting..." : "Connect & List Tools"}
@@ -463,6 +492,9 @@ export default function McpPanel(props: {
 
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
               Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies. RPC is derived by replacing `/sse` with `/rpc`.
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>
+              `toolTimeoutSecond` 會中止卡住的 RPC；`heartbeatSecond` 代表閒置超過多久後，下一次工具呼叫前先做一次 `tools/list` 存活檢查。設為 `0` 可停用 heartbeat。
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
