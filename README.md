@@ -201,6 +201,7 @@ src/onboarding/
   - `heartbeatSecond`
 - `toolTimeoutSecond` 會中止卡住的 RPC，避免工具無限執行中
 - `heartbeatSecond` 代表閒置超過多久後，下一次工具呼叫前先做一次 `tools/list` 存活檢查；設為 `0` 可停用
+- MCP 面板提供 `Clear All`，可一次清掉所有已存的 servers 與已載入 tools 狀態
 - 自動工具判斷會先跑 `Tool Decision Prompt`
 - 如果 model 回傳合法 schema，前端才會代呼叫 MCP 並把結果回填到最終問題中
 
@@ -405,6 +406,7 @@ bash run.sh -simple
   - 自動 clone `vercel-labs/agent-browser`
   - 安裝相依與本地瀏覽器執行環境
   - 啟動 browser automation 的 SSE MCP server
+  - 啟動前會先清掉佔用 `3334` 的舊測試服務
 - `bash run.sh -uninstall`
   - 清除這個專案在 `mcp-test` 目錄下建立的 node_modules / vendor / local browser home
   - 不會刪除使用者原本系統上的 Chrome / Chromium

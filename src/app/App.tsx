@@ -2286,9 +2286,9 @@ export default function App() {
 
     const loadedEntries = await Promise.all(
       unknownServers.map(async (server) => {
+        const client = new McpSseClient(server);
+        client.connect((text) => pushLog({ category: "mcp", agent: server.name, message: text }));
         try {
-          const client = new McpSseClient(server);
-          client.connect((text) => pushLog({ category: "mcp", agent: server.name, message: text }));
           const tools = await listTools(client);
           logNow({
             category: "mcp",
@@ -2307,6 +2307,8 @@ export default function App() {
             details: String(error?.message ?? error)
           });
           return null;
+        } finally {
+          client.close();
         }
       })
     );
@@ -3418,9 +3420,9 @@ export default function App() {
       });
       append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
     } else {
+      const client = new McpSseClient(targetServer);
+      client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
       try {
-        const client = new McpSseClient(targetServer);
-        client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
         const timeoutMs = getMcpToolTimeoutMs(targetServer, normalizedDecision.tool);
         const toolOutput = await callMcpToolWithTimeout(client, normalizedDecision.tool, normalizedDecision.input ?? {}, timeoutMs);
         const toolIntent = classifyMcpToolIntent(targetTool);
@@ -3476,6 +3478,8 @@ export default function App() {
           message: `Tool call failed: ${normalizedDecision.tool}`,
           details: briefError
         });
+      } finally {
+        client.close();
       }
     }
 

@@ -113,6 +113,20 @@ export default function McpPanel(props: {
     }
   }
 
+  function clearAllServers() {
+    if (!props.servers.length) return;
+    const confirmed = window.confirm("確定要清除所有已存的 MCP servers 嗎？這會一併移除目前已載入的 tools 清單。");
+    if (!confirmed) return;
+    closeEditor();
+    props.onChangeServers([]);
+    props.onSelectActive(null);
+    props.pushLog({
+      category: "mcp",
+      ok: true,
+      message: "All MCP servers cleared"
+    });
+  }
+
   function updateDraft(patch: Partial<McpServerConfig>) {
     setServerDraft((current) => {
       if (!current) return current;
@@ -167,6 +181,7 @@ export default function McpPanel(props: {
         details: String(error?.message ?? error)
       });
     } finally {
+      client.close();
       setIsConnecting(false);
     }
   }
@@ -193,6 +208,7 @@ export default function McpPanel(props: {
         details: String(error?.message ?? error)
       });
     } finally {
+      client.close();
       setIsCallingTool(false);
     }
   }
@@ -342,9 +358,14 @@ export default function McpPanel(props: {
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontWeight: 800 }}>Active MCP servers</div>
-        <button type="button" onClick={() => openEditor()} style={btnSmall} data-tutorial-id="mcp-add-button">
-          + Add
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={clearAllServers} style={btnDangerSmall} disabled={props.servers.length === 0}>
+            Clear All
+          </button>
+          <button type="button" onClick={() => openEditor()} style={btnSmall} data-tutorial-id="mcp-add-button">
+            + Add
+          </button>
+        </div>
       </div>
 
       <div style={{ display: "grid", gap: 8 }}>

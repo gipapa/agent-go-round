@@ -7,6 +7,32 @@ AGENT_BROWSER_DIR="$ROOT_DIR/agent-browser-sse"
 WSL_IP="$(hostname -I | awk '{print $1}')"
 AGENT_BROWSER_HOME="$AGENT_BROWSER_DIR/.agent-browser-home"
 
+kill_port_if_busy() {
+  local port="${1:-}"
+  if [ -z "$port" ]; then
+    return 0
+  fi
+
+  if command -v fuser >/dev/null 2>&1; then
+    if fuser "${port}/tcp" >/dev/null 2>&1; then
+      echo "[mcp-test] port ${port} is busy, stopping previous process ..."
+      fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+      sleep 1
+    fi
+    return 0
+  fi
+
+  if command -v lsof >/dev/null 2>&1; then
+    local pids=""
+    pids="$(lsof -ti "tcp:${port}" 2>/dev/null || true)"
+    if [ -n "$pids" ]; then
+      echo "[mcp-test] port ${port} is busy, stopping previous process ..."
+      kill $pids >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -23,6 +49,7 @@ EOF
 
 run_simple() {
   cd "$SIMPLE_DIR"
+  kill_port_if_busy 3333
   echo "[mcp-test/simple] localhost: http://127.0.0.1:3333/mcp/sse"
   if [ -n "${WSL_IP}" ]; then
     echo "[mcp-test/simple] WSL IP: http://${WSL_IP}:3333/mcp/sse"
@@ -33,6 +60,7 @@ run_simple() {
 
 run_agent_browser() {
   cd "$AGENT_BROWSER_DIR"
+  kill_port_if_busy 3334
   echo "[mcp-test/agent-browser] localhost: http://127.0.0.1:3334/mcp/sse"
   if [ -n "${WSL_IP}" ]; then
     echo "[mcp-test/agent-browser] WSL IP: http://${WSL_IP}:3334/mcp/sse"
