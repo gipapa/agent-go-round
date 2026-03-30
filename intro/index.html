@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgentGoRound — 瀏覽器原生的 Agentic AI 平台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwindcss.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#3B82F6',
+            'primary-light': '#60A5FA',
+            secondary: '#F97316',
+            'secondary-light': '#FB923C',
+            accent: '#10B981',
+            'accent-light': '#34D399',
+            purple: '#8B5CF6',
+            'purple-light': '#A78BFA',
+            pink: '#EC4899',
+            dark: { 900: '#0B0F1A', 800: '#111827', 700: '#1E293B', 600: '#334155' },
+            card: { DEFAULT: 'rgba(30,41,59,0.65)', hover: 'rgba(51,65,85,0.7)' },
+            success: '#22C55E',
+            warning: '#F59E0B',
+            danger: '#EF4444',
+            info: '#6366F1',
+          },
+          fontFamily: {
+            heading: ['Space Grotesk', 'sans-serif'],
+            body: ['DM Sans', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'DM Sans', sans-serif; background: #0B0F1A; color: #e2e8f0; overflow: hidden; }
+    .slide { display: none; width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+    .slide.active { display: flex; }
+    .glass { background: rgba(30,41,59,0.6); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.07); border-radius: 16px; }
+    .glass-sm { background: rgba(30,41,59,0.4); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; }
+    .gradient-text { background: linear-gradient(135deg, #3B82F6, #F97316); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .gradient-text-green { background: linear-gradient(135deg, #10B981, #3B82F6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .gradient-text-purple { background: linear-gradient(135deg, #8B5CF6, #EC4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .glow-blue { box-shadow: 0 0 40px rgba(59,130,246,0.12); }
+    .glow-orange { box-shadow: 0 0 40px rgba(249,115,22,0.12); }
+    .glow-green { box-shadow: 0 0 40px rgba(16,185,129,0.12); }
+    .glow-purple { box-shadow: 0 0 40px rgba(139,92,246,0.12); }
+    .nav-btn { transition: all 0.3s ease; }
+    .nav-btn:hover { transform: scale(1.05); }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+    .animate-in { animation: fadeInUp 0.6s ease-out forwards; }
+    .delay-1 { animation-delay: 0.1s; opacity: 0; }
+    .delay-2 { animation-delay: 0.2s; opacity: 0; }
+    .delay-3 { animation-delay: 0.3s; opacity: 0; }
+    .delay-4 { animation-delay: 0.4s; opacity: 0; }
+    .delay-5 { animation-delay: 0.5s; opacity: 0; }
+    .delay-6 { animation-delay: 0.6s; opacity: 0; }
+    .bg-mesh { background-image: radial-gradient(at 20% 80%, rgba(59,130,246,0.06) 0, transparent 50%), radial-gradient(at 80% 20%, rgba(249,115,22,0.06) 0, transparent 50%), radial-gradient(at 50% 50%, rgba(16,185,129,0.04) 0, transparent 50%); }
+    .progress-bar { position: fixed; top: 0; left: 0; height: 3px; background: linear-gradient(90deg, #3B82F6, #F97316); z-index: 100; transition: width 0.4s ease; }
+    .tag { display: inline-block; padding: 2px 10px; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
+    .pillar-card { transition: all 0.3s ease; }
+    .pillar-card:hover { transform: translateY(-4px); }
+    code.inline { background: rgba(59,130,246,0.15); color: #60A5FA; padding: 1px 6px; border-radius: 4px; font-size: 0.8em; font-family: 'JetBrains Mono', monospace; }
+    .code-block { background: rgba(11,15,26,0.85); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px 16px; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; line-height: 1.6; color: #94a3b8; overflow-x: auto; }
+    #flow-container { width: 100%; height: 100%; padding: 84px 40px 88px; box-sizing: border-box; }
+    .arch-line { position: absolute; border-left: 2px dashed rgba(59,130,246,0.2); }
+  </style>
+</head>
+<body>
+  <div class="progress-bar" id="progressBar" style="width: 0%"></div>
+
+  <!-- ====== SLIDE 0: TITLE ====== -->
+  <div class="slide active bg-mesh" id="slide-0" data-slide="0">
+    <div class="absolute inset-0 flex flex-col items-center justify-center px-8">
+      <div class="absolute top-20 left-20 w-32 h-32 rounded-full bg-primary/10 blur-3xl"></div>
+      <div class="absolute bottom-20 right-20 w-40 h-40 rounded-full bg-secondary/10 blur-3xl"></div>
+      <div class="absolute top-1/3 right-1/4 w-24 h-24 rounded-full bg-accent/8 blur-2xl"></div>
+
+      <div class="animate-in delay-1 mb-4">
+        <span class="tag bg-primary/20 text-primary border border-primary/30">Browser-Native · Agentic AI</span>
+      </div>
+      <h1 class="font-heading text-5xl md:text-7xl font-bold text-center leading-tight animate-in delay-2 max-w-5xl">
+        <span class="gradient-text">AgentGoRound</span>
+      </h1>
+      <p class="text-xl md:text-2xl text-white/80 mt-4 animate-in delay-2 font-heading font-semibold">
+        純瀏覽器環境的 Agentic AI 平台
+      </p>
+      <p class="text-base text-slate-400 mt-6 max-w-2xl text-center animate-in delay-3">
+        在前端賦予任意 LLM 完整的 Agent 能力<br/>
+        Doc · MCP · Built-in Tools · Skill · Test Cases — 零後端、一鍵部署
+      </p>
+      <div class="flex items-center gap-6 mt-8 animate-in delay-4">
+        <div class="flex items-center gap-2 text-sm text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+          Browser-First
+        </div>
+        <div class="flex items-center gap-2 text-sm text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          Prompt-Based Tool Use
+        </div>
+        <div class="flex items-center gap-2 text-sm text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+          Any LLM
+        </div>
+      </div>
+      <button onclick="goToSlide(1)" class="mt-10 nav-btn px-8 py-3 rounded-full bg-gradient-to-r from-primary to-secondary text-white font-semibold text-sm hover:shadow-lg hover:shadow-primary/25 animate-in delay-5">
+        開始探索 →
+      </button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 1: MASTER NAVIGATION (React Flow) ====== -->
+  <div class="slide bg-mesh" id="slide-1" data-slide="1">
+    <div class="absolute top-6 left-8 z-10">
+      <h2 class="font-heading text-xl font-bold text-white/80">導覽地圖</h2>
+      <p class="text-xs text-slate-500 mt-1">點擊節點跳轉至對應章節</p>
+    </div>
+    <div id="flow-container"></div>
+    <div class="absolute bottom-6 right-8 z-10 flex gap-3">
+      <button onclick="goToSlide(0)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 封面</button>
+      <button onclick="goToSlide(2)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">開始 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 2: 為什麼是純前端？ ====== -->
+  <div class="slide bg-mesh" id="slide-2" data-slide="2">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-12">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-primary/20 text-primary border border-primary/30 animate-in delay-1">核心理念</span>
+        <h2 class="font-heading text-4xl font-bold mt-4 animate-in delay-1">
+          純前端的 <span class="gradient-text">Agentic 平台</span>
+        </h2>
+        <p class="text-slate-400 mt-4 max-w-3xl text-base leading-relaxed animate-in delay-2">
+          AgentGoRound 在瀏覽器中直接與 LLM API 溝通，<strong class="text-white">零後端依賴</strong>。
+          所有狀態存於 localStorage / IndexedDB，可部署至 GitHub Pages。
+        </p>
+
+        <!-- Architecture diagram -->
+        <div class="glass p-6 mt-6 glow-blue animate-in delay-2">
+          <div class="grid grid-cols-5 gap-3 items-center text-center">
+            <div class="glass-sm p-3 rounded-xl">
+              <div class="text-2xl mb-1">👤</div>
+              <div class="text-xs text-slate-400 font-semibold">使用者</div>
+            </div>
+            <div class="text-primary text-xl">→</div>
+            <div class="glass-sm p-3 rounded-xl border border-primary/30">
+              <div class="text-2xl mb-1">🌐</div>
+              <div class="text-xs text-primary font-bold">Browser Runtime</div>
+              <div class="text-[10px] text-slate-500 mt-1">React + Vite + TS</div>
+            </div>
+            <div class="text-secondary text-xl">→</div>
+            <div class="glass-sm p-3 rounded-xl">
+              <div class="text-2xl mb-1">🤖</div>
+              <div class="text-xs text-slate-400 font-semibold">LLM API (CORS)</div>
+              <div class="text-[10px] text-slate-500 mt-1">OpenAI / Groq / ...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Key capabilities grid -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6 animate-in delay-3">
+          <div class="glass-sm p-4 text-center pillar-card">
+            <div class="text-xl mb-2">📄</div>
+            <div class="font-heading font-semibold text-xs text-primary">Doc</div>
+            <div class="text-[10px] text-slate-500 mt-1">上下文注入</div>
+          </div>
+          <div class="glass-sm p-4 text-center pillar-card">
+            <div class="text-xl mb-2">🔌</div>
+            <div class="font-heading font-semibold text-xs text-secondary">MCP Tools</div>
+            <div class="text-[10px] text-slate-500 mt-1">外部工具整合</div>
+          </div>
+          <div class="glass-sm p-4 text-center pillar-card">
+            <div class="text-xl mb-2">⚡</div>
+            <div class="font-heading font-semibold text-xs text-accent">Built-in Tools</div>
+            <div class="text-[10px] text-slate-500 mt-1">JS 執行 + 渲染</div>
+          </div>
+          <div class="glass-sm p-4 text-center pillar-card">
+            <div class="text-xl mb-2">🧩</div>
+            <div class="font-heading font-semibold text-xs text-purple">Skills</div>
+            <div class="text-[10px] text-slate-500 mt-1">自動化工作流</div>
+          </div>
+          <div class="glass-sm p-4 text-center pillar-card">
+            <div class="text-xl mb-2">🧪</div>
+            <div class="font-heading font-semibold text-xs text-pink">Test Cases</div>
+            <div class="text-[10px] text-slate-500 mt-1">可靠性驗證</div>
+          </div>
+        </div>
+
+        <!-- Key insight -->
+        <div class="mt-6 animate-in delay-4 flex items-center gap-3">
+          <div class="w-1 h-12 bg-gradient-to-b from-primary to-secondary rounded-full"></div>
+          <p class="text-sm text-slate-400 italic">所有 agentic 能力都透過<strong class="text-white"> Prompt 設計</strong>實現 — 不依賴 LLM 原生的 function calling，任何能回傳 JSON 的模型都能使用。</p>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(1)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 導覽</button>
+      <button onclick="goToSlide(3)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 3: Doc 功能 ====== -->
+  <div class="slide bg-mesh" id="slide-3" data-slide="3">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-12">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-primary/20 text-primary border border-primary/30 animate-in delay-1">功能一</span>
+        <h2 class="font-heading text-4xl font-bold mt-4 animate-in delay-1">
+          <span class="gradient-text">Doc</span> — 知識注入
+        </h2>
+        <p class="text-slate-400 mt-3 max-w-3xl text-sm leading-relaxed animate-in delay-2">
+          類似 <code class="inline">AGENTS.md</code> 的概念 — 為 Agent 注入專業知識、角色設定、團隊慣例。
+        </p>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <!-- Left: How it works -->
+          <div class="animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🔄 運作機制</h3>
+            <div class="space-y-3">
+              <div class="glass-sm p-4 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-bold text-xs shrink-0">1</div>
+                <div>
+                  <div class="text-sm text-white/90 font-semibold">創建 Doc</div>
+                  <div class="text-xs text-slate-500 mt-1">在 DocsPanel 中撰寫 Markdown 文件<br/>存於 IndexedDB（<code class="inline">agr_docs_db</code>）</div>
+                </div>
+              </div>
+              <div class="glass-sm p-4 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-bold text-xs shrink-0">2</div>
+                <div>
+                  <div class="text-sm text-white/90 font-semibold">綁定 Agent</div>
+                  <div class="text-xs text-slate-500 mt-1">Agent 啟用 <code class="inline">enableDocs</code> + 指定 <code class="inline">allowedDocIds</code></div>
+                </div>
+              </div>
+              <div class="glass-sm p-4 flex items-start gap-3">
+                <div class="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-bold text-xs shrink-0">3</div>
+                <div>
+                  <div class="text-sm text-white/90 font-semibold">System Prompt 注入</div>
+                  <div class="text-xs text-slate-500 mt-1">每次對話時直接將 Doc 內容注入到 system prompt 中<br/><span class="text-primary">直接注入 MVP，非 RAG 方案</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Analogy & use cases -->
+          <div class="animate-in delay-3">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">💡 類比與用途</h3>
+            <div class="glass p-5 glow-blue">
+              <div class="flex items-start gap-3 mb-4">
+                <div class="text-2xl">📋</div>
+                <div>
+                  <div class="text-sm text-primary font-semibold">AGENTS.md 的瀏覽器版本</div>
+                  <p class="text-xs text-slate-400 mt-1">
+                    把 Coding Agent 用的 AGENTS.md 概念搬到瀏覽器裡 — 用自然語言為 AI 定義行為模式。
+                  </p>
+                </div>
+              </div>
+              <div class="space-y-2.5 mt-4 border-t border-white/5 pt-4">
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-primary">•</span> <strong class="text-white/80">角色設定</strong>：「你是個說話結尾都會喵喵叫的助手」
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-primary">•</span> <strong class="text-white/80">團隊規範</strong>：程式碼風格、PR 審查清單
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-primary">•</span> <strong class="text-white/80">專業知識</strong>：產品文檔、API 規格
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-primary">•</span> <strong class="text-white/80">工作流程</strong>：部署 SOP、故障排除指南
+                </div>
+              </div>
+            </div>
+
+            <div class="glass-sm p-4 mt-4 border-l-2 border-primary">
+              <p class="text-xs text-slate-400"><strong class="text-white/80">儲存</strong>：每份 Doc 有 <code class="inline">id</code>、<code class="inline">title</code>、<code class="inline">content</code>、<code class="inline">updatedAt</code>。<br/>支援 <code class="inline">listDocs()</code>、<code class="inline">upsertDoc()</code>、<code class="inline">deleteDoc()</code> 完整 CRUD。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(2)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(4)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 4: MCP & Prompt-Based Tool Use ====== -->
+  <div class="slide bg-mesh" id="slide-4" data-slide="4">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-12">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-secondary/20 text-secondary border border-secondary/30 animate-in delay-1">功能二</span>
+        <h2 class="font-heading text-3xl font-bold mt-4 animate-in delay-1">
+          <span class="gradient-text">MCP & Built-in Tools</span> — Prompt 驅動的 Tool Use
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <!-- Left: How Tool Decision Works -->
+          <div class="animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🧠 Prompt-Based Tool Decision</h3>
+            <p class="text-xs text-slate-400 mb-4">不依賴 LLM 原生 function calling — 任何能回傳 JSON 的模型都能使用工具。</p>
+
+            <!-- Decision flow -->
+            <div class="space-y-2.5">
+              <div class="glass-sm p-3 border-l-2 border-primary">
+                <div class="text-xs font-semibold text-primary">Step 1：構建 Tool Decision Prompt</div>
+                <div class="text-xs text-slate-400 mt-1">系統將所有可用工具打包成 JSON 描述，附帶中英雙語模板</div>
+              </div>
+              <div class="glass-sm p-3 border-l-2 border-secondary">
+                <div class="text-xs font-semibold text-secondary">Step 2：LLM 回傳判斷</div>
+                <div class="code-block !p-2 !text-[10px] mt-1">
+                  {"type":"no_tool"}<br/>
+                  {"type":"mcp_call","serverId":"...","tool":"...","input":{...}}<br/>
+                  {"type":"builtin_tool_call","tool":"tool_name","input":{...}}
+                </div>
+              </div>
+              <div class="glass-sm p-3 border-l-2 border-accent">
+                <div class="text-xs font-semibold text-accent">Step 3：執行並注入結果</div>
+                <div class="text-xs text-slate-400 mt-1">工具結果經過摘要處理後注入下一輪 prompt</div>
+              </div>
+            </div>
+
+            <div class="glass-sm p-3 mt-4 border-l-2 border-warning">
+              <p class="text-xs text-slate-400">💡 這是核心創新：<strong class="text-white">無需 native function-calling 支援</strong>，只要模型能輸出 JSON 即可使用工具。</p>
+            </div>
+          </div>
+
+          <!-- Right: MCP + Built-in -->
+          <div class="space-y-4 animate-in delay-3">
+            <!-- MCP -->
+            <div>
+              <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🔌 MCP (Model Context Protocol)</h3>
+              <div class="glass p-4 glow-orange">
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="glass-sm p-3">
+                    <div class="text-xs font-semibold text-secondary mb-1">SSE Client</div>
+                    <div class="text-xs text-slate-400">EventSource 連接 MCP Server<br/>POST RPC 呼叫工具</div>
+                  </div>
+                  <div class="glass-sm p-3">
+                    <div class="text-xs font-semibold text-secondary mb-1">Tool Registry</div>
+                    <div class="text-xs text-slate-400"><code class="inline">tools/list</code> 取得工具列表<br/><code class="inline">tools/call</code> 執行工具</div>
+                  </div>
+                </div>
+                <div class="text-xs text-slate-500 mt-3 italic">支援 timeout 設定 · 心跳探測 · 健康檢查</div>
+              </div>
+            </div>
+
+            <!-- Built-in Tools -->
+            <div>
+              <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">⚡ Built-in Tools</h3>
+              <div class="glass p-4 glow-green">
+                <div class="space-y-2.5">
+                  <div class="glass-sm p-3 flex items-start gap-3">
+                    <div class="text-lg">🛠️</div>
+                    <div>
+                      <div class="text-xs font-semibold text-accent">自訂 JS 工具</div>
+                      <div class="text-xs text-slate-400 mt-0.5"><code class="inline">new Function()</code> 執行 — 完整存取 window / document / DOM</div>
+                    </div>
+                  </div>
+                  <div class="glass-sm p-3 flex items-start gap-3">
+                    <div class="text-lg">🔧</div>
+                    <div>
+                      <div class="text-xs font-semibold text-accent">系統內建工具</div>
+                      <div class="text-xs text-slate-400 mt-0.5">get_user_profile · pick_best_agent · request_user_confirmation</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(3)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(5)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 5: Built-in Tools — 即時前端渲染 ====== -->
+  <div class="slide bg-mesh" id="slide-5" data-slide="5">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-12">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-accent/20 text-accent border border-accent/30 animate-in delay-1">功能三</span>
+        <h2 class="font-heading text-3xl font-bold mt-4 animate-in delay-1">
+          Built-in Tools — <span class="gradient-text-green">即時前端渲染</span>
+        </h2>
+        <p class="text-slate-400 mt-3 max-w-3xl text-sm leading-relaxed animate-in delay-2">
+          跳脫沙箱限制，用 <code class="inline">new Function()</code> 在瀏覽器中直接操作 DOM — LLM 可以即時渲染 UI。
+        </p>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <!-- Left: Execution model -->
+          <div class="animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">⚙️ 執行模型</h3>
+            <div class="glass p-5 glow-green">
+              <div class="code-block !text-[10px]">
+<span class="text-accent">// runBuiltInScriptTool.ts</span><br/>
+<span class="text-primary">const</span> fn = <span class="text-warning">new Function</span>(<br/>
+&nbsp;&nbsp;<span class="text-slate-500">'helpers'</span>, <span class="text-slate-500">'input'</span>,<br/>
+&nbsp;&nbsp;tool.code <span class="text-slate-600">// 使用者自訂的 JS 代碼</span><br/>
+);<br/>
+<span class="text-primary">const</span> result = <span class="text-warning">await</span> fn(helpers, parsedInput);<br/><br/>
+<span class="text-accent">// helpers 物件提供：</span><br/>
+helpers.<span class="text-secondary">system</span> → userProfile, agentDir, confirm<br/>
+helpers.<span class="text-secondary">ui</span> → dashboard (浮動面板系統)
+              </div>
+
+              <div class="mt-4 space-y-2">
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-accent">✓</span> 完整存取 <code class="inline">window</code> / <code class="inline">document</code>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-accent">✓</span> 可操作 DOM、觸發 <code class="inline">alert()</code>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-400">
+                  <span class="text-accent">✓</span> 非沙箱 — 與主頁面同執行環境
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Tool Dashboard -->
+          <div class="animate-in delay-3">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🖥️ Tool Dashboard 即時渲染</h3>
+            <div class="glass p-5 glow-blue">
+              <div class="flex items-start gap-3 mb-4">
+                <div class="text-2xl">🎨</div>
+                <div>
+                  <div class="text-xs font-semibold text-primary">createToolDashboardHelpers()</div>
+                  <p class="text-xs text-slate-400 mt-1">建立浮動 DOM 面板系統，工具可以即時渲染 UI 到畫面上</p>
+                </div>
+              </div>
+
+              <div class="code-block !text-[10px] mt-3">
+<span class="text-accent">// 工具代碼範例（動態時鐘）</span><br/>
+<span class="text-primary">const</span> { container } = helpers.ui.dashboard<br/>
+&nbsp;&nbsp;.show({ key: <span class="text-warning">'clock'</span>, title: <span class="text-warning">'時鐘'</span> });<br/><br/>
+<span class="text-accent">// 直接操作 DOM 渲染 SVG 時鐘</span><br/>
+container.innerHTML = <span class="text-warning">`&lt;svg&gt;...&lt;/svg&gt;`</span>;<br/>
+<span class="text-primary">setInterval</span>(() =&gt; updateClock(), 1000);
+              </div>
+
+              <div class="mt-4 space-y-2">
+                <div class="glass-sm p-3 flex items-center gap-2">
+                  <span class="tag bg-accent/20 text-accent">關鍵</span>
+                  <span class="text-xs text-slate-400">繞過 React 虛擬 DOM — 工具直接操作真實 DOM</span>
+                </div>
+                <div class="glass-sm p-3 flex items-center gap-2">
+                  <span class="tag bg-primary/20 text-primary">單例</span>
+                  <span class="text-xs text-slate-400"><code class="inline">window.__agrToolDashboardRegistry</code> 管理面板生命週期</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(4)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(6)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 6: Skill — 單輪模式 ====== -->
+  <div class="slide bg-mesh" id="slide-6" data-slide="6">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-12">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-purple/20 text-purple border border-purple/30 animate-in delay-1">功能四 · 單輪</span>
+        <h2 class="font-heading text-3xl font-bold mt-4 animate-in delay-1">
+          <span class="gradient-text-purple">Skill</span> — 單輪模式（Single-Turn）
+        </h2>
+        <p class="text-slate-400 mt-3 max-w-3xl text-sm leading-relaxed animate-in delay-2">
+          輕量級技能執行：載入 Skill → 注入 system prompt → 取得答案 → 可選驗證/修正。
+        </p>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <!-- Left: Skill package -->
+          <div class="animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">📦 Skill 套件格式</h3>
+            <div class="code-block">
+<span class="text-purple">my-skill/</span><br/>
+├── <span class="text-warning">SKILL.md</span> <span class="text-slate-600">(必需)</span><br/>
+│&nbsp;&nbsp; ├── YAML 前置元數據<br/>
+│&nbsp;&nbsp; │&nbsp;&nbsp; ├── <span class="text-accent">name, description</span> <span class="text-slate-600">(觸發匹配)</span><br/>
+│&nbsp;&nbsp; │&nbsp;&nbsp; └── <span class="text-accent">skill-config JSON</span> <span class="text-slate-600">(workflow, input)</span><br/>
+│&nbsp;&nbsp; └── Markdown 指令<br/>
+├── <span class="text-primary">references/</span> <span class="text-slate-600">按需載入的參考文檔</span><br/>
+├── <span class="text-primary">scripts/</span> <span class="text-slate-600">（v1 僅儲存）</span><br/>
+└── <span class="text-primary">assets/</span> <span class="text-slate-600">文字模板，按需載入</span>
+            </div>
+
+            <!-- Decision flow -->
+            <h3 class="font-heading text-sm font-semibold text-white/80 mt-4 mb-3">🔍 Skill 自動觸發</h3>
+            <div class="space-y-2">
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <span class="w-6 h-6 rounded-md bg-purple/20 flex items-center justify-center text-purple text-xs font-bold">1</span>
+                <div class="text-xs text-slate-400"><code class="inline">buildSkillSessionSnapshot()</code> — 從 agent 設定取得可用 Skill 列表</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <span class="w-6 h-6 rounded-md bg-purple/20 flex items-center justify-center text-purple text-xs font-bold">2</span>
+                <div class="text-xs text-slate-400"><code class="inline">buildSkillDecisionPrompt()</code> — 詢問 LLM：該載入哪個 Skill？</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <span class="w-6 h-6 rounded-md bg-purple/20 flex items-center justify-center text-purple text-xs font-bold">3</span>
+                <div class="text-xs text-slate-400"><code class="inline">loadSkillRuntime()</code> — 解析 refs/assets → 構建 system prompt</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Single-turn flow -->
+          <div class="animate-in delay-3">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🔄 單輪執行流程</h3>
+            <div class="glass p-5 glow-purple">
+              <!-- Visual flow -->
+              <div class="space-y-3">
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-purple/20 flex items-center justify-center text-purple text-sm">📥</div>
+                  <div class="flex-1 glass-sm p-3">
+                    <div class="text-xs font-semibold text-purple">載入 Skill</div>
+                    <div class="text-xs text-slate-500">SKILL.md + references + assets → system prompt</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center text-primary text-sm">🛠️</div>
+                  <div class="flex-1 glass-sm p-3">
+                    <div class="text-xs font-semibold text-primary">Tool Decision（可選）</div>
+                    <div class="text-xs text-slate-500">在 Skill 範圍內檢查是否需要工具</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-accent/20 flex items-center justify-center text-accent text-sm">💬</div>
+                  <div class="flex-1 glass-sm p-3">
+                    <div class="text-xs font-semibold text-accent">LLM 回答</div>
+                    <div class="text-xs text-slate-500">使用 Skill 上下文生成回答</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-warning/20 flex items-center justify-center text-warning text-sm">✅</div>
+                  <div class="flex-1 glass-sm p-3">
+                    <div class="text-xs font-semibold text-warning">Verify & Refine（可選）</div>
+                    <div class="text-xs text-slate-500"><code class="inline">buildSkillVerifyPrompt()</code> → 驗證器 → 若需修正 → 重寫</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- WorkflowPolicy -->
+            <div class="glass-sm p-4 mt-4 border-l-2 border-purple">
+              <div class="text-xs font-semibold text-purple mb-1">SkillWorkflowPolicy 控制</div>
+              <div class="text-xs text-slate-400">
+                <code class="inline">useSkillDocs</code> · <code class="inline">useAgentDocs</code> · <code class="inline">allowMcp</code> · <code class="inline">allowBuiltInTools</code> · <code class="inline">bootstrapAction</code>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(5)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(7)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 7: Skill — 多輪模式 ====== -->
+  <div class="slide bg-mesh" id="slide-7" data-slide="7">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-10">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-purple/20 text-purple border border-purple/30 animate-in delay-1">功能四 · 多輪</span>
+        <h2 class="font-heading text-3xl font-bold mt-3 animate-in delay-1">
+          <span class="gradient-text-purple">Skill</span> — 多輪模式（Multi-Turn）
+        </h2>
+        <p class="text-slate-400 mt-2 max-w-3xl text-sm animate-in delay-2">
+          核心創新 — 基於狀態機的自主 Agent 執行迴圈，具備計畫、觀察、行動、完成閘門。
+        </p>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-5">
+          <!-- Phase state machine -->
+          <div class="lg:col-span-2 animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🔄 Phase State Machine</h3>
+            <div class="glass p-4 glow-purple">
+              <div class="grid grid-cols-5 gap-2 text-center">
+                <div class="glass-sm p-2 rounded-lg border border-purple/30">
+                  <div class="text-[10px] font-bold text-purple">skill_load</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-primary/30">
+                  <div class="text-[10px] font-bold text-primary">bootstrap_plan</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-secondary/30">
+                  <div class="text-[10px] font-bold text-secondary">observe</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-accent/30">
+                  <div class="text-[10px] font-bold text-accent">plan_next_step</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-warning/30">
+                  <div class="text-[10px] font-bold text-warning">act</div>
+                </div>
+              </div>
+              <div class="flex justify-center my-2">
+                <div class="text-slate-600 text-xs">↓ 循環 (toolLoopMax) ↓</div>
+              </div>
+              <div class="grid grid-cols-4 gap-2 text-center">
+                <div class="glass-sm p-2 rounded-lg border border-info/30">
+                  <div class="text-[10px] font-bold text-info">sync_state</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-pink/30">
+                  <div class="text-[10px] font-bold text-pink">completion_gate</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-danger/30">
+                  <div class="text-[10px] font-bold text-danger">manual_gate</div>
+                </div>
+                <div class="glass-sm p-2 rounded-lg border border-success/30">
+                  <div class="text-[10px] font-bold text-success">final_answer</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Step Decision -->
+            <h3 class="font-heading text-sm font-semibold text-white/80 mt-4 mb-2">🧠 Planner 判斷</h3>
+            <div class="grid grid-cols-4 gap-3">
+              <div class="glass-sm p-3 text-center pillar-card">
+                <div class="text-lg mb-1">👁️</div>
+                <div class="text-xs font-bold text-secondary">observe</div>
+                <div class="text-[10px] text-slate-500 mt-1">觀察環境<br/>（瀏覽器快照）</div>
+              </div>
+              <div class="glass-sm p-3 text-center pillar-card">
+                <div class="text-lg mb-1">⚡</div>
+                <div class="text-xs font-bold text-accent">act</div>
+                <div class="text-[10px] text-slate-500 mt-1">執行工具<br/>（MCP / Built-in）</div>
+              </div>
+              <div class="glass-sm p-3 text-center pillar-card">
+                <div class="text-lg mb-1">❓</div>
+                <div class="text-xs font-bold text-warning">ask_user</div>
+                <div class="text-[10px] text-slate-500 mt-1">暫停並<br/>請求用戶輸入</div>
+              </div>
+              <div class="glass-sm p-3 text-center pillar-card">
+                <div class="text-lg mb-1">🏁</div>
+                <div class="text-xs font-bold text-success">finish</div>
+                <div class="text-[10px] text-slate-500 mt-1">進入<br/>完成閘門</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Constraints + State -->
+          <div class="animate-in delay-3 space-y-4">
+            <div>
+              <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🛡️ 約束系統</h3>
+              <div class="glass-sm p-4 space-y-2.5">
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-danger mt-0.5">▸</span>
+                  <span><strong class="text-white/80">act → 必須 observe</strong><br/>行動後強制觀察結果</span>
+                </div>
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-danger mt-0.5">▸</span>
+                  <span><strong class="text-white/80">重複觀察 → 必須 act</strong><br/>連續相同觀察強制行動</span>
+                </div>
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-danger mt-0.5">▸</span>
+                  <span><strong class="text-white/80">迴圈偵測</strong><br/>追蹤 observation + action signature</span>
+                </div>
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-danger mt-0.5">▸</span>
+                  <span><strong class="text-white/80">阻擋偵測</strong><br/>CAPTCHA / 登入 / 不可用</span>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">📊 SkillRunState</h3>
+              <div class="glass-sm p-4">
+                <div class="code-block !p-2 !text-[9px]">
+phase, stepIndex<br/>
+goal, todo[]<br/>
+manualGate<br/>
+completionStatus<br/>
+recentObservationSigs[]<br/>
+recentActionSigs[]<br/>
+lastBrowserObservation<br/>
+preferredMcpServerId
+                </div>
+                <div class="text-xs text-slate-500 mt-2 italic">純函式管理狀態 — 不可變轉換</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(6)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(8)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 8: Test Cases ====== -->
+  <div class="slide bg-mesh" id="slide-8" data-slide="8">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-12">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-pink/20 text-pink border border-pink/30 animate-in delay-1">功能五</span>
+        <h2 class="font-heading text-3xl font-bold mt-4 animate-in delay-1">
+          <span class="gradient-text-purple">Tutorial / Test Cases</span> — 雙重用途
+        </h2>
+        <p class="text-slate-400 mt-3 max-w-3xl text-sm leading-relaxed animate-in delay-2">
+          同一份 YAML 定義同時服務 <strong class="text-white">人類引導教學</strong> 與 <strong class="text-white">自動化測試</strong> — 教學即測試，測試即案例。
+        </p>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <!-- Left: Tutorial scenarios -->
+          <div class="animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">📚 6 個教學 / 測試案例</h3>
+            <div class="space-y-2.5">
+              <div class="glass-sm p-3 flex items-center gap-3 pillar-card">
+                <div class="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-bold text-[10px]">1</div>
+                <div>
+                  <div class="text-xs font-semibold text-white/90">First Agent Chat</div>
+                  <div class="text-[10px] text-slate-500">建立 Agent、Load Balancer、第一次對話</div>
+                </div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3 pillar-card">
+                <div class="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary font-bold text-[10px]">2</div>
+                <div>
+                  <div class="text-xs font-semibold text-white/90">Docs Persona Chat</div>
+                  <div class="text-[10px] text-slate-500">Doc 注入 → 角色行為驗證</div>
+                </div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3 pillar-card">
+                <div class="w-7 h-7 rounded-lg bg-accent/20 flex items-center justify-center text-accent font-bold text-[10px]">3</div>
+                <div>
+                  <div class="text-xs font-semibold text-white/90">Built-in Tools Chat</div>
+                  <div class="text-[10px] text-slate-500">JS 工具建立、執行測試、Dashboard 渲染</div>
+                </div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3 pillar-card">
+                <div class="w-7 h-7 rounded-lg bg-purple/20 flex items-center justify-center text-purple font-bold text-[10px]">4</div>
+                <div>
+                  <div class="text-xs font-semibold text-white/90">Sequential Skill Chat</div>
+                  <div class="text-[10px] text-slate-500">單輪 Skill（含 references & assets）</div>
+                </div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3 pillar-card">
+                <div class="w-7 h-7 rounded-lg bg-secondary/20 flex items-center justify-center text-secondary font-bold text-[10px]">5</div>
+                <div>
+                  <div class="text-xs font-semibold text-white/90">Agent Browser MCP</div>
+                  <div class="text-[10px] text-slate-500">MCP 瀏覽器 Agent 讀取 GitHub Trending</div>
+                </div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3 pillar-card">
+                <div class="w-7 h-7 rounded-lg bg-pink/20 flex items-center justify-center text-pink font-bold text-[10px]">6</div>
+                <div>
+                  <div class="text-xs font-semibold text-white/90">ChatGPT Browser Skill</div>
+                  <div class="text-[10px] text-slate-500">多輪 Skill + 瀏覽器自動化</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: How testing works -->
+          <div class="animate-in delay-3">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🧪 自動化測試機制</h3>
+            <div class="glass p-5 glow-purple">
+              <div class="code-block !text-[10px]">
+<span class="text-purple"># YAML Tutorial Step</span><br/>
+<span class="text-accent">- behavior:</span> first_chat_skill_references<br/>
+&nbsp;&nbsp;<span class="text-accent">automation:</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-secondary">composerSeed:</span> "用這份客製化報告..."<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-secondary">skillExecutionMode:</span> single_turn<br/>
+&nbsp;&nbsp;<span class="text-accent">expect:</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">assistantContentIncludes:</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- "投資組合"<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">skillTraceIncludes:</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- "references"<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">requireSkillTodo:</span> true
+              </div>
+
+              <div class="mt-4 border-t border-white/5 pt-4 space-y-2.5">
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-pink">▸</span>
+                  <span><strong class="text-white/80">evaluateTutorialStep()</strong><br/>比對真實 app 狀態與 YAML 預期</span>
+                </div>
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-pink">▸</span>
+                  <span><strong class="text-white/80">expect 斷言</strong><br/>assistantContentIncludes · skillTraceIncludes · requireSkillTodo · requireSkillTodoProgress</span>
+                </div>
+                <div class="flex items-start gap-2 text-xs text-slate-400">
+                  <span class="text-pink">▸</span>
+                  <span><strong class="text-white/80">Snapshot 管理</strong><br/>captureTutorialWorkspaceSnapshot → restoreTutorialWorkspaceSnapshot</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="glass-sm p-4 mt-4 border-l-2 border-pink">
+              <p class="text-xs text-slate-400 italic">💡 <strong class="text-white/80">教學即測試</strong>：同一份 YAML 驅動 UI 引導教學 + npm 自動化煙霧測試 — 一魚兩吃。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(7)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(9)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 9: 架構全景 ====== -->
+  <div class="slide bg-mesh" id="slide-9" data-slide="9">
+    <div class="absolute inset-0 flex flex-col justify-center px-16 py-10">
+      <div class="max-w-6xl mx-auto w-full">
+        <span class="tag bg-info/20 text-info border border-info/30 animate-in delay-1">架構</span>
+        <h2 class="font-heading text-3xl font-bold mt-3 animate-in delay-1">
+          架構全景 <span class="text-slate-500 text-lg font-normal">& Adapter 系統</span>
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-5 mt-5">
+          <!-- Adapter system -->
+          <div class="animate-in delay-2">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🔌 Adapter 適配器</h3>
+            <div class="space-y-3">
+              <div class="glass p-4 glow-blue border-t-2 border-primary pillar-card">
+                <div class="text-xs font-bold text-primary">OpenAICompatAdapter</div>
+                <div class="text-xs text-slate-400 mt-1">標準 /chat/completions SSE<br/>支援 429 自動重試</div>
+              </div>
+              <div class="glass p-4 glow-green border-t-2 border-accent pillar-card">
+                <div class="text-xs font-bold text-accent">ChromePromptAdapter</div>
+                <div class="text-xs text-slate-400 mt-1">Chrome window.ai API<br/>無需 API Key</div>
+              </div>
+              <div class="glass p-4 glow-orange border-t-2 border-secondary pillar-card">
+                <div class="text-xs font-bold text-secondary">CustomAdapter</div>
+                <div class="text-xs text-slate-400 mt-1">Mustache bodyTemplate<br/>JSONPath 萃取回應</div>
+              </div>
+            </div>
+
+            <div class="glass-sm p-3 mt-3 border-l-2 border-primary">
+              <div class="text-[10px] text-slate-400"><code class="inline">AgentAdapter</code> 介面：<code class="inline">detect()</code> + <code class="inline">chat()</code> → <code class="inline">AsyncGenerator&lt;ChatEvent&gt;</code></div>
+            </div>
+          </div>
+
+          <!-- Storage layer -->
+          <div class="animate-in delay-3">
+            <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">💾 Storage Layer</h3>
+            <div class="space-y-2">
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-primary"></div>
+                <div class="text-xs text-slate-400"><strong class="text-white/70">agentStore</strong> — agents (localStorage)</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-secondary"></div>
+                <div class="text-xs text-slate-400"><strong class="text-white/70">builtInToolStore</strong> — JS tools (localStorage)</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-accent"></div>
+                <div class="text-xs text-slate-400"><strong class="text-white/70">settingsStore</strong> — MCP / creds (localStorage)</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-purple"></div>
+                <div class="text-xs text-slate-400"><strong class="text-white/70">chatStore</strong> — messages (IndexedDB)</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-pink"></div>
+                <div class="text-xs text-slate-400"><strong class="text-white/70">docStore</strong> — documents (IndexedDB)</div>
+              </div>
+              <div class="glass-sm p-3 flex items-center gap-3">
+                <div class="w-2 h-2 rounded-full bg-warning"></div>
+                <div class="text-xs text-slate-400"><strong class="text-white/70">skillStore</strong> — skills (IndexedDB×3)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Load Balancer + DataFlow -->
+          <div class="animate-in delay-4 space-y-4">
+            <div>
+              <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">⚖️ Load Balancer</h3>
+              <div class="glass p-4">
+                <div class="space-y-2">
+                  <div class="text-xs text-slate-400">Agent 綁定 <code class="inline">LoadBalancerConfig</code></div>
+                  <div class="text-xs text-slate-400">多個 Instance → 有序 failover</div>
+                  <div class="text-xs text-slate-400">credential × key pool 輪轉</div>
+                  <div class="text-xs text-slate-400">failure → skip → resumeMinute 後重試</div>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="font-heading text-sm font-semibold text-white/80 mb-3">🔄 資料流</h3>
+              <div class="glass p-4 glow-blue">
+                <div class="code-block !p-2 !text-[9px]">
+User → App.tsx<br/>
+&nbsp;&nbsp;→ Skill Decision (LLM)<br/>
+&nbsp;&nbsp;→ Load Skill Runtime<br/>
+&nbsp;&nbsp;→ Tool Decision (LLM)<br/>
+&nbsp;&nbsp;→ MCP / Built-in Execute<br/>
+&nbsp;&nbsp;→ Result Summary<br/>
+&nbsp;&nbsp;→ Final Answer (LLM)<br/>
+&nbsp;&nbsp;→ ChatPanel (stream)
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(8)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+      <button onclick="goToSlide(10)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">下一頁 →</button>
+    </div>
+  </div>
+
+  <!-- ====== SLIDE 10: 結論 ====== -->
+  <div class="slide bg-mesh" id="slide-10" data-slide="10">
+    <div class="absolute inset-0 flex flex-col items-center justify-center px-16 py-12">
+      <div class="absolute top-1/4 left-1/4 w-48 h-48 rounded-full bg-primary/8 blur-3xl"></div>
+      <div class="absolute bottom-1/3 right-1/4 w-56 h-56 rounded-full bg-secondary/8 blur-3xl"></div>
+
+      <div class="max-w-4xl text-center">
+        <span class="tag bg-primary/20 text-primary border border-primary/30 animate-in delay-1">Conclusion</span>
+        <h2 class="font-heading text-4xl md:text-5xl font-bold mt-6 animate-in delay-2 leading-tight">
+          瀏覽器即是<br/><span class="gradient-text">Agent 平台</span>
+        </h2>
+        <p class="text-slate-400 mt-6 max-w-2xl mx-auto text-base leading-relaxed animate-in delay-3">
+          AgentGoRound 證明了一件事：不需要後端、不需要原生 function-calling —<br/>
+          純前端 + Prompt 設計就能為任意 LLM 帶來完整的 Agentic 能力。
+        </p>
+
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-8 animate-in delay-4">
+          <div class="glass p-4 text-center glow-blue pillar-card">
+            <div class="text-xl mb-2">📄</div>
+            <div class="font-heading text-xs font-bold text-primary">Doc</div>
+            <div class="text-[10px] text-slate-500">知識 ≈ AGENTS.md</div>
+          </div>
+          <div class="glass p-4 text-center glow-orange pillar-card">
+            <div class="text-xl mb-2">🔌</div>
+            <div class="font-heading text-xs font-bold text-secondary">MCP Tools</div>
+            <div class="text-[10px] text-slate-500">外部工具整合</div>
+          </div>
+          <div class="glass p-4 text-center glow-green pillar-card">
+            <div class="text-xl mb-2">⚡</div>
+            <div class="font-heading text-xs font-bold text-accent">Built-in</div>
+            <div class="text-[10px] text-slate-500">JS + 即時渲染</div>
+          </div>
+          <div class="glass p-4 text-center glow-purple pillar-card">
+            <div class="text-xl mb-2">🧩</div>
+            <div class="font-heading text-xs font-bold text-purple">Skills</div>
+            <div class="text-[10px] text-slate-500">單輪 + 多輪</div>
+          </div>
+          <div class="glass p-4 text-center pillar-card" style="box-shadow: 0 0 40px rgba(236,72,153,0.1)">
+            <div class="text-xl mb-2">🧪</div>
+            <div class="font-heading text-xs font-bold text-pink">Tests</div>
+            <div class="text-[10px] text-slate-500">教學即測試</div>
+          </div>
+        </div>
+
+        <div class="glass-sm p-5 mt-8 animate-in delay-5 max-w-xl mx-auto border-t border-primary/30">
+          <p class="text-sm text-slate-300 italic leading-relaxed">
+            "All you need is a browser and a prompt."
+          </p>
+          <div class="flex items-center justify-center gap-4 mt-3 text-xs text-slate-500">
+            <span>React + Vite + TypeScript</span>
+            <span>·</span>
+            <span>localStorage + IndexedDB</span>
+            <span>·</span>
+            <span>GitHub Pages Ready</span>
+          </div>
+        </div>
+
+        <button onclick="goToSlide(1)" class="mt-8 nav-btn px-6 py-2 rounded-full glass text-sm text-slate-400 hover:text-white animate-in delay-6">
+          ↩ 回到導覽
+        </button>
+      </div>
+    </div>
+    <div class="absolute bottom-6 right-8 flex gap-3">
+      <button onclick="goToSlide(9)" class="nav-btn px-4 py-2 glass-sm text-xs text-slate-400 hover:text-white">← 上一頁</button>
+    </div>
+  </div>
+
+  <!-- ====== React Flow (Master Nav) ====== -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react-dom": "https://esm.sh/react-dom@18.3.1",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+      "reactflow": "https://esm.sh/reactflow@11.11.4?external=react,react-dom",
+      "@reactflow/core": "https://esm.sh/@reactflow/core@11.11.4?external=react,react-dom",
+      "@reactflow/minimap": "https://esm.sh/@reactflow/minimap@11.7.14?external=react,react-dom",
+      "@reactflow/controls": "https://esm.sh/@reactflow/controls@11.2.14?external=react,react-dom",
+      "@reactflow/background": "https://esm.sh/@reactflow/background@11.3.14?external=react,react-dom"
+    }
+  }
+  </script>
+  <link href="https://esm.sh/reactflow@11.11.4/dist/style.css" rel="stylesheet" />
+  <script type="module">
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import ReactFlow, { Background } from 'reactflow';
+
+    const nb = { draggable: false, connectable: false };
+
+    function RootNode({ data }) {
+      return React.createElement('div', {
+        onClick: () => data.onClick && data.onClick(),
+        style: { background: 'linear-gradient(135deg, #3B82F6, #F97316)', borderRadius: '18px', padding: '18px 34px', cursor: 'pointer', boxShadow: '0 0 30px rgba(59,130,246,0.3)', minWidth: '280px', textAlign: 'center' }
+      },
+        React.createElement('div', { style: { color: '#fff', fontFamily: 'Space Grotesk', fontWeight: 700, fontSize: '18px' } }, data.label),
+        data.sub && React.createElement('div', { style: { color: 'rgba(255,255,255,0.7)', fontSize: '12px', marginTop: '6px' } }, data.sub)
+      );
+    }
+
+    function CategoryNode({ data }) {
+      const colors = { blue: '#3B82F6', orange: '#F97316', green: '#10B981', purple: '#8B5CF6', pink: '#EC4899', indigo: '#6366F1' };
+      const c = colors[data.color] || colors.blue;
+      return React.createElement('div', {
+        onClick: () => data.onClick && data.onClick(),
+        style: { background: 'rgba(30,41,59,0.8)', border: `1px solid ${c}40`, borderRadius: '14px', padding: '14px 24px', cursor: 'pointer', boxShadow: `0 0 20px ${c}15`, minWidth: '220px', textAlign: 'center', backdropFilter: 'blur(12px)' }
+      },
+        React.createElement('div', { style: { color: c, fontFamily: 'Space Grotesk', fontWeight: 700, fontSize: '14px' } }, data.label),
+        data.sub && React.createElement('div', { style: { color: '#94a3b8', fontSize: '11px', marginTop: '4px' } }, data.sub)
+      );
+    }
+
+    function SubNode({ data }) {
+      const colors = { blue: '#3B82F6', orange: '#F97316', green: '#10B981', purple: '#8B5CF6', pink: '#EC4899' };
+      const c = colors[data.color] || '#64748b';
+      return React.createElement('div', {
+        onClick: () => data.onClick && data.onClick(),
+        style: { background: 'rgba(30,41,59,0.45)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '12px', padding: '10px 18px', cursor: 'pointer', minWidth: '190px', textAlign: 'center' }
+      },
+        React.createElement('div', { style: { color: c, fontSize: '12px', fontWeight: 600, lineHeight: 1.4 } }, data.label)
+      );
+    }
+
+    const nodeTypes = { root: RootNode, category: CategoryNode, sub: SubNode };
+    const fitViewOptions = { padding: 0.16, maxZoom: 1.18, duration: 350 };
+    window.__agrFlowFitViewOptions = fitViewOptions;
+
+    function FlowChart() {
+      const nav = (s) => () => window.goToSlide(s);
+      const nodes = [
+        { id: 'r', type: 'root', position: { x: 520, y: 30 }, data: { label: 'AgentGoRound', sub: '純瀏覽器 Agentic AI 平台', onClick: nav(0) }, ...nb },
+        { id: 'c0', type: 'category', position: { x: 560, y: 150 }, data: { label: '純前端核心理念', sub: 'Slide 2', color: 'blue', onClick: nav(2) }, ...nb },
+
+        { id: 'c1', type: 'category', position: { x: 60, y: 310 }, data: { label: '📄 Doc 知識注入', sub: 'Slide 3', color: 'blue', onClick: nav(3) }, ...nb },
+        { id: 'c2', type: 'category', position: { x: 395, y: 310 }, data: { label: '🔌 MCP & Tool Use', sub: 'Slide 4', color: 'orange', onClick: nav(4) }, ...nb },
+        { id: 'c3', type: 'category', position: { x: 735, y: 310 }, data: { label: '⚡ Built-in 即時渲染', sub: 'Slide 5', color: 'green', onClick: nav(5) }, ...nb },
+        { id: 'c4', type: 'category', position: { x: 1075, y: 310 }, data: { label: '🧩 Skill 技能', sub: 'Slide 6-7', color: 'purple', onClick: nav(6) }, ...nb },
+
+        { id: 's1', type: 'sub', position: { x: 50, y: 455 }, data: { label: 'AGENTS.md 類比 · 角色設定', color: 'blue', onClick: nav(3) }, ...nb },
+        { id: 's2', type: 'sub', position: { x: 390, y: 455 }, data: { label: 'Prompt-Based JSON · 任意 LLM', color: 'orange', onClick: nav(4) }, ...nb },
+        { id: 's3', type: 'sub', position: { x: 730, y: 455 }, data: { label: 'new Function() · Dashboard', color: 'green', onClick: nav(5) }, ...nb },
+        { id: 's4a', type: 'sub', position: { x: 1060, y: 440 }, data: { label: '單輪: Load → Answer → Verify', color: 'purple', onClick: nav(6) }, ...nb },
+        { id: 's4b', type: 'sub', position: { x: 1060, y: 520 }, data: { label: '多輪: Phase State Machine', color: 'purple', onClick: nav(7) }, ...nb },
+
+        { id: 'c5', type: 'category', position: { x: 230, y: 650 }, data: { label: '🧪 Test Cases', sub: 'Slide 8', color: 'pink', onClick: nav(8) }, ...nb },
+        { id: 'c6', type: 'category', position: { x: 760, y: 650 }, data: { label: '🏗️ 架構全景', sub: 'Slide 9', color: 'indigo', onClick: nav(9) }, ...nb },
+        { id: 'c7', type: 'category', position: { x: 560, y: 810 }, data: { label: '結論', sub: 'Slide 10', color: 'blue', onClick: nav(10) }, ...nb },
+
+        { id: 's5', type: 'sub', position: { x: 180, y: 790 }, data: { label: 'YAML → 教學 + 自動煙霧測試', color: 'pink', onClick: nav(8) }, ...nb },
+        { id: 's6', type: 'sub', position: { x: 760, y: 790 }, data: { label: 'Adapters · Storage · Load Balancer', color: 'indigo', onClick: nav(9) }, ...nb },
+      ];
+      const edges = [
+        { id: 'er-c0', source: 'r', target: 'c0', style: { stroke: '#3B82F6', strokeWidth: 2, opacity: 0.4 } },
+        { id: 'ec0-c1', source: 'c0', target: 'c1', style: { stroke: '#3B82F6', strokeWidth: 1.5, opacity: 0.3 } },
+        { id: 'ec0-c2', source: 'c0', target: 'c2', style: { stroke: '#F97316', strokeWidth: 1.5, opacity: 0.3 } },
+        { id: 'ec0-c3', source: 'c0', target: 'c3', style: { stroke: '#10B981', strokeWidth: 1.5, opacity: 0.3 } },
+        { id: 'ec0-c4', source: 'c0', target: 'c4', style: { stroke: '#8B5CF6', strokeWidth: 1.5, opacity: 0.3 } },
+        { id: 'ec1-s1', source: 'c1', target: 's1', style: { stroke: '#3B82F6', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec2-s2', source: 'c2', target: 's2', style: { stroke: '#F97316', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec3-s3', source: 'c3', target: 's3', style: { stroke: '#10B981', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec4-s4a', source: 'c4', target: 's4a', style: { stroke: '#8B5CF6', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec4-s4b', source: 'c4', target: 's4b', style: { stroke: '#8B5CF6', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec4-c5', source: 'c4', target: 'c5', style: { stroke: '#EC4899', strokeWidth: 1.5, opacity: 0.25 } },
+        { id: 'ec4-c6', source: 'c4', target: 'c6', style: { stroke: '#6366F1', strokeWidth: 1.5, opacity: 0.25 } },
+        { id: 'ec5-s5', source: 'c5', target: 's5', style: { stroke: '#EC4899', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec6-s6', source: 'c6', target: 's6', style: { stroke: '#6366F1', strokeWidth: 1, opacity: 0.2 } },
+        { id: 'ec5-c7', source: 'c5', target: 'c7', style: { stroke: '#3B82F6', strokeWidth: 1.5, opacity: 0.25 } },
+        { id: 'ec6-c7', source: 'c6', target: 'c7', style: { stroke: '#3B82F6', strokeWidth: 1.5, opacity: 0.25 } },
+      ];
+      return React.createElement(ReactFlow, {
+        nodes,
+        edges,
+        nodeTypes,
+        fitView: true,
+        fitViewOptions,
+        minZoom: 0.55,
+        maxZoom: 1.4,
+        zoomOnScroll: false,
+        zoomOnDoubleClick: false,
+        panOnScroll: true,
+        panOnDrag: true,
+        elementsSelectable: false,
+        proOptions: { hideAttribution: true }, defaultEdgeOptions: { type: 'smoothstep' },
+        onInit: (instance) => {
+          window.__agrFlow = instance;
+          setTimeout(() => instance.fitView(fitViewOptions), 80);
+        },
+        style: { background: '#0B0F1A' },
+      }, React.createElement(Background, { color: '#1e293b', gap: 24, size: 1 }));
+    }
+
+    const container = document.getElementById('flow-container');
+    if (container) { createRoot(container).render(React.createElement(FlowChart)); }
+  </script>
+
+  <!-- ====== Navigation JS ====== -->
+  <script>
+    const TOTAL_SLIDES = 11;
+    let currentSlide = 0;
+    function goToSlide(n) {
+      if (n < 0 || n >= TOTAL_SLIDES) return;
+      document.querySelectorAll('.slide').forEach(s => s.classList.remove('active'));
+      const target = document.getElementById('slide-' + n);
+      if (target) {
+        target.classList.add('active');
+        currentSlide = n;
+        document.getElementById('progressBar').style.width = ((n / (TOTAL_SLIDES - 1)) * 100) + '%';
+        if (n === 1 && window.__agrFlow) {
+          setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+            window.__agrFlow.fitView(window.__agrFlowFitViewOptions || { padding: 0.16, maxZoom: 1.18, duration: 350 });
+          }, 80);
+        }
+      }
+    }
+    window.goToSlide = goToSlide;
+    document.addEventListener('keydown', e => {
+      if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); goToSlide(currentSlide + 1); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); goToSlide(currentSlide - 1); }
+      if (e.key === 'Home') { e.preventDefault(); goToSlide(0); }
+      if (e.key === 'End') { e.preventDefault(); goToSlide(TOTAL_SLIDES - 1); }
+      if (e.key === 'Escape') { e.preventDefault(); goToSlide(1); }
+    });
+  </script>
+</body>
+</html>
