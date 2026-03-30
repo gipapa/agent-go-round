@@ -60,6 +60,7 @@ export default function AgentsPanel(props: {
         {props.agents.map((agent) => {
           const isActive = agent.id === props.activeAgentId;
           const isSelected = agent.id === props.selectedAgentId;
+          const isManagedMagiAgent = agent.managedBy === "magi" && !!agent.managedUnitId;
           const loadBalancer = props.loadBalancers.find((item) => item.id === agent.loadBalancerId) ?? null;
           return (
             <div
@@ -110,37 +111,41 @@ export default function AgentsPanel(props: {
                   >
                     Edit
                   </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setDetectingAgentId(agent.id);
-                      const result = await props.onDetect(agent);
-                      setDetectResult({ agentName: agent.name, result });
-                      setDetectingAgentId(null);
-                    }}
-                    style={btnSmall}
-                    disabled={detectingAgentId === agent.id}
-                  >
-                    {detectingAgentId === agent.id ? "Detecting..." : "Detect"}
-                  </button>
-                  <button type="button" onClick={() => props.onDelete(agent.id)} style={btnDangerSmall}>
-                    Delete
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => props.onSetMain(agent.id)}
-                    style={{
-                      ...btnSmall,
-                      borderColor: isActive ? "#5b6bff" : "#2a395f",
-                      background: isActive ? "rgba(91,123,255,0.18)" : "#141b2d",
-                      color: isActive ? "#dfe6ff" : "white",
-                      cursor: isActive ? "default" : "pointer"
-                    }}
-                    disabled={isActive}
-                    data-tutorial-id={isActive ? "agents-main-active-button" : "agents-set-main-button"}
-                  >
-                    Main
-                  </button>
+                  {!isManagedMagiAgent ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setDetectingAgentId(agent.id);
+                          const result = await props.onDetect(agent);
+                          setDetectResult({ agentName: agent.name, result });
+                          setDetectingAgentId(null);
+                        }}
+                        style={btnSmall}
+                        disabled={detectingAgentId === agent.id}
+                      >
+                        {detectingAgentId === agent.id ? "Detecting..." : "Detect"}
+                      </button>
+                      <button type="button" onClick={() => props.onDelete(agent.id)} style={btnDangerSmall}>
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => props.onSetMain(agent.id)}
+                        style={{
+                          ...btnSmall,
+                          borderColor: isActive ? "#5b6bff" : "#2a395f",
+                          background: isActive ? "rgba(91,123,255,0.18)" : "#141b2d",
+                          color: isActive ? "#dfe6ff" : "white",
+                          cursor: isActive ? "default" : "pointer"
+                        }}
+                        disabled={isActive}
+                        data-tutorial-id={isActive ? "agents-main-active-button" : "agents-set-main-button"}
+                      >
+                        Main
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               ) : isActive ? (
                 <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
@@ -219,6 +224,7 @@ function Editor(props: {
   const allowAllMcps = agent.allowedMcpServerIds === undefined;
   const allowAllBuiltIns = agent.allowedBuiltInToolIds === undefined;
   const allowAllSkills = agent.allowedSkillIds === undefined;
+  const isManagedMagiAgent = agent.managedBy === "magi" && !!agent.managedUnitId;
   const docsEnabled = agent.enableDocs !== false;
   const mcpEnabled = agent.enableMcp !== false;
   const builtInToolsEnabled = agent.enableBuiltInTools !== false;
@@ -318,16 +324,22 @@ function Editor(props: {
       <div className="card" style={{ padding: 14, display: "grid", gap: 10 }}>
         <div style={{ fontWeight: 700, marginBottom: 2 }}>Profile</div>
 
+        {isManagedMagiAgent ? (
+          <div style={{ ...helpText, marginBottom: 8 }}>
+            這是由 S.C. MAGI 內建管理的 agent。除 <strong>Load Balancer</strong> 外，其餘欄位都已鎖定。
+          </div>
+        ) : null}
+
         <label style={label}>Name</label>
-        <input value={agent.name} onChange={(e) => setAgent({ ...agent, name: e.target.value })} style={inp} data-tutorial-id="agent-name-input" />
+        <input value={agent.name} disabled={isManagedMagiAgent} onChange={(e) => setAgent({ ...agent, name: e.target.value })} style={inp} data-tutorial-id="agent-name-input" />
 
         <label style={label}>大頭照</label>
         <div className="agents-avatar-row" style={{ display: "flex", gap: 12, alignItems: "center", margin: "6px 0 14px" }}>
           <AvatarPreview name={agent.name} avatarUrl={agent.avatarUrl} />
           <div style={{ display: "grid", gap: 8 }}>
-            <input type="file" accept="image/*" onChange={(e) => onAvatarPicked(e.target.files?.[0])} />
+            <input type="file" accept="image/*" disabled={isManagedMagiAgent} onChange={(e) => onAvatarPicked(e.target.files?.[0])} />
             {agent.avatarUrl ? (
-              <button type="button" onClick={() => setAgent({ ...agent, avatarUrl: undefined })} style={btnSmall}>
+              <button type="button" onClick={() => setAgent({ ...agent, avatarUrl: undefined })} style={btnSmall} disabled={isManagedMagiAgent}>
                 移除大頭照
               </button>
             ) : null}
@@ -335,7 +347,13 @@ function Editor(props: {
         </div>
 
         <label style={label}>Agent Description</label>
-        <textarea value={agent.description ?? ""} onChange={(e) => setAgent({ ...agent, description: e.target.value })} rows={4} style={{ ...inp, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }} />
+        <textarea
+          value={agent.description ?? ""}
+          disabled={isManagedMagiAgent}
+          onChange={(e) => setAgent({ ...agent, description: e.target.value })}
+          rows={4}
+          style={{ ...inp, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
+        />
 
         <label style={label}>Load Balancer</label>
         <select
@@ -356,6 +374,7 @@ function Editor(props: {
         </div>
       </div>
 
+      {!isManagedMagiAgent ? (
       <div style={{ marginTop: 12 }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Access Control</div>
         <div style={{ display: "grid", gap: 12 }}>
@@ -601,6 +620,7 @@ function Editor(props: {
           </div>
         </div>
       </div>
+      ) : null}
 
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
         <button onClick={props.onCancel} style={btnSmall}>

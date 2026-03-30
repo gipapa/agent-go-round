@@ -283,11 +283,36 @@ skill-name/
     - `查看 skill 流程紀錄`
 - 第一、第二個 onboarding 案例在進入聊天步驟前，會自動清空對話歷史，避免驗證干擾
 
-### 8. Legacy Goal-Driven Mode
+### 8. S.C. MAGI Mode
 
-- `goal-driven talking` 仍保留在專案中
-- 目前已視為 legacy / deprecated 模式
-- 新的 skill 多輪邏輯不依賴這條 orchestrator
+- 舊的 `goal-driven talking` 已由 `S.C. MAGI` 取代
+- 目前支援兩種模式：
+  - `S.C. Magi System (基本版: 三賢人同時表決)`
+  - `S.C. Magi System (進階版: 三賢人共識)`
+- MAGI 模式固定尋找三個已存 agent：
+  - `Melchior`
+  - `Balthasar`
+  - `Casper`
+- 若切到 MAGI 模式後直接進入 `Chat`，系統會自動補出這三個受管制 agent，並導向 `Agents` 頁讓使用者只設定各自的 load balancer
+- 三者都必須先由使用者自行設定好 provider / load balancer
+- 這三個 MAGI agent 屬於系統管理角色：
+  - 名稱固定
+  - persona description 固定
+  - Access Control 固定
+  - 使用者只需要設定各自的 load balancer
+- 執行 MAGI 時，系統只會使用各自對應的內建 MAGI skill，不會讀取全域 docs / MCP / built-in tools / 其他 user skills
+- 基本版會同步投票後依多數決輸出：
+  - `APPROVE`
+  - `REJECT`
+  - `ABSTAIN`
+  - `DEADLOCK`
+- 進階版最多協商 3 輪；若全體提早同意則提前收斂，否則依最新票型輸出結果
+- assistant 會顯示 EVA 風格的 MAGI 視覺板：
+  - 上方 `Balthasar`
+  - 左下 `Casper`
+  - 右下 `Melchior`
+  - 右側顯示最終決議與狀態說明
+  - 下方保留摘要與對話紀錄
 
 ## 本機啟動
 

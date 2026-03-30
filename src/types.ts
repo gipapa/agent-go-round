@@ -67,7 +67,57 @@ export type ChatMessage = {
   skillGoal?: string;
   skillTodo?: SkillTodoItem[];
   skillPhase?: SkillPhase;
+  magiState?: MagiRenderState;
   ts: number;
+};
+
+export type MagiUnitId = "Melchior" | "Balthasar" | "Casper";
+export type MagiVerdict = "APPROVE" | "REJECT" | "ABSTAIN" | "DEADLOCK";
+export type MagiUnitVerdict = Exclude<MagiVerdict, "DEADLOCK">;
+export type MagiMode = "magi_vote" | "magi_consensus";
+export type MagiUnitStatus = "pending" | "thinking" | "voted" | "revised" | "error";
+export type MagiRenderStatus = "running" | "completed" | "failed";
+
+export type MagiUnitState = {
+  unitId: MagiUnitId;
+  unitNumber: 1 | 2 | 3;
+  agentName: string;
+  avatarUrl?: string;
+  status: MagiUnitStatus;
+  verdict?: MagiVerdict;
+  confidence?: number;
+  summary?: string;
+  rationale?: string;
+  concerns?: string[];
+  critique?: string;
+  changedMind?: boolean;
+  error?: string;
+};
+
+export type MagiTranscriptEntry = {
+  id: string;
+  round: number;
+  speaker: string;
+  label: string;
+  content: string;
+  kind: "system" | "ballot" | "critique" | "error";
+};
+
+export type MagiRenderState = {
+  mode: MagiMode;
+  status: MagiRenderStatus;
+  question: string;
+  round: number;
+  finalVerdict?: MagiVerdict;
+  finalSummary?: string;
+  informationText?: string;
+  code: string;
+  file: string;
+  ext: string;
+  exMode: string;
+  priority: string;
+  units: MagiUnitState[];
+  transcript: MagiTranscriptEntry[];
 };
 
 export type ChatThread = {
@@ -108,6 +158,8 @@ export type AgentConfig = {
   type: AgentType;
   description?: string;
   loadBalancerId?: string;
+  managedBy?: "magi";
+  managedUnitId?: MagiUnitId;
 
   // Legacy fields kept for backward compatibility during migration.
   endpoint?: string; // e.g. https://api.openai.com/v1
@@ -147,7 +199,7 @@ export type DetectResult = {
   notes?: string;
 };
 
-export type OrchestratorMode = "one_to_one" | "leader_team";
+export type OrchestratorMode = "one_to_one" | "magi_vote" | "magi_consensus";
 export type SkillExecutionMode = "single_turn" | "multi_turn";
 
 export type DocItem = {

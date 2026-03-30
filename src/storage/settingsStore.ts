@@ -2,7 +2,7 @@ import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, SkillExecutionMo
 
 export type UiState = {
   activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
-  mode?: OrchestratorMode;
+  mode?: OrchestratorMode | "leader_team";
   skillExecutionMode?: SkillExecutionMode;
   skillVerifyMax?: number;
   skillToolLoopMax?: number;

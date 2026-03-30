@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChatMessage } from "../types";
+import { ChatMessage, MagiRenderState, MagiUnitId, MagiVerdict } from "../types";
 
 type MessageSegment =
   | { type: "text"; content: string }
@@ -241,6 +241,179 @@ function SkillTodoPanel(props: {
   );
 }
 
+function formatMagiVerdict(verdict?: MagiVerdict) {
+  switch (verdict) {
+    case "APPROVE":
+      return "承認 (APPROVE)";
+    case "REJECT":
+      return "否決 (REJECT)";
+    case "ABSTAIN":
+      return "棄權 (ABSTAIN)";
+    case "DEADLOCK":
+      return "膠着 (DEADLOCK)";
+    default:
+      return "討論中";
+  }
+}
+
+function magiVerdictTone(verdict?: MagiVerdict) {
+  switch (verdict) {
+    case "APPROVE":
+      return "approve";
+    case "REJECT":
+      return "reject";
+    case "ABSTAIN":
+      return "abstain";
+    case "DEADLOCK":
+      return "deadlock";
+    default:
+      return "pending";
+  }
+}
+
+function formatMagiDecisionMeta(verdict?: MagiVerdict) {
+  switch (verdict) {
+    case "APPROVE":
+      return "Majority voted yes";
+    case "REJECT":
+      return "Majority voted no";
+    case "ABSTAIN":
+      return "At least two units abstained";
+    case "DEADLOCK":
+      return "One unit approved, one rejected, one abstained, or the system encountered an error";
+    default:
+      return "Waiting for all three systems";
+  }
+}
+
+function formatMagiUnitStatus(status: NonNullable<MagiRenderState["units"]>[number]["status"]) {
+  switch (status) {
+    case "thinking":
+      return "THINKING";
+    case "voted":
+      return "VOTED";
+    case "revised":
+      return "REVISED";
+    case "error":
+      return "ERROR";
+    default:
+      return "PENDING";
+  }
+}
+
+function magiUnitClass(unitId: MagiUnitId) {
+  switch (unitId) {
+    case "Balthasar":
+      return "top";
+    case "Casper":
+      return "left";
+    case "Melchior":
+      return "right";
+  }
+}
+
+function MagiPanel(props: { state: MagiRenderState }) {
+  const [showBoard, setShowBoard] = useState(true);
+  const balthasar = props.state.units.find((unit) => unit.unitId === "Balthasar");
+  const casper = props.state.units.find((unit) => unit.unitId === "Casper");
+  const melchior = props.state.units.find((unit) => unit.unitId === "Melchior");
+
+  const renderUnit = (unit: typeof balthasar) =>
+    unit ? (
+      <div className={`magi-unit-card ${unit.status} ${magiVerdictTone(unit.verdict)}`}>
+        <div className="magi-unit-name">
+          {unit.unitId} · {unit.unitNumber}
+        </div>
+        <div className={`magi-unit-status ${unit.status}`}>{formatMagiUnitStatus(unit.status)}</div>
+        <div className="magi-unit-verdict">{unit.verdict ? formatMagiVerdict(unit.verdict) : "思考中"}</div>
+        <div className="magi-unit-confidence">{unit.confidence !== undefined ? `${unit.confidence}%` : "—"}</div>
+        <div className="magi-unit-summary">{unit.error ?? unit.summary ?? unit.rationale ?? "正在分析提訴…"}</div>
+      </div>
+    ) : null;
+
+  return (
+    <div className={`magi-panel ${props.state.status}`}>
+      <div className="magi-panel-header">
+        <div className="magi-panel-header-title">S.C. MAGI VISUAL BOARD</div>
+        <button type="button" className="magi-panel-close" onClick={() => setShowBoard((current) => !current)}>
+          {showBoard ? "關閉視覺板" : "顯示視覺板"}
+        </button>
+      </div>
+
+      {showBoard ? (
+        <div className="magi-grid">
+          <div className="magi-side magi-side-left">
+            <div className="magi-side-title">提訴</div>
+            <div className="magi-side-code">CODE:{props.state.code}</div>
+            <div className="magi-side-meta">FILE:{props.state.file}</div>
+            <div className="magi-side-meta">EXT:{props.state.ext}</div>
+            <div className="magi-side-meta">EX_MODE:{props.state.exMode}</div>
+            <div className="magi-side-meta">PRIORITY:{props.state.priority}</div>
+          </div>
+
+          <div className={`magi-unit ${magiUnitClass("Balthasar")} ${balthasar?.status ?? "pending"}`}>{renderUnit(balthasar)}</div>
+
+          <div className={`magi-unit ${magiUnitClass("Casper")} ${casper?.status ?? "pending"}`}>{renderUnit(casper)}</div>
+
+          <div className={`magi-unit ${magiUnitClass("Melchior")} ${melchior?.status ?? "pending"}`}>{renderUnit(melchior)}</div>
+
+          <div className="magi-center-core">
+            <div className="magi-center-title">MAGI</div>
+            <div className={`magi-center-verdict ${magiVerdictTone(props.state.finalVerdict)}`}>
+              {formatMagiVerdict(props.state.finalVerdict)}
+            </div>
+            <div className="magi-center-mode">{props.state.mode === "magi_vote" ? "三賢人同時表決" : "三賢人共識協商"}</div>
+            <div className="magi-center-question">{props.state.question}</div>
+          </div>
+
+          <div className="magi-side magi-side-right">
+            <div className="magi-side-title">決議</div>
+            <div className={`magi-decision-box ${magiVerdictTone(props.state.finalVerdict)}`}>
+              <div className="magi-decision-main">{formatMagiVerdict(props.state.finalVerdict)}</div>
+              <div className="magi-decision-subtext">{formatMagiDecisionMeta(props.state.finalVerdict)}</div>
+            </div>
+            <div className="magi-info-box">
+              <div className="magi-info-label">情報</div>
+              <div className="magi-info-text">{props.state.informationText ?? "SYSTEM BOOT"}</div>
+              <div className="magi-info-round">ROUND {props.state.round}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {props.state.finalSummary ? (
+        <div className="magi-summary-box">
+          <div className="magi-summary-label">決議摘要</div>
+          <div className="magi-summary-text">{props.state.finalSummary}</div>
+        </div>
+      ) : null}
+
+      <div className="magi-transcript">
+        <div className="magi-transcript-header">
+          <div className="magi-transcript-title">對話紀錄</div>
+          <div className="magi-transcript-status">{props.state.status === "running" ? "執行中" : props.state.status === "failed" ? "失敗" : "完成"}</div>
+        </div>
+        <div className="magi-transcript-list">
+          {props.state.transcript.length === 0 ? (
+            <div className="magi-transcript-empty">等待三賢人開始審議…</div>
+          ) : (
+            props.state.transcript.map((entry) => (
+              <div key={entry.id} className={`magi-transcript-entry ${entry.kind}`}>
+                <div className="magi-transcript-meta">
+                  <span>{entry.speaker}</span>
+                  <span>R{entry.round}</span>
+                  <span>{entry.label}</span>
+                </div>
+                <div className="magi-transcript-content">{entry.content}</div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CodeBlockCard(props: { content: string; language?: string }) {
   const [collapsed, setCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -357,8 +530,13 @@ export default function ChatPanel(props: ChatPanelProps) {
   }, [props.fullscreen]);
 
   const emptyLabel = useMemo(
-    () => (props.leaderName ? `Send a goal to ${props.leaderName} and the team will coordinate here.` : "Just type to start the conversation."),
-    [props.leaderName]
+    () =>
+      props.modeLabel === "normal"
+        ? props.leaderName
+          ? `Send a goal to ${props.leaderName} and the team will coordinate here.`
+          : "Just type to start the conversation."
+        : "輸入提訴內容後，S.C. MAGI 會開始裁決。",
+    [props.leaderName, props.modeLabel]
   );
 
   return (
@@ -453,9 +631,12 @@ export default function ChatPanel(props: ChatPanelProps) {
                 {m.role === "assistant" && m.statusText ? (
                   <div className={`chat-status-pill ${m.isStreaming ? "live" : ""}`}>{m.statusText}</div>
                 ) : null}
-                <div className={`chat-bubble ${m.role} ${isLeader ? "leader" : ""}`}>
-                  {hasVisibleContent ? <MessageContent content={renderedContent} /> : <div className="chat-status-placeholder">...</div>}
-                </div>
+                {m.role === "assistant" && m.magiState ? <MagiPanel state={m.magiState} /> : null}
+                {hasVisibleContent && !m.magiState ? (
+                  <div className={`chat-bubble ${m.role} ${isLeader ? "leader" : ""}`}>
+                    <MessageContent content={renderedContent} />
+                  </div>
+                ) : null}
                 {m.role === "assistant" && thoughts.length > 0 ? (
                   <details className="chat-tool-details">
                     <summary>查看思考過程</summary>

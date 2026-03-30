@@ -7,6 +7,9 @@ import {
   ChatMessage,
   DetectResult,
   LoadedSkillRuntime,
+  MagiMode,
+  MagiRenderState,
+  MagiUnitId,
   OrchestratorMode,
   SkillExecutionMode,
   SkillStepDecision,
@@ -60,8 +63,7 @@ import { ChromePromptAdapter } from "../adapters/chromePrompt";
 import { CustomAdapter } from "../adapters/custom";
 
 import { runOneToOne } from "../orchestrators/oneToOne";
-// Deprecated legacy orchestrator. Multi-turn skill refine uses its own executor and does not reuse leaderTeam.
-import { runLeaderTeam, LeaderTeamEvent } from "../orchestrators/leaderTeam";
+import { createInitialState as createMagiRenderState, MAGI_UNIT_LAYOUT, MagiPreparedUnit, runMagi } from "../orchestrators/magi";
 import { McpSseClient } from "../mcp/sseClient";
 import { callTool, listTools } from "../mcp/toolRegistry";
 import { createToolDashboardHelpers } from "../utils/toolDashboard";
@@ -109,6 +111,7 @@ import {
   TUTORIAL_SEQUENTIAL_SKILL_ROOT
 } from "../onboarding/tutorialSkillTemplate";
 import { TutorialScenarioDefinition, TutorialStepEvaluation, TutorialWorkspaceSnapshot } from "../onboarding/types";
+import { getMagiSkillBundle } from "../magi/magiSkills";
 import {
   buildSkillDecisionCatalog,
   buildSkillDecisionPrompt,
@@ -343,6 +346,66 @@ function resolvePreferredBrowserHeadedMode(text: string) {
   }
 
   return false;
+}
+
+const MAGI_MODE_LABELS: Record<MagiMode, string> = {
+  magi_vote: "S.C. Magi System (基本版: 三賢人同時表決)",
+  magi_consensus: "S.C. Magi System (進階版: 三賢人共識)"
+};
+
+const MAGI_AGENT_DESCRIPTIONS: Record<MagiUnitId, string> = {
+  Melchior: "S.C. MAGI 科學家單元。偏邏輯、證據、技術可行性與錯誤檢查。",
+  Balthasar: "S.C. MAGI 母親單元。偏安全、人因、照護、營運穩定與使用者影響。",
+  Casper: "S.C. MAGI 女人單元。偏直覺、自保、政治現實、風險與動機判讀。"
+};
+
+function normalizeMagiLookupKey(name: string) {
+  return name.trim().toLowerCase();
+}
+
+function formatMagiUnitTitle(unitId: MagiUnitId) {
+  const entry = MAGI_UNIT_LAYOUT.find((item) => item.unitId === unitId);
+  return entry ? `${unitId} · ${entry.unitNumber}` : unitId;
+}
+
+function createManagedMagiAgent(unitId: MagiUnitId): AgentConfig {
+  return {
+    id: generateId(),
+    name: unitId,
+    type: "openai_compat",
+    description: MAGI_AGENT_DESCRIPTIONS[unitId],
+    loadBalancerId: "",
+    managedBy: "magi",
+    managedUnitId: unitId,
+    enableDocs: false,
+    enableMcp: false,
+    enableBuiltInTools: false,
+    enableSkills: true,
+    allowedDocIds: [],
+    allowedMcpServerIds: [],
+    allowedBuiltInToolIds: [],
+    allowedSkillIds: [],
+    capabilities: { streaming: true }
+  };
+}
+
+function normalizeManagedMagiAgent(agent: AgentConfig, unitId: MagiUnitId): AgentConfig {
+  return {
+    ...agent,
+    name: unitId,
+    type: "openai_compat",
+    description: MAGI_AGENT_DESCRIPTIONS[unitId],
+    managedBy: "magi",
+    managedUnitId: unitId,
+    enableDocs: false,
+    enableMcp: false,
+    enableBuiltInTools: false,
+    enableSkills: true,
+    allowedDocIds: [],
+    allowedMcpServerIds: [],
+    allowedBuiltInToolIds: [],
+    allowedSkillIds: []
+  };
 }
 
 function stringifyAny(v: any): string {
@@ -1083,9 +1146,12 @@ export default function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>(() => initialUi.activeAgentId ?? agents[0]?.id ?? "");
   const activeAgent = useMemo(() => agents.find((a) => a.id === activeAgentId) ?? null, [agents, activeAgentId]);
 
-  const [mode, setMode] = useState<OrchestratorMode>(() =>
-    initialUi.mode === "leader_team" || initialUi.mode === "one_to_one" ? initialUi.mode : "one_to_one"
-  );
+  const [mode, setMode] = useState<OrchestratorMode>(() => {
+    const storedMode = initialUi.mode;
+    if (storedMode === "leader_team") return "magi_vote";
+    if (storedMode === "magi_vote" || storedMode === "magi_consensus" || storedMode === "one_to_one") return storedMode;
+    return "one_to_one";
+  });
   const [skillExecutionMode, setSkillExecutionMode] = useState<SkillExecutionMode>(() =>
     initialUi.skillExecutionMode === "multi_turn" ? "multi_turn" : "single_turn"
   );
@@ -1097,9 +1163,6 @@ export default function App() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
 
-  // Leader+Team config (leader = active agent)
-  const [memberAgentIds, setMemberAgentIds] = useState<string[]>(() => initialUi.memberAgentIds ?? agents.slice(1).map((a) => a.id));
-  const [reactMax, setReactMax] = useState<number>(() => (typeof initialUi.reactMax === "number" ? initialUi.reactMax : 2));
   const [historyMessageLimit, setHistoryMessageLimit] = useState<number>(() => clampHistoryLimit(initialUi.historyMessageLimit ?? 10));
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
@@ -1346,8 +1409,6 @@ export default function App() {
     if (!agents.some((a) => a.id === activeAgentId)) {
       setActiveAgentId(agents[0]?.id ?? "");
     }
-
-    setMemberAgentIds((prev) => prev.filter((id) => agents.some((a) => a.id === id) && id !== activeAgentId));
   }, [agents, activeAgentId]);
 
   React.useEffect(() => {
@@ -1355,6 +1416,70 @@ export default function App() {
       setSelectedAgentId(activeAgentId || (agents[0]?.id ?? ""));
     }
   }, [agents, selectedAgentId, activeAgentId]);
+
+  React.useEffect(() => {
+    if (mode === "one_to_one") return;
+    setAgents((prev) => {
+      let changed = false;
+      const next = [...prev];
+
+      MAGI_UNIT_LAYOUT.forEach(({ unitId }) => {
+        const matches = next.filter((agent) => normalizeMagiLookupKey(agent.name) === normalizeMagiLookupKey(unitId));
+        if (matches.length === 0) {
+          next.push(createManagedMagiAgent(unitId));
+          changed = true;
+          return;
+        }
+        if (matches.length === 1) {
+          const current = matches[0];
+          const normalized = normalizeManagedMagiAgent(current, unitId);
+          if (JSON.stringify(current) !== JSON.stringify(normalized)) {
+            const index = next.findIndex((agent) => agent.id === current.id);
+            if (index >= 0) {
+              next[index] = normalized;
+              changed = true;
+            }
+          }
+        }
+      });
+
+      return changed ? next : prev;
+    });
+  }, [mode]);
+
+  React.useEffect(() => {
+    if (mode === "one_to_one" || activeTab !== "chat") return;
+    const setup = MAGI_UNIT_LAYOUT.map(({ unitId }) => {
+      const matches = agents.filter((agent) => normalizeMagiLookupKey(agent.name) === normalizeMagiLookupKey(unitId));
+      const primary = matches[0] ?? null;
+      const candidate = primary ? resolvePrimaryCandidate(primary) : null;
+      const issue =
+        matches.length === 0
+          ? "missing"
+          : matches.length > 1
+          ? "duplicate"
+          : !primary?.loadBalancerId
+          ? "load_balancer_missing"
+          : !candidate
+          ? "load_balancer_unavailable"
+          : null;
+      return { unitId, agent: primary, ready: !issue };
+    });
+    const firstBlocking = setup.find((entry) => !entry.ready);
+    if (!firstBlocking) return;
+    const focusAgentId = firstBlocking.agent?.id ?? agents.find((agent) => normalizeMagiLookupKey(agent.name) === normalizeMagiLookupKey(firstBlocking.unitId))?.id ?? "";
+    if (focusAgentId) {
+      setSelectedAgentId(focusAgentId);
+    }
+    window.alert(
+      [
+        "S.C. MAGI 需要三位固定 agent：Melchior、Balthasar、Casper。",
+        "系統已預先建立三位 MAGI agent。",
+        "請先到 Agents 頁，分別替他們設定 load balancer 後再回來進行裁決。"
+      ].join("\n")
+    );
+    setActiveTab("agents");
+  }, [mode, activeTab, agents, loadBalancers, modelCredentials]);
 
   React.useEffect(() => {
     saveUiState({
@@ -1365,14 +1490,12 @@ export default function App() {
       skillToolLoopMax,
       skillVerifierAgentId,
       activeAgentId,
-      memberAgentIds,
-      reactMax,
       historyMessageLimit,
       userName,
       userAvatarUrl,
       userDescription
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, memberAgentIds, reactMax, historyMessageLimit, userName, userAvatarUrl, userDescription]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, historyMessageLimit, userName, userAvatarUrl, userDescription]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -1706,6 +1829,110 @@ export default function App() {
 
   function resolveSkillVerifierAgent(active: AgentConfig) {
     return configuredSkillVerifierAgent ? hydrateAgentCredentials(configuredSkillVerifierAgent) : hydrateAgentCredentials(active);
+  }
+
+  const magiSetup = useMemo(() => {
+    return MAGI_UNIT_LAYOUT.map(({ unitId, unitNumber }) => {
+      const matches = agents.filter((agent) => normalizeMagiLookupKey(agent.name) === normalizeMagiLookupKey(unitId));
+      const primary = matches[0] ?? null;
+      const candidate = primary ? resolvePrimaryCandidate(primary) : null;
+      let issue: string | null = null;
+      if (matches.length === 0) issue = "missing";
+      else if (matches.length > 1) issue = "duplicate";
+      else if (!primary?.loadBalancerId) issue = "load_balancer_missing";
+      else if (!candidate) issue = "load_balancer_unavailable";
+      return {
+        unitId,
+        unitNumber,
+        matches,
+        agent: primary,
+        candidate,
+        ready: !issue,
+        issue
+      };
+    });
+  }, [agents, loadBalancers, modelCredentials]);
+
+  const magiReadyCount = useMemo(() => magiSetup.filter((entry) => entry.ready).length, [magiSetup]);
+
+  function buildMagiUnitSystem(unitId: MagiUnitId, agent: AgentConfig, question: string) {
+    const bundle = getMagiSkillBundle(unitId);
+    const prepared = loadSkillRuntime({
+      skill: bundle.skill,
+      skillDocs: bundle.docs,
+      skillFiles: bundle.files,
+      agentDocs: [],
+      availableMcpServers: [],
+      availableMcpTools: [],
+      availableBuiltinTools: [],
+      userInput: question,
+      skillInput: {}
+    });
+
+    const profileLines = [
+      `S.C. MAGI unit: ${unitId}`,
+      `Saved agent profile name: ${agent.name}`,
+      agent.description?.trim() ? `Saved agent description:\n${agent.description.trim()}` : "",
+      "This is MAGI internal mode. Ignore global docs, MCP tools, built-in tools, and any non-MAGI skills.",
+      "Stay in your assigned MAGI role and answer only according to the internal skill instructions."
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    return [profileLines, prepared.system].filter(Boolean).join("\n\n");
+  }
+
+  function buildMagiPreparedUnits(question: string): { ok: true; units: MagiPreparedUnit[] } | { ok: false; reason: string; state: MagiRenderState } {
+    const baseUnits = magiSetup.map((entry) => ({
+      unitId: entry.unitId,
+      unitNumber: entry.unitNumber,
+      agent: entry.agent ?? {
+        id: `missing-${entry.unitId}`,
+        name: entry.unitId,
+        type: "openai_compat"
+      },
+      system: ""
+    }));
+    const state = createMagiRenderState(mode === "magi_consensus" ? "magi_consensus" : "magi_vote", question, baseUnits);
+    for (const setup of magiSetup) {
+      const unit = state.units.find((entry) => entry.unitId === setup.unitId);
+      if (!unit) continue;
+      unit.agentName = setup.agent?.name ?? setup.unitId;
+      unit.avatarUrl = setup.agent?.avatarUrl;
+      if (setup.issue === "missing") unit.error = `找不到命名為 ${setup.unitId} 的 agent。`;
+      if (setup.issue === "duplicate") unit.error = `${setup.unitId} 命名重複，請只保留一個。`;
+      if (setup.issue === "load_balancer_missing") unit.error = `${setup.unitId} 尚未設定 load balancer。`;
+      if (setup.issue === "load_balancer_unavailable") unit.error = `${setup.unitId} 沒有可用的 load balancer instance。`;
+      if (unit.error) {
+        unit.status = "error";
+        unit.verdict = "DEADLOCK";
+      }
+    }
+    const blocking = state.units.filter((unit) => unit.error);
+    if (blocking.length > 0) {
+      state.status = "failed";
+      state.finalVerdict = "DEADLOCK";
+      state.finalSummary = `S.C. MAGI 啟動前檢查失敗：${blocking.map((unit) => `${unit.unitId}=${unit.error}`).join("；")}`;
+      state.informationText = "SETUP ERROR";
+      state.transcript = blocking.map((unit, index) => ({
+        id: `magi-preflight-${unit.unitId}-${index}`,
+        round: 0,
+        speaker: unit.unitId,
+        label: "SETUP ERROR",
+        content: unit.error ?? "Unknown setup error.",
+        kind: "error"
+      }));
+      return { ok: false, reason: state.finalSummary, state };
+    }
+
+    const units: MagiPreparedUnit[] = magiSetup.map((entry) => ({
+      unitId: entry.unitId,
+      unitNumber: entry.unitNumber,
+      agent: entry.agent!,
+      system: buildMagiUnitSystem(entry.unitId, entry.agent!, question)
+    }));
+
+    return { ok: true, units };
   }
 
   function setAgentLoadBalancerRetryPolicy(agentId: string, patch: { delaySecond?: number; maxRetries?: number; resumeMinute?: number }) {
@@ -2678,17 +2905,6 @@ export default function App() {
     } catch (e: any) {
       logNow({ category: "agents", agent: target?.name, ok: false, message: "Agent delete failed", details: String(e?.message ?? e) });
     }
-  }
-
-  function toggleMember(id: string) {
-    if (id === activeAgentId) return;
-    setMemberAgentIds((prev) => {
-      const exists = prev.includes(id);
-      const next = exists ? prev.filter((x) => x !== id) : [...prev, id];
-      const agentName = agents.find((a) => a.id === id)?.name ?? id;
-      logNow({ category: "leader_team", message: `${exists ? "Member removed" : "Member added"}: ${agentName}` });
-      return next;
-    });
   }
 
   function append(m: ChatMessage) {
@@ -4294,61 +4510,33 @@ export default function App() {
     () => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl, description: userDescription.trim() }),
     [userName, userAvatarUrl, userDescription]
   );
-  const agentDirectory = React.useMemo(() => {
-    const map = new Map<string, { displayName: string; avatarUrl?: string }>();
-    agents.forEach((agent) => {
-      map.set(agent.name, { displayName: agent.name, avatarUrl: agent.avatarUrl });
-    });
-    return map;
-  }, [agents]);
-
   function limitHistory(messages: ChatMessage[]) {
     const limit = clampHistoryLimit(historyMessageLimit);
     return messages.filter((message) => message.role !== "tool").slice(-limit);
   }
 
-  const leaderPhaseRef = React.useRef<"planning" | "verification" | "summary" | "act" | "assign" | "react" | null>(null);
-  const leaderLastEventRef = React.useRef<"member_reply" | "leader_action" | null>(null);
-
-  function emitLeaderPhase(phase: "planning" | "verification" | "summary" | "act" | "assign" | "react") {
-    if (leaderPhaseRef.current === phase) return;
-    leaderPhaseRef.current = phase;
-    const label =
-      phase === "planning"
-        ? "PLANNING"
-        : phase === "assign"
-        ? "ASSIGN"
-        : phase === "react"
-        ? "REACT"
-        : phase === "act"
-        ? "ACT"
-        : phase === "verification"
-        ? "VERIFICATION"
-        : "SUMMARY";
-    append(msg("system", label, "phase"));
-  }
-
   async function onSend(input: string) {
-    if (!activeAgent) {
+    if (mode === "one_to_one" && !activeAgent) {
       logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: input });
       return;
     }
 
     const startedAt = Date.now();
+    const logAgentLabel = mode === "one_to_one" ? activeAgent?.name ?? "Unknown agent" : "S.C. MAGI";
     logNow({
       category: "chat",
-      agent: activeAgent.name,
+      agent: logAgentLabel,
       message: `Send (${mode})`,
       details: input
     });
 
-    const docBlocks = docsForAgent.map((d) => `[DOC:${d.title}]\n${d.content}`).join("\n\n");
+    const docBlocks = mode === "one_to_one" ? docsForAgent.map((d) => `[DOC:${d.title}]\n${d.content}`).join("\n\n") : "";
     const userSystem = docBlocks ? `You may use these documents as context:\n\n${docBlocks}` : undefined;
     logNow({
       category: "chat",
-      agent: activeAgent.name,
+      agent: logAgentLabel,
       message: "Context prepared",
-      details: `docs=${docsForAgent.length} history=${history.length}`
+      details: `docs=${mode === "one_to_one" ? docsForAgent.length : 0} history=${history.length}`
     });
 
     // User message
@@ -4360,7 +4548,11 @@ export default function App() {
 
     try {
       if (mode === "one_to_one") {
-        logNow({ category: "chat", agent: activeAgent.name, message: "normal talking started" });
+        const oneToOneAgent = activeAgent;
+        if (!oneToOneAgent) {
+          throw new Error("No active agent selected.");
+        }
+        logNow({ category: "chat", agent: oneToOneAgent.name, message: "normal talking started" });
         const assistantId = generateId();
         streamingAssistantId = assistantId;
         append({
@@ -4368,9 +4560,9 @@ export default function App() {
           role: "assistant",
           content: "",
           ts: Date.now(),
-          name: activeAgent.name,
-          displayName: activeAgent.name,
-          avatarUrl: activeAgent.avatarUrl,
+          name: oneToOneAgent.name,
+          displayName: oneToOneAgent.name,
+          avatarUrl: oneToOneAgent.avatarUrl,
           statusText: "準備回覆中…",
           isStreaming: true
         });
@@ -4385,7 +4577,7 @@ export default function App() {
             ...patch
           });
         };
-        const resolvedActiveAgent = hydrateAgentCredentials(activeAgent);
+        const resolvedActiveAgent = hydrateAgentCredentials(oneToOneAgent);
         const adapter = pickAdapter(resolvedActiveAgent);
         const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
           onStatus: setAssistantStatus
@@ -4428,7 +4620,7 @@ export default function App() {
 
           if (!skillDecision) {
             pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：skill decision 重試後仍失敗，改走一般 tool decision。`);
-            logNow({ category: "skills", agent: activeAgent.name, ok: false, message: "Skill decision failed after retries; continue without skills" });
+            logNow({ category: "skills", agent: oneToOneAgent.name, ok: false, message: "Skill decision failed after retries; continue without skills" });
             finalInput = await resolveToolAugmentedInput({
               input,
               agent: resolvedActiveAgent,
@@ -4441,7 +4633,7 @@ export default function App() {
             });
           } else if (skillDecision.type === "no_skill") {
             pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：這一回合不使用 skill。`);
-            logNow({ category: "skills", agent: activeAgent.name, message: "Skill decision resolved: no_skill" });
+            logNow({ category: "skills", agent: oneToOneAgent.name, message: "Skill decision resolved: no_skill" });
             finalInput = await resolveToolAugmentedInput({
               input,
               agent: resolvedActiveAgent,
@@ -4462,7 +4654,7 @@ export default function App() {
               );
               logNow({
                 category: "skills",
-                agent: activeAgent.name,
+                agent: oneToOneAgent.name,
                 ok: false,
                 message: `Skill decision selected unavailable skill: ${skillDecision.skillId}`,
                 details: JSON.stringify(skillDecision)
@@ -4503,7 +4695,7 @@ export default function App() {
               skillTrace.push(...prepared.trace);
               logNow({
                 category: "skills",
-                agent: activeAgent.name,
+                agent: oneToOneAgent.name,
                 ok: true,
                 message: `Skill selected: ${selectedSkill.name}`,
                 details: JSON.stringify(skillDecision.input ?? {})
@@ -4514,7 +4706,7 @@ export default function App() {
           if (activeAgent.enableSkills === true) {
             pushSkillTrace(skillTrace, "Skill decision", "沒有可用的 skill，已略過 skill decision。");
           }
-          logNow({ category: "skills", agent: activeAgent.name, message: "Skill decision skipped: no available skills" });
+          logNow({ category: "skills", agent: oneToOneAgent.name, message: "Skill decision skipped: no available skills" });
           finalInput = await resolveToolAugmentedInput({
             input,
             agent: resolvedActiveAgent,
@@ -4563,7 +4755,7 @@ export default function App() {
               });
               logNow({
                 category: "chat",
-                agent: activeAgent.name,
+                agent: oneToOneAgent.name,
                 ok: !runtimeOverrideFailed,
                 message: runtimeOverrideFailed ? "normal talking failed via multi-turn runtime override" : "normal talking completed via multi-turn runtime override",
                 details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
@@ -4600,18 +4792,18 @@ export default function App() {
           });
           if (!sawDelta && t) {
             sawDelta = true;
-            logNow({ category: "chat", agent: activeAgent.name, message: "normal talking streaming started" });
+            logNow({ category: "chat", agent: oneToOneAgent.name, message: "normal talking streaming started" });
           }
         };
 
         const full = await runOneToOneWithLoadBalancer({
-          logicalAgent: activeAgent,
+          logicalAgent: oneToOneAgent,
           input: finalInput,
           history: limitHistory(history),
           system: finalSystem,
           requestLabel: "chat response",
           onDelta,
-          onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
+          onLog: (t) => pushLog({ category: "retry", agent: oneToOneAgent.name, message: t })
         });
         const terminalFailure = detectTerminalAgentFailure(full);
         if (terminalFailure) {
@@ -4623,7 +4815,7 @@ export default function App() {
           });
           logNow({
             category: "chat",
-            agent: activeAgent.name,
+            agent: oneToOneAgent.name,
             ok: false,
             message: "normal talking failed",
             details: terminalFailure
@@ -4637,176 +4829,115 @@ export default function App() {
         });
         logNow({
           category: "chat",
-          agent: activeAgent.name,
+          agent: oneToOneAgent.name,
           ok: true,
           message: "normal talking completed",
           details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${full.length}\n\n${full}`
         });
         return;
       }
+      const magiMode: MagiMode = mode === "magi_consensus" ? "magi_consensus" : "magi_vote";
+      const assistantId = generateId();
+      streamingAssistantId = assistantId;
+      const initialMagiState = buildMagiPreparedUnits(input);
+      append({
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        ts: Date.now(),
+        name: "S.C. MAGI",
+        displayName: "S.C. MAGI",
+        statusText: "正在初始化 S.C. MAGI…",
+        isStreaming: true,
+        magiState: initialMagiState.ok
+          ? createMagiRenderState(magiMode, input, initialMagiState.units)
+          : initialMagiState.state
+      });
 
-      // Deprecated legacy goal-driven talking: user input is a GOAL
-      const leaderAgent = hydrateAgentCredentials(activeAgent);
-      const memberAgents = agents
-        .filter((a) => memberAgentIds.includes(a.id) && a.id !== leaderAgent.id)
-        .map((agent) => hydrateAgentCredentials(agent));
+      const setMagiAssistantStatus = (statusText: string, magiState?: MagiRenderState) => {
+        patchMessage(assistantId, {
+          statusText,
+          isStreaming: true,
+          ...(magiState ? { magiState } : {})
+        });
+      };
+      const finalizeMagiAssistant = (patch: Partial<ChatMessage>) => {
+        patchMessage(assistantId, {
+          statusText: undefined,
+          isStreaming: false,
+          hideWhileStreaming: false,
+          ...patch
+        });
+      };
 
-      if (memberAgents.length === 0) {
-        append(msg("assistant", "No member agents selected. Please select at least one member.", "system", { displayName: "System" }));
+      if (!initialMagiState.ok) {
+        const failureContent = buildAgentFailureContent(initialMagiState.reason, input);
+        finalizeMagiAssistant({
+          content: failureContent,
+          magiState: initialMagiState.state
+        });
+        logNow({
+          category: "magi",
+          ok: false,
+          message: "MAGI preflight failed",
+          details: initialMagiState.reason
+        });
         return;
       }
 
-      leaderPhaseRef.current = null;
-      leaderLastEventRef.current = null;
-      pushLog({
-        category: "leader_team",
-        agent: leaderAgent.name,
-        ok: true,
-        message: `Started. Members=${memberAgents.map((m) => m.name).join(", ")}`
+      setMagiAssistantStatus("S.C. MAGI 正在裁決中…");
+      const result = await runMagi({
+        mode: magiMode,
+        question: input,
+        units: initialMagiState.units,
+        history: modelHistory,
+        maxConsensusRounds: 3,
+        invokeUnit: async ({ unit, prompt, requestLabel }) => {
+          return await runOneToOneWithLoadBalancer({
+            logicalAgent: unit.agent,
+            input: prompt,
+            history: [],
+            system: unit.system,
+            requestLabel,
+            onDelta: () => {},
+            onLog: (t) => pushLog({ category: "retry", agent: unit.agent.name, message: t })
+          });
+        },
+        onState: (magiState) => {
+          const nextStatus =
+            magiState.status === "failed"
+              ? "S.C. MAGI 執行失敗"
+              : magiState.status === "completed"
+              ? "S.C. MAGI 決議完成"
+              : `S.C. MAGI 第 ${magiState.round || 1} 輪審議中…`;
+          setMagiAssistantStatus(nextStatus, magiState);
+        },
+        onLog: (entry) => {
+          pushLog({
+            category: "magi",
+            agent: entry.unitId ?? "S.C. MAGI",
+            ok: entry.ok,
+            message: [
+              entry.unitId ? `unit=${entry.unitId}` : "",
+              entry.round ? `round=${entry.round}` : "",
+              entry.message
+            ]
+              .filter(Boolean)
+              .join(" "),
+            details: entry.details
+          });
+        }
       });
 
-      emitLeaderPhase("planning");
-      // Show a visible kickoff message from the leader
-      append(msg("assistant", `Goal received. I'll coordinate the team to achieve it.`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
-
-      const onEvent = (ev: LeaderTeamEvent) => {
-        if (ev.type === "leader_plan") {
-          emitLeaderPhase("planning");
-          const memberNameById = new Map(memberAgents.map((m) => [m.id, m.name]));
-          const planLines = ev.assignments.map((a, i) => {
-            const name = memberNameById.get(a.memberId) ?? a.memberId;
-            return `${i + 1}. @${name}: ${a.message} (plan id: ${a.memberId})`;
-          });
-          append(
-            msg(
-              "assistant",
-              `Plan:\n${planLines.join("\n")}${ev.notes ? `\n\nNotes:\n${ev.notes}` : ""}`,
-              leaderAgent.name,
-              { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }
-            )
-          );
-          logNow({
-            category: "leader_team",
-            agent: leaderAgent.name,
-            message: "Planning completed",
-            details: ev.notes ?? planLines.join("\n")
-          });
-          return;
-        }
-        if (ev.type === "leader_retry") {
-          emitLeaderPhase("planning");
-          append(
-            msg(
-              "assistant",
-              `RETRY (${ev.attempt}/${ev.max}): invalid action, resending`,
-              leaderAgent.name,
-              { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }
-            )
-          );
-          logNow({
-            category: "leader_team",
-            agent: leaderAgent.name,
-            ok: false,
-            message: `Leader retry ${ev.attempt}/${ev.max}`,
-            details: ev.raw
-          });
-          return;
-        }
-        if (ev.type === "leader_ask_member") {
-          emitLeaderPhase("assign");
-          leaderLastEventRef.current = "leader_action";
-          append(msg("assistant", `@${ev.memberName} — ${ev.message}`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
-          logNow({
-            category: "leader_team",
-            agent: leaderAgent.name,
-            message: `Leader asked ${ev.memberName}`,
-            details: ev.message
-          });
-          return;
-        }
-        if (ev.type === "member_reply") {
-          emitLeaderPhase("act");
-          leaderLastEventRef.current = "member_reply";
-          // Show the member's answer
-          append(msg("assistant", ev.reply, ev.memberName, agentDirectory.get(ev.memberName)));
-          logNow({ category: "leader_team", agent: ev.memberName, message: "Member replied", details: ev.reply });
-          return;
-        }
-        if (ev.type === "leader_verify") {
-          emitLeaderPhase("verification");
-          append(
-            msg(
-              "assistant",
-              `Verification ${ev.ok ? "OK" : "FAIL"}${ev.notes ? `:\n${ev.notes}` : ""}`,
-              leaderAgent.name,
-              { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }
-            )
-          );
-          logNow({
-            category: "leader_team",
-            agent: leaderAgent.name,
-            ok: ev.ok,
-            message: "Verification",
-            details: ev.notes ?? ev.raw
-          });
-          return;
-        }
-        if (ev.type === "leader_react") {
-          emitLeaderPhase("react");
-          append(msg("assistant", `REACT -> @${ev.memberName}\n${ev.message}`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
-          logNow({
-            category: "leader_team",
-            agent: leaderAgent.name,
-            ok: false,
-            message: `REACT -> ${ev.memberName}`,
-            details: `${ev.reason ?? ""}\n${ev.message}`.trim()
-          });
-          return;
-        }
-        if (ev.type === "leader_invalid_json") {
-          append(msg("assistant", `Leader produced an invalid action. Raw output:\n\n${ev.text}`, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
-          logNow({
-            category: "leader_team",
-            agent: leaderAgent.name,
-            ok: false,
-            message: `Leader invalid JSON: ${ev.text}`,
-            details: ev.text
-          });
-          return;
-        }
-        if (ev.type === "leader_finish") {
-          emitLeaderPhase("summary");
-          append(msg("assistant", ev.answer, leaderAgent.name, { displayName: leaderAgent.name, avatarUrl: leaderAgent.avatarUrl }));
-          logNow({ category: "leader_team", agent: leaderAgent.name, ok: true, message: "Leader finished", details: ev.answer });
-          return;
-        }
-        // leader_decision_raw is mostly internal; keep it in log only to avoid clutter
-      };
-
-      await runLeaderTeam({
-        leader: { agent: leaderAgent, adapter: pickAdapter(leaderAgent) },
-        members: memberAgents.map((m) => ({ agent: m, adapter: pickAdapter(m) })),
-        goal: input,
-        userHistory: modelHistory,
-        userSystem,
-        maxRounds: 8,
-        reactMax,
-        retry: getRetryPolicyForAgent(leaderAgent),
-        onLog: (t) =>
-          pushLog({
-            category: t.startsWith("[retry]") ? "retry" : "leader_team",
-            agent: leaderAgent.name,
-            message: t
-          }),
-        onDelta: () => {},
-        onEvent
+      finalizeMagiAssistant({
+        content: result.answer,
+        magiState: result.state
       });
       logNow({
-        category: "leader_team",
-        agent: leaderAgent.name,
-        ok: true,
-        message: "Leader+Team finished",
-        details: `elapsed_ms=${Date.now() - startedAt}`
+        category: "magi",
+        ok: result.state.status !== "failed",
+        message: "MAGI finished",
+        details: `elapsed_ms=${Date.now() - startedAt}\nfinal_verdict=${result.state.finalVerdict ?? "DEADLOCK"}`
       });
     } catch (e: any) {
       const errorText = buildAgentFailureContent(String(e?.message ?? e), input);
@@ -4820,7 +4951,13 @@ export default function App() {
       } else {
         append(msg("assistant", errorText, "system", { displayName: "System" }));
       }
-      logNow({ category: "chat", agent: activeAgent?.name, ok: false, message: "Send failed", details: String(e?.message ?? e) });
+      logNow({
+        category: mode === "one_to_one" ? "chat" : "magi",
+        agent: mode === "one_to_one" ? activeAgent?.name : "S.C. MAGI",
+        ok: false,
+        message: "Send failed",
+        details: String(e?.message ?? e)
+      });
     }
   }
 
@@ -5230,9 +5367,9 @@ export default function App() {
                   setTutorialOpenedToolResultMessageIds([]);
                   logNow({ category: "chat", message: "Chat cleared" });
                 }}
-                leaderName={mode === "leader_team" ? activeAgent?.name : null}
+                leaderName={null}
                 userName={userProfile.name}
-                modeLabel={mode === "leader_team" ? "goal-driven talking (deprecated)" : "normal"}
+                modeLabel={mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}
                 onExportRaw={exportRawHistory}
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
@@ -5269,7 +5406,9 @@ export default function App() {
                 <span className="cc-card-label">Main Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">
-                  {loadBalancerSlots.find((entry) => entry.id === activeAgent?.loadBalancerId)?.name ?? "No load balancer"}
+                  {mode === "one_to_one"
+                    ? loadBalancerSlots.find((entry) => entry.id === activeAgent?.loadBalancerId)?.name ?? "No load balancer"
+                    : "MAGI mode 固定使用 Melchior / Balthasar / Casper"}
                 </span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("credentials")} data-tutorial-id="chat-config-credentials-card">
@@ -5284,19 +5423,19 @@ export default function App() {
               </button>
               <button className="cc-card" onClick={() => setConfigModal("mode")} data-tutorial-id="chat-config-mode-card">
                 <span className="cc-card-label">Mode</span>
-                <strong className="cc-card-value">{mode === "leader_team" ? "goal-driven (deprecated)" : "normal"}</strong>
-                <span className="cc-card-hint">{mode === "leader_team" ? "Legacy Leader → Members" : "1:1 對話"}</span>
+                <strong className="cc-card-value">{mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}</strong>
+                <span className="cc-card-hint">{mode === "one_to_one" ? "1:1 對話" : "S.C. MAGI 裁決模式"}</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("history")} data-tutorial-id="chat-config-history-card">
                 <span className="cc-card-label">History</span>
                 <strong className="cc-card-value">{historyMessageLimit} msgs</strong>
                 <span className="cc-card-hint">只保留與對話歷史相關設定</span>
               </button>
-              {mode === "leader_team" && (
+              {mode !== "one_to_one" && (
                 <button className="cc-card" onClick={() => setConfigModal("team")}>
-                  <span className="cc-card-label">Team</span>
-                  <strong className="cc-card-value">{memberAgentIds.length} members</strong>
-                  <span className="cc-card-hint">Leader: {activeAgent?.name ?? "—"}</span>
+                  <span className="cc-card-label">S.C. MAGI</span>
+                  <strong className="cc-card-value">{magiReadyCount}/3 ready</strong>
+                  <span className="cc-card-hint">Melchior / Balthasar / Casper</span>
                 </button>
               )}
               <button className="cc-card" onClick={() => setConfigModal("docs")} data-tutorial-id="chat-config-docs-card">
@@ -5325,7 +5464,11 @@ export default function App() {
             {configModal === "mode" && (
               <HelpModal title="Mode" onClose={() => setConfigModal(null)} width="min(420px, 92vw)">
                 <div style={{ display: "grid", gap: 8 }}>
-                  {([["one_to_one", "Normal", "一般一對一對話模式，可自由搭配skills、mcp and built-in tools、docs使用"], ["leader_team", "Goal-driven Talking (Deprecated)", "舊版 Leader 規劃任務、派給 member 協作模式，後續將逐步淘汰"]] as const).map(([value, title, desc]) => (
+                  {([
+                    ["one_to_one", "Normal", "一般一對一對話模式，可自由搭配 skills、MCP、built-in tools 與 docs 使用"],
+                    ["magi_vote", MAGI_MODE_LABELS.magi_vote, "三賢人同步表決，一輪完成裁決，適合快速取得多視角結論"],
+                    ["magi_consensus", MAGI_MODE_LABELS.magi_consensus, "三賢人最多三輪反覆協商，若仍無法達成共識則輸出 deadlock"]
+                  ] as const).map(([value, title, desc]) => (
                     <button
                       key={value}
                       onClick={() => { setMode(value); setConfigModal(null); }}
@@ -5553,12 +5696,6 @@ export default function App() {
                       data-tutorial-id="history-limit-input"
                     />
                   </div>
-                  {mode === "leader_team" && (
-                    <div>
-                      <label style={label}>REACT max</label>
-                      <input type="number" min={0} max={5} value={reactMax} onChange={(e) => { const n = Number(e.target.value); setReactMax(Number.isFinite(n) ? Math.max(0, Math.min(5, n)) : 0); }} style={{ width: "100%", marginTop: 6, boxSizing: "border-box", ...selectStyle }} />
-                    </div>
-                  )}
                   <div style={{ fontSize: 12, opacity: 0.7, lineHeight: 1.6 }}>
                     Default history is 10. Only the latest N messages are sent to the model. Retry 與 failover 目前由 Load Balancer instance 維護。
                   </div>
@@ -5582,35 +5719,51 @@ export default function App() {
             )}
 
             {configModal === "team" && (
-              <HelpModal title="Leader Team Setup" onClose={() => setConfigModal(null)} width="min(480px, 92vw)">
-                <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 12, lineHeight: 1.6 }}>
-                  Leader: <strong>{activeAgent?.name ?? "None"}</strong>. Pick member agents below.
-                </div>
-                <div style={{ display: "grid", gap: 8 }}>
-                  {agents.filter((a) => a.id !== activeAgentId).map((a) => {
-                    const checked = memberAgentIds.includes(a.id);
-                    return (
-                      <label
-                        key={a.id}
-                        style={{
-                          display: "flex",
-                          gap: 10,
-                          alignItems: "center",
-                          padding: 14,
-                          borderRadius: 12,
-                          border: checked ? "1px solid rgba(91,123,255,0.45)" : "1px solid var(--border)",
-                          background: checked ? "rgba(91,123,255,0.08)" : "var(--bg-2)",
-                          cursor: "pointer"
-                        }}
-                      >
-                        <input type="checkbox" checked={checked} onChange={() => toggleMember(a.id)} />
-                        <div>
-                          <div style={{ fontWeight: 700, fontSize: 13 }}>{a.name}</div>
-                          <div style={{ fontSize: 11, opacity: 0.7 }}>{a.type}{a.model ? ` · ${a.model}` : ""}</div>
+              <HelpModal title="S.C. MAGI Setup" onClose={() => setConfigModal(null)} width="min(560px, 92vw)">
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ fontSize: 13, opacity: 0.78, lineHeight: 1.7 }}>
+                    MAGI 模式會忽略目前的 Main Agent，固定尋找三個已存 agent：<strong>Melchior</strong>、<strong>Balthasar</strong>、<strong>Casper</strong>。
+                    請先確保三者都已設定好 load balancer；執行時系統只會使用各自的 MAGI 專屬 skill 與受控資源。
+                  </div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {magiSetup.map((entry) => {
+                      const statusLabel = entry.ready
+                        ? "READY"
+                        : entry.issue === "missing"
+                        ? "MISSING"
+                        : entry.issue === "duplicate"
+                        ? "DUPLICATE"
+                        : "UNAVAILABLE";
+                      const statusColor = entry.ready ? "var(--ok)" : "var(--danger)";
+                      return (
+                        <div
+                          key={entry.unitId}
+                          style={{
+                            display: "grid",
+                            gap: 6,
+                            padding: 14,
+                            borderRadius: 16,
+                            border: `1px solid ${entry.ready ? "rgba(116,226,167,0.22)" : "rgba(255,140,155,0.22)"}`,
+                            background: entry.ready ? "rgba(116,226,167,0.06)" : "rgba(255,140,155,0.05)"
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                            <div style={{ fontWeight: 800 }}>{formatMagiUnitTitle(entry.unitId)}</div>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: statusColor }}>{statusLabel}</div>
+                          </div>
+                          <div style={{ fontSize: 12, opacity: 0.82, lineHeight: 1.6 }}>
+                            {entry.agent ? `Agent：${entry.agent.name}` : "Agent：未找到"}
+                            {entry.agent?.loadBalancerId ? `\nLoad Balancer：${loadBalancerSlots.find((item) => item.id === entry.agent?.loadBalancerId)?.name ?? entry.agent.loadBalancerId}` : ""}
+                            {entry.candidate ? `\nModel：${entry.candidate.instance.model || "-"}` : ""}
+                            {entry.issue === "duplicate" ? `\n找到 ${entry.matches.length} 個同名 agent，請只保留一個。` : ""}
+                            {entry.issue === "missing" ? `\n請新增一個名稱精確為 ${entry.unitId} 的 agent。` : ""}
+                            {entry.issue === "load_balancer_missing" ? "\n請先設定 load balancer。" : ""}
+                            {entry.issue === "load_balancer_unavailable" ? "\n目前沒有可用的 load balancer instance。" : ""}
+                          </div>
                         </div>
-                      </label>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </HelpModal>
             )}
@@ -5820,9 +5973,9 @@ export default function App() {
                 setTutorialOpenedToolResultMessageIds([]);
                 logNow({ category: "chat", message: "Chat cleared" });
               }}
-              leaderName={mode === "leader_team" ? activeAgent?.name : null}
+              leaderName={null}
               userName={userProfile.name}
-              modeLabel={mode === "leader_team" ? "goal-driven talking (deprecated)" : "normal"}
+              modeLabel={mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}
               onExportRaw={exportRawHistory}
               onExportSummary={exportSummaryHistory}
               onImportHistory={importHistoryFile}
