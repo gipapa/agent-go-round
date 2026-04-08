@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentGoRound Concept Wiki</title>
+    <link rel="stylesheet" href="./wiki.css" />
+  </head>
+  <body>
+    <main class="wiki-shell">
+      <header class="wiki-header">
+        <div class="wiki-kicker">Graphify · Concept-First Wiki</div>
+        <h1>AgentGoRound WIKI</h1>
+        <p>
+          這份 wiki 是基於 <code>concept-first corpus</code> 重做的 AgentGoRound 導覽版本。它刻意把焦點放在產品能力、runtime、
+          教學案例、MAGI、與前端呈現方式之間的關係，而不是單純列出程式檔案之間的 AST 依賴。
+        </p>
+        <div class="wiki-links">
+          <a class="wiki-link-card" href="../../intro/">
+            <strong>產品導覽頁</strong>
+            <span>直接看線上導覽版介紹頁，快速理解 AgentGoRound 的定位、功能與使用方式。</span>
+          </a>
+          <a class="wiki-link-card" href="https://github.com/gipapa/agent-go-round/blob/main/public/intro/agent-go-round.pptx">
+            <strong>PPTX 原始檔</strong>
+            <span>查看或下載產品介紹投影片原始檔，適合做簡報、分享或延伸整理。</span>
+          </a>
+          <a class="wiki-link-card" href="../graph.html">
+            <strong>互動圖譜</strong>
+            <span>用視覺化節點與社群關係快速看整個專案的概念連結。</span>
+          </a>
+          <a class="wiki-link-card" href="../GRAPH_REPORT.md">
+            <strong>純文字報告</strong>
+            <span>看社群摘要、關鍵節點與 graphify 對這份專案的整體整理。</span>
+          </a>
+          <a class="wiki-link-card" href="visualization-and-rendering.html">
+            <strong>為什麼要有這份 Wiki</strong>
+            <span>理解 graph / report / wiki 三種入口各自扮演的角色。</span>
+          </a>
+        </div>
+      </header>
+
+      <div class="wiki-grid">
+        <div class="wiki-sections">
+          <section>
+            <h2>快速導覽</h2>
+            <p>
+              如果你是第一次看 AgentGoRound，建議先從產品定位開始，再一路往下看 routing、browser skill runtime、tutorial、MAGI，
+              最後再回來看 visualization / graphify。這條路徑最接近 README 原本的敘事方式。
+            </p>
+            <div class="wiki-nav">
+              <a class="wiki-link-card" href="product-overview.html">
+                <strong>Product Overview</strong>
+                <span>先理解 browser-first、frontend-only 與 local-first 的產品定位。</span>
+              </a>
+              <a class="wiki-link-card" href="agent-and-routing.html">
+                <strong>Agent and Routing</strong>
+                <span>理解 credential pool、load balancer 與 agent access control。</span>
+              </a>
+              <a class="wiki-link-card" href="browser-and-skill-runtime.html">
+                <strong>Browser and Skill Runtime</strong>
+                <span>理解 multi-turn skill、browser observation 與 completion gate。</span>
+              </a>
+              <a class="wiki-link-card" href="tutorials-and-learning.html">
+                <strong>Tutorials and Learning</strong>
+                <span>理解教學案例如何同時兼具 onboarding 與 test case。</span>
+              </a>
+              <a class="wiki-link-card" href="magi-and-special-modes.html">
+                <strong>MAGI and Special Modes</strong>
+                <span>理解三賢人模式如何接管舊的 goal-driven 入口。</span>
+              </a>
+              <a class="wiki-link-card" href="visualization-and-rendering.html">
+                <strong>Visualization and Rendering</strong>
+                <span>理解 dashboard、render anything、graphify 之間的關係。</span>
+              </a>
+            </div>
+          </section>
+        </div>
+
+        <aside class="wiki-sidebar">
+          <section>
+            <h3>閱讀原則</h3>
+            <p>
+              這份 wiki 刻意弱化 vendored <code>agent-browser</code> 的存在。它仍然是 browser 能力的重要依賴，但不是這個專案的主角。
+            </p>
+            <div class="wiki-chip-list">
+              <span class="wiki-chip">browser-first</span>
+              <span class="wiki-chip">frontend-only</span>
+              <span class="wiki-chip">local-first</span>
+              <span class="wiki-chip">multi-turn runtime</span>
+              <span class="wiki-chip">tutorial-as-test</span>
+            </div>
+          </section>
+
+          <section>
+            <h3>建議問題</h3>
+            <ul>
+              <li>如果只看一頁，要先看哪一頁才能理解 AgentGoRound 的價值？</li>
+              <li>Load Balancer 與 Skills 在 runtime 中是怎麼互相接起來的？</li>
+              <li>為什麼 Tutorials 不只是文件，而是產品能力的一部分？</li>
+              <li>MAGI 模式和一般 one-to-one chat 在設計上差在哪裡？</li>
+            </ul>
+          </section>
+        </aside>
+      </div>
+
+      <footer class="wiki-footer">
+        這份 wiki 的文字基調參考 README：先講產品定位，再講功能面、runtime、教學案例與特殊模式。
+      </footer>
+    </main>
+  </body>
+</html>
