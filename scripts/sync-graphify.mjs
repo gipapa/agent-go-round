@@ -7,18 +7,13 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..");
 const srcDir = path.join(repoRoot, "src", "graphify");
 const publicDir = path.join(repoRoot, "public", "graphify");
-const files = ["graph.html", "GRAPH_REPORT.md", "graph.json"];
+const fileArtifacts = ["graph.html", "GRAPH_REPORT.md", "graph.json"];
+const dirArtifacts = ["wiki"];
 
+fs.rmSync(publicDir, { recursive: true, force: true });
 fs.mkdirSync(publicDir, { recursive: true });
 
-for (const entry of fs.readdirSync(publicDir)) {
-  const target = path.join(publicDir, entry);
-  if (fs.statSync(target).isFile() && !files.includes(entry)) {
-    fs.rmSync(target, { force: true });
-  }
-}
-
-for (const file of files) {
+for (const file of fileArtifacts) {
   const src = path.join(srcDir, file);
   const dst = path.join(publicDir, file);
   if (!fs.existsSync(src)) {
@@ -27,4 +22,14 @@ for (const file of files) {
   fs.copyFileSync(src, dst);
 }
 
-console.log("graphify assets synced:", files.join(", "));
+for (const dir of dirArtifacts) {
+  const src = path.join(srcDir, dir);
+  const dst = path.join(publicDir, dir);
+  if (!fs.existsSync(src)) {
+    continue;
+  }
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.cpSync(src, dst, { recursive: true });
+}
+
+console.log("graphify assets synced:", [...fileArtifacts, ...dirArtifacts].join(", "));

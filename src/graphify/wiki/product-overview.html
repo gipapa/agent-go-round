@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Product Overview · AgentGoRound Wiki</title>
+    <link rel="stylesheet" href="./wiki.css" />
+  </head>
+  <body>
+    <main class="wiki-shell">
+      <div class="wiki-breadcrumbs"><a href="./index.html">WIKI</a> / Product Overview</div>
+      <header class="wiki-header">
+        <div class="wiki-kicker">Concept Page</div>
+        <h1>Product Overview</h1>
+        <p>
+          AgentGoRound 的核心不是「幫你包裝一個固定 agent 產品」，而是提供一個在瀏覽器中就能直接管理 agent workflow 的 playground。
+          因為部署目標是 GitHub Pages，所以整體設計天然偏向 <code>frontend-only</code> 與 <code>local-first</code>。
+        </p>
+      </header>
+
+      <div class="wiki-sections">
+        <section>
+          <h2>產品主張</h2>
+          <ul>
+            <li>在同一個 workspace 中管理 agents、docs、MCP tools、built-in tools、skills 與 chat history。</li>
+            <li>重點是快速驗證 use case、做教學演示、研究 agentic UI，而不是提供穩定後端 SaaS。</li>
+            <li>多數狀態都放在瀏覽器：`localStorage`、`IndexedDB`、以及目前頁面環境本身。</li>
+          </ul>
+          <div class="wiki-callout">
+            這也是為什麼 README 會一直重複強調 browser-first。對這個專案來說，那不是部署細節，而是產品邊界。
+          </div>
+        </section>
+
+        <section>
+          <h2>主要能力線</h2>
+          <ul>
+            <li><strong>Agent Workspace</strong>：組織所有對話與能力授權的中心。</li>
+            <li><strong>Load Balancer + Credential Pool</strong>：決定模型、key 與 failover。</li>
+            <li><strong>Docs / MCP / Built-in Tools / Skills</strong>：四種主要能力來源。</li>
+            <li><strong>Tutorials</strong>：把功能串成可操作、可驗證的 journey。</li>
+            <li><strong>MAGI</strong>：多 agent 裁決模式。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>See Also</h2>
+          <div class="wiki-nav">
+            <a class="wiki-link-card" href="agent-and-routing.html">
+              <strong>Agent and Routing</strong>
+              <span>看 Agent 如何接到 load balancer 與 credential pool。</span>
+            </a>
+            <a class="wiki-link-card" href="tutorials-and-learning.html">
+              <strong>Tutorials and Learning</strong>
+              <span>看產品能力如何被包裝成實際可走完的案例。</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

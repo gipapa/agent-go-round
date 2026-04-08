@@ -3,8 +3,7 @@ export default function LandingPage(props: {
   onStartTutorial: () => void;
 }) {
   const baseUrl = (import.meta.env.BASE_URL || "/").replace(/\/+$/, "");
-  const graphifyHtmlUrl = `${baseUrl}/graphify/graph.html`;
-  const graphifyReportUrl = `${baseUrl}/graphify/GRAPH_REPORT.md`;
+  const graphifyWikiUrl = `${baseUrl}/graphify/wiki/index.html`;
 
   return (
     <div className="landing-shell">
@@ -29,11 +28,8 @@ export default function LandingPage(props: {
           <button type="button" className="landing-secondary-btn" onClick={props.onStartTutorial} data-tutorial-id="landing-start-tutorial">
             使用案例教學
           </button>
-          <a className="landing-link-btn" href={graphifyHtmlUrl} target="_blank" rel="noreferrer">
-            Graphify 概念圖譜
-          </a>
-          <a className="landing-link-btn" href={graphifyReportUrl} target="_blank" rel="noreferrer">
-            Graphify 概念報告
+          <a className="landing-link-btn" href={graphifyWikiUrl} target="_blank" rel="noreferrer">
+            專案介紹(Graphify WIKI)
           </a>
         </div>
       </div>

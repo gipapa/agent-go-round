@@ -1,0 +1,211 @@
+:root {
+  color-scheme: dark;
+  --bg: #0a0d14;
+  --panel: #111827;
+  --panel-2: #0f172a;
+  --border: rgba(90, 123, 255, 0.2);
+  --text: #e5ecf8;
+  --muted: #9fb0c8;
+  --accent: #7dd3fc;
+  --accent-2: #8b5cf6;
+  --ok: #8be9b1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", "Noto Sans TC", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.08), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(139, 92, 246, 0.08), transparent 30%),
+    linear-gradient(180deg, #090c12 0%, #0d1018 100%);
+  color: var(--text);
+}
+
+a {
+  color: var(--accent);
+}
+
+.wiki-shell {
+  width: min(1100px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0 48px;
+}
+
+.wiki-header {
+  padding: 26px 28px;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background:
+    linear-gradient(145deg, rgba(17, 24, 39, 0.96), rgba(12, 17, 28, 0.94)),
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.08), transparent 34%);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+}
+
+.wiki-kicker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  background: rgba(125, 211, 252, 0.07);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wiki-header h1 {
+  margin: 16px 0 12px;
+  font-size: clamp(34px, 5vw, 56px);
+  line-height: 1.02;
+}
+
+.wiki-header p {
+  margin: 0;
+  max-width: 820px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.wiki-links,
+.wiki-grid,
+.wiki-sections,
+.wiki-nav {
+  display: grid;
+  gap: 14px;
+}
+
+.wiki-links {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 22px;
+}
+
+.wiki-link-card,
+.wiki-card {
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.8);
+  padding: 18px 20px;
+}
+
+.wiki-link-card {
+  text-decoration: none;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.wiki-link-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(18, 28, 52, 0.92);
+}
+
+.wiki-link-card strong,
+.wiki-card h2,
+.wiki-card h3 {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.wiki-link-card span,
+.wiki-card p,
+.wiki-card li {
+  color: var(--muted);
+  line-height: 1.75;
+}
+
+.wiki-grid {
+  grid-template-columns: 1.1fr 0.9fr;
+  margin-top: 18px;
+}
+
+.wiki-sections {
+  margin-top: 18px;
+}
+
+.wiki-sections section,
+.wiki-sidebar section {
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.78);
+  padding: 20px 22px;
+}
+
+.wiki-sidebar {
+  display: grid;
+  gap: 14px;
+}
+
+.wiki-nav {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 22px;
+}
+
+.wiki-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.wiki-chip {
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background: rgba(125, 211, 252, 0.07);
+  color: #d9f6ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wiki-breadcrumbs {
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.wiki-breadcrumbs a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.wiki-callout {
+  padding: 14px 16px;
+  border-left: 3px solid var(--accent);
+  background: rgba(125, 211, 252, 0.06);
+  border-radius: 14px;
+  margin-top: 16px;
+}
+
+.wiki-footer {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+code {
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  color: #d2e7ff;
+}
+
+@media (max-width: 860px) {
+  .wiki-shell {
+    width: min(100vw - 24px, 1100px);
+    padding-top: 16px;
+  }
+
+  .wiki-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wiki-header {
+    padding: 22px 20px;
+  }
+}

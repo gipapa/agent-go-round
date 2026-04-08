@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browser and Skill Runtime · AgentGoRound Wiki</title>
+    <link rel="stylesheet" href="./wiki.css" />
+  </head>
+  <body>
+    <main class="wiki-shell">
+      <div class="wiki-breadcrumbs"><a href="./index.html">WIKI</a> / Browser and Skill Runtime</div>
+      <header class="wiki-header">
+        <div class="wiki-kicker">Concept Page</div>
+        <h1>Browser and Skill Runtime</h1>
+        <p>
+          在 AgentGoRound 裡，skill 不只是 prompt snippet，而是一個 workflow layer。特別是 browser workflow skill，
+          它把 observation、planning、tool execution、completion gate 都做成可追蹤的多輪 runtime。
+        </p>
+      </header>
+
+      <div class="wiki-sections">
+        <section>
+          <h2>核心循環</h2>
+          <ul>
+            <li><strong>observe</strong>：先對頁面狀態與 browser snapshot 做結構化整理。</li>
+            <li><strong>act</strong>：再決定要 open、click、fill、wait 還是 request user help。</li>
+            <li><strong>sync state</strong>：把 tool output 與 browser observation 合併回 runtime。</li>
+            <li><strong>completion gate</strong>：只有在足夠 grounded 時才會 finish。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>這條能力線解決了什麼</h2>
+          <ul>
+            <li>把「看起來像 agent 做到了」和「真的走完 browser workflow」區分開來。</li>
+            <li>讓 blocked / manual gate / timeout / observe-first 這些情境能在 UI 被清楚顯示。</li>
+            <li>讓 case 6 這種 GitHub Trending 多輪案例可以反覆驗證與回歸測試。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>See Also</h2>
+          <div class="wiki-nav">
+            <a class="wiki-link-card" href="tutorials-and-learning.html">
+              <strong>Tutorials and Learning</strong>
+              <span>看 browser workflow 如何被包裝成 onboarding case 與 real tutorial test。</span>
+            </a>
+            <a class="wiki-link-card" href="visualization-and-rendering.html">
+              <strong>Visualization and Rendering</strong>
+              <span>看 trace、dashboard 與 graphify 如何讓 runtime 更容易被觀察。</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

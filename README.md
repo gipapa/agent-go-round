@@ -5,8 +5,8 @@
 **AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。** 整個專案以純前端為核心，希望從網頁前端直接提供agentic所需能力，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
 
 - 產品介紹導覽頁：[線上瀏覽](https://gipapa.github.io/agent-go-round/intro/) ｜ [PPTX](./public/intro/agent-go-round.pptx)
-- Graphify 概念圖譜：[互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) ｜ [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
-- 這份 Graphify 輸出是 `concept-first corpus`，重點放在產品能力、runtime、教學案例與 UI surface 之間的連結，而不是程式 AST 依賴圖；vendored `agent-browser` 只保留最少量的脈絡節點。
+- WIKI 與圖譜：[WIKI](https://gipapa.github.io/agent-go-round/graphify/wiki/index.html) ｜ [互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) ｜ [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
+- WIKI 入口也整合了產品導覽頁與 PPTX 原始檔，方便用同一個入口瀏覽專案介紹、概念圖譜與文字報告。
 
 ## 專案特色
 
