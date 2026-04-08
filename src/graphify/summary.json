@@ -1,0 +1,18 @@
+{
+  "detection": {
+    "total_files": 6,
+    "total_words": 422
+  },
+  "graph": {
+    "nodes": 32,
+    "edges": 55,
+    "communities": 5
+  },
+  "community_labels": {
+    "0": "Browser Automation",
+    "1": "Tooling & Visualization",
+    "2": "Product Narrative",
+    "3": "Magi Deliberation",
+    "4": "Agent Configuration"
+  }
+}

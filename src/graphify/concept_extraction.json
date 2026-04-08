@@ -1,0 +1,967 @@
+{
+  "nodes": [
+    {
+      "id": "product",
+      "label": "AgentGoRound",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "browser_first",
+      "label": "Browser-first Frontend-only Playground",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "github_pages",
+      "label": "GitHub Pages Deployment",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "landing_page",
+      "label": "Landing Page",
+      "file_type": "document",
+      "source_file": "src/ui/LandingPage.tsx",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "app_shell",
+      "label": "App.tsx Shell",
+      "file_type": "code",
+      "source_file": "src/app/App.tsx",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "agent_workspace",
+      "label": "Agent Workspace",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/02-agent-and-routing.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "load_balancer",
+      "label": "Load Balancer",
+      "file_type": "document",
+      "source_file": "src/utils/loadBalancer.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "credential_pool",
+      "label": "Credential Pool",
+      "file_type": "document",
+      "source_file": "src/storage/settingsStore.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "docs_context",
+      "label": "Docs Context",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "mcp_integration",
+      "label": "MCP Integration",
+      "file_type": "document",
+      "source_file": "src/ui/McpPanel.tsx",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "built_in_tools",
+      "label": "Built-in Tools",
+      "file_type": "document",
+      "source_file": "src/ui/BuiltInToolsPanel.tsx",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "render_anything",
+      "label": "Render Anything Pattern",
+      "file_type": "document",
+      "source_file": "render_anything.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "dashboard_helper",
+      "label": "Dashboard Helper",
+      "file_type": "code",
+      "source_file": "src/utils/toolDashboard.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "skills",
+      "label": "Skills",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "multi_turn_runtime",
+      "label": "Multi-turn Skill Runtime",
+      "file_type": "document",
+      "source_file": "agentic.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "skill_runtime_design",
+      "label": "Skill Runtime Design Draft",
+      "file_type": "document",
+      "source_file": "docs/skill-runtime-design.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "browser_workflow",
+      "label": "Browser Workflow Skill",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/03-browser-and-skill-runtime.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "browser_observation",
+      "label": "Browser Observation Digest",
+      "file_type": "code",
+      "source_file": "src/runtime/browserObservation.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "tutorials",
+      "label": "Tutorial Scenarios",
+      "file_type": "document",
+      "source_file": "src/onboarding/catalog.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "tutorial_runtime",
+      "label": "Tutorial Runtime",
+      "file_type": "code",
+      "source_file": "src/onboarding/runtime.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "case5",
+      "label": "Case 5 Browser MCP Tutorial",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "case6",
+      "label": "Case 6 GitHub Trending Tutorial",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "magi_mode",
+      "label": "MAGI Mode",
+      "file_type": "document",
+      "source_file": "src/orchestrators/magi.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "magi_vote",
+      "label": "Magi Vote",
+      "file_type": "document",
+      "source_file": "src/orchestrators/magi.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "magi_consensus",
+      "label": "Magi Consensus",
+      "file_type": "document",
+      "source_file": "src/orchestrators/magi.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "magi_skills",
+      "label": "Magi Skills",
+      "file_type": "document",
+      "source_file": "src/magi/magiSkills.ts",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "graphify_concept_graph",
+      "label": "Graphify Concept Graph",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "intro_guide",
+      "label": "Intro Guide",
+      "file_type": "document",
+      "source_file": "public/intro/index.html",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "vendored_agent_browser",
+      "label": "Vendored agent-browser",
+      "file_type": "document",
+      "source_file": "mcp-test/agent-browser-sse/vendor/agent-browser/README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "local_first_reason",
+      "label": "Local-first experimentation without mandatory backend",
+      "file_type": "document",
+      "source_file": "README.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "controlled_access_reason",
+      "label": "Controlled access avoids agent behavior drift",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/05-magi-and-special-modes.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    },
+    {
+      "id": "concept_first_reason",
+      "label": "Concept-first graph avoids vendor noise and code-only bias",
+      "file_type": "document",
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "source_url": null,
+      "captured_at": null,
+      "author": null,
+      "contributor": null
+    }
+  ],
+  "edges": [
+    {
+      "source": "product",
+      "target": "browser_first",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "github_pages",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "agent_workspace",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "docs_context",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "mcp_integration",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "built_in_tools",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "skills",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "tutorials",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "magi_mode",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "product",
+      "target": "graphify_concept_graph",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "browser_first",
+      "target": "github_pages",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "browser_first",
+      "target": "local_first_reason",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "README.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "app_shell",
+      "target": "agent_workspace",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/app/App.tsx",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "app_shell",
+      "target": "landing_page",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/app/App.tsx",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "app_shell",
+      "target": "magi_mode",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/app/App.tsx",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "landing_page",
+      "target": "tutorials",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/ui/LandingPage.tsx",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "landing_page",
+      "target": "intro_guide",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "public/intro/index.html",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "intro_guide",
+      "target": "tutorials",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "public/intro/index.html",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "agent_workspace",
+      "target": "load_balancer",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/02-agent-and-routing.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "agent_workspace",
+      "target": "credential_pool",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/02-agent-and-routing.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "load_balancer",
+      "target": "credential_pool",
+      "relation": "shares_data_with",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/utils/loadBalancer.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "load_balancer",
+      "target": "skills",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.74,
+      "source_file": "src/graphify/corpus/02-agent-and-routing.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "load_balancer",
+      "target": "mcp_integration",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.67,
+      "source_file": "src/graphify/corpus/02-agent-and-routing.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "skills",
+      "target": "multi_turn_runtime",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "agentic.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "multi_turn_runtime",
+      "target": "skill_runtime_design",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "agentic.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "skill_runtime_design",
+      "target": "browser_workflow",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "docs/skill-runtime-design.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "multi_turn_runtime",
+      "target": "browser_workflow",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/03-browser-and-skill-runtime.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "multi_turn_runtime",
+      "target": "browser_observation",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/03-browser-and-skill-runtime.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "browser_workflow",
+      "target": "mcp_integration",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/03-browser-and-skill-runtime.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "browser_workflow",
+      "target": "case6",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "browser_workflow",
+      "target": "case5",
+      "relation": "references",
+      "confidence": "INFERRED",
+      "confidence_score": 0.71,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "browser_observation",
+      "target": "case6",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/runtime/browserObservation.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "mcp_integration",
+      "target": "vendored_agent_browser",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/ui/McpPanel.tsx",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "vendored_agent_browser",
+      "target": "browser_workflow",
+      "relation": "conceptually_related_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.61,
+      "source_file": "src/graphify/corpus/03-browser-and-skill-runtime.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tutorials",
+      "target": "tutorial_runtime",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/onboarding/runtime.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tutorials",
+      "target": "case5",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tutorials",
+      "target": "case6",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tutorial_runtime",
+      "target": "case5",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/onboarding/runtime.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "tutorial_runtime",
+      "target": "case6",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/onboarding/runtime.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "case5",
+      "target": "mcp_integration",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "case6",
+      "target": "browser_workflow",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "case6",
+      "target": "multi_turn_runtime",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/04-tutorials-and-learning.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "built_in_tools",
+      "target": "render_anything",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "render_anything.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "built_in_tools",
+      "target": "dashboard_helper",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/utils/toolDashboard.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "render_anything",
+      "target": "dashboard_helper",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "render_anything.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "render_anything",
+      "target": "graphify_concept_graph",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.72,
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "magi_mode",
+      "target": "magi_vote",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/orchestrators/magi.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "magi_mode",
+      "target": "magi_consensus",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/orchestrators/magi.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "magi_mode",
+      "target": "magi_skills",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/magi/magiSkills.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "magi_vote",
+      "target": "magi_skills",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/magi/magiSkills.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "magi_consensus",
+      "target": "magi_skills",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/magi/magiSkills.ts",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "magi_mode",
+      "target": "controlled_access_reason",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/05-magi-and-special-modes.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "graphify_concept_graph",
+      "target": "concept_first_reason",
+      "relation": "rationale_for",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "graphify_concept_graph",
+      "target": "landing_page",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "graphify_concept_graph",
+      "target": "intro_guide",
+      "relation": "conceptually_related_to",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/06-visualization-and-rendering.md",
+      "source_location": null,
+      "weight": 1.0
+    },
+    {
+      "source": "docs_context",
+      "target": "skills",
+      "relation": "semantically_similar_to",
+      "confidence": "INFERRED",
+      "confidence_score": 0.63,
+      "source_file": "src/graphify/corpus/01-product-overview.md",
+      "source_location": null,
+      "weight": 1.0
+    }
+  ],
+  "hyperedges": [
+    {
+      "id": "product_surface",
+      "label": "Core Product Surface",
+      "nodes": [
+        "agent_workspace",
+        "docs_context",
+        "mcp_integration",
+        "built_in_tools",
+        "skills",
+        "tutorials"
+      ],
+      "relation": "participate_in",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/01-product-overview.md"
+    },
+    {
+      "id": "agent_execution_stack",
+      "label": "Agent Execution Stack",
+      "nodes": [
+        "agent_workspace",
+        "load_balancer",
+        "credential_pool",
+        "skills"
+      ],
+      "relation": "form",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/02-agent-and-routing.md"
+    },
+    {
+      "id": "browser_automation_loop",
+      "label": "Browser Automation Loop",
+      "nodes": [
+        "mcp_integration",
+        "browser_workflow",
+        "multi_turn_runtime",
+        "browser_observation",
+        "case6"
+      ],
+      "relation": "participate_in",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "source_file": "src/graphify/corpus/03-browser-and-skill-runtime.md"
+    }
+  ],
+  "input_tokens": 0,
+  "output_tokens": 0
+}

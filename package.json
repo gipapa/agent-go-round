@@ -4,7 +4,9 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/sync-graphify.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/sync-graphify.mjs",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "vite build && gh-pages -d dist",

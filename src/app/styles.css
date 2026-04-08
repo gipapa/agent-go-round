@@ -146,6 +146,7 @@ hr {
 
 .landing-primary-btn,
 .landing-secondary-btn,
+.landing-link-btn,
 .tutorial-next-btn,
 .tutorial-exit-btn,
 .tutorial-exit-link {
@@ -165,6 +166,7 @@ hr {
 }
 
 .landing-secondary-btn,
+.landing-link-btn,
 .tutorial-exit-btn {
   padding: 13px 18px;
   border-radius: 16px;
@@ -173,6 +175,20 @@ hr {
   color: var(--text);
   font-weight: 700;
   cursor: pointer;
+}
+
+.landing-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-color: rgba(77, 208, 225, 0.2);
+  background: rgba(77, 208, 225, 0.06);
+}
+
+.landing-link-btn:hover {
+  border-color: rgba(77, 208, 225, 0.34);
+  background: rgba(77, 208, 225, 0.1);
 }
 
 .tutorial-layout {
