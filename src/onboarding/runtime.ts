@@ -41,6 +41,12 @@ export const TUTORIAL_DOC_CONTENT = "你是個說話結尾都會喵喵叫的助�
 export const TUTORIAL_MCP_NAME = "教學用MCP";
 export const TUTORIAL_PRIMARY_LOAD_BALANCER_NAME = "教學用Load Balancer 1";
 export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
+export const TUTORIAL_PRIMARY_MODEL = "groq/compound";
+export const TUTORIAL_SECONDARY_MODEL = "groq/compound-mini";
+
+function isManagedMagiAgent(agent: AgentConfig) {
+  return agent.managedBy === "magi" && !!agent.managedUnitId;
+}
 
 function findLoadBalancerByName(state: TutorialRuntimeState, name: string) {
   return state.loadBalancers.find((entry) => entry.name.trim() === name) ?? null;
@@ -104,12 +110,13 @@ function findTutorialAgentPrimaryInstance(state: TutorialRuntimeState, agent: Ag
 function findTutorialAgentBase(state: TutorialRuntimeState) {
   return (
     state.agents.find((agent) => {
+      if (isManagedMagiAgent(agent)) return false;
       const primary = findTutorialAgentPrimaryInstance(state, agent);
       return (
         !!primary &&
         primary.credential?.preset === "groq" &&
         normalizeCredentialUrl(primary.credential.endpoint) === "https://api.groq.com/openai/v1" &&
-        primary.instance.model === "moonshotai/kimi-k2-instruct-0905"
+        primary.instance.model === TUTORIAL_PRIMARY_MODEL
       );
     }) ?? null
   );
@@ -137,7 +144,7 @@ function loadBalancerMatchesTutorialGroq(state: TutorialRuntimeState, loadBalanc
   return (
     credential?.preset === "groq" &&
     normalizeCredentialUrl(credential.endpoint) === "https://api.groq.com/openai/v1" &&
-    firstInstance.model === "moonshotai/kimi-k2-instruct-0905"
+    firstInstance.model === TUTORIAL_PRIMARY_MODEL
   );
 }
 
@@ -185,23 +192,41 @@ function hasSkillLoaded(
   );
 }
 
-function findAssistantReplyAfterPrompt(history: TutorialRuntimeState["history"], prompt: string) {
+function findAssistantTurnAfterPrompt(history: TutorialRuntimeState["history"], prompt: string) {
   const lastPromptIndex = [...history].reverse().findIndex((item) => item.role === "user" && item.content.trim() === prompt);
   const actualPromptIndex = lastPromptIndex >= 0 ? history.length - 1 - lastPromptIndex : -1;
   if (actualPromptIndex < 0) {
-    return { promptIndex: -1, assistantIndex: -1, assistant: null as TutorialRuntimeState["history"][number] | null };
+    return {
+      promptIndex: -1,
+      nextUserIndex: -1,
+      assistantIndex: -1,
+      assistant: null as TutorialRuntimeState["history"][number] | null,
+      assistantIds: [] as string[]
+    };
   }
-  const relativeAssistantIndex = history
-    .slice(actualPromptIndex + 1)
-    .findIndex((item) => item.role === "assistant" && item.content.trim().length > 0);
-  if (relativeAssistantIndex < 0) {
-    return { promptIndex: actualPromptIndex, assistantIndex: -1, assistant: null as TutorialRuntimeState["history"][number] | null };
+  const relativeNextUserIndex = history.slice(actualPromptIndex + 1).findIndex((item) => item.role === "user");
+  const nextUserIndex = relativeNextUserIndex >= 0 ? actualPromptIndex + 1 + relativeNextUserIndex : history.length;
+  const turnMessages = history.slice(actualPromptIndex + 1, nextUserIndex);
+  const assistantIndexes = turnMessages
+    .map((item, offset) => ({ item, index: actualPromptIndex + 1 + offset }))
+    .filter(({ item }) => item.role === "assistant" && item.content.trim().length > 0)
+    .map(({ index }) => index);
+  const assistantIndex = assistantIndexes.length > 0 ? assistantIndexes[assistantIndexes.length - 1] : -1;
+  if (assistantIndex < 0) {
+    return {
+      promptIndex: actualPromptIndex,
+      nextUserIndex,
+      assistantIndex: -1,
+      assistant: null as TutorialRuntimeState["history"][number] | null,
+      assistantIds: [] as string[]
+    };
   }
-  const assistantIndex = actualPromptIndex + 1 + relativeAssistantIndex;
   return {
     promptIndex: actualPromptIndex,
+    nextUserIndex,
     assistantIndex,
-    assistant: history[assistantIndex] ?? null
+    assistant: history[assistantIndex] ?? null,
+    assistantIds: assistantIndexes.map((index) => history[index]?.id).filter((id): id is string => !!id)
   };
 }
 
@@ -229,6 +254,13 @@ function collectAdjacentToolMessages(history: TutorialRuntimeState["history"], i
   return items;
 }
 
+function collectTurnToolMessages(history: TutorialRuntimeState["history"], promptIndex: number, nextUserIndex: number) {
+  if (promptIndex < 0) return [] as TutorialRuntimeState["history"];
+  return history
+    .slice(promptIndex + 1, nextUserIndex >= 0 ? nextUserIndex : history.length)
+    .filter((item): item is TutorialRuntimeState["history"][number] => item.role === "tool");
+}
+
 function toolMessageSucceeded(message: TutorialRuntimeState["history"][number] | null | undefined) {
   if (!message || message.role !== "tool") return false;
   return !/工具執行失敗/.test(message.content);
@@ -243,10 +275,18 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
   const automation = step.automation;
   const expect = automation?.expect as TutorialChatExpectation | undefined;
   const prompt = expect?.userPrompt?.trim() || automation?.composerSeed?.trim() || "";
-  const { assistantIndex, assistant } = prompt
-    ? findAssistantReplyAfterPrompt(state.history, prompt)
-    : { assistantIndex: -1, assistant: null as TutorialRuntimeState["history"][number] | null };
-  const toolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
+  const { promptIndex, nextUserIndex, assistantIndex, assistant, assistantIds } = prompt
+    ? findAssistantTurnAfterPrompt(state.history, prompt)
+    : {
+        promptIndex: -1,
+        nextUserIndex: -1,
+        assistantIndex: -1,
+        assistant: null as TutorialRuntimeState["history"][number] | null,
+        assistantIds: [] as string[]
+      };
+  const adjacentToolMessages = assistantIndex >= 0 ? collectAdjacentToolMessages(state.history, assistantIndex) : [];
+  const turnToolMessages = promptIndex >= 0 ? collectTurnToolMessages(state.history, promptIndex, nextUserIndex) : [];
+  const toolMessages = adjacentToolMessages.length > 0 ? adjacentToolMessages : turnToolMessages;
   const issues: string[] = [];
 
   if ((expect?.requireAssistant ?? true) && !assistant) {
@@ -287,7 +327,11 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     }
   }
 
-  if (assistant && expect?.requireOpenedToolResult && !state.openedToolResultMessageIds.includes(assistant.id)) {
+  if (
+    assistant &&
+    expect?.requireOpenedToolResult &&
+    !assistantIds.some((assistantId) => state.openedToolResultMessageIds.includes(assistantId))
+  ) {
     issues.push("已收到回覆，請再展開「查看 tool result」完成驗證。");
   }
 
@@ -380,7 +424,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `已建立單一 instance load balancer：${loadBalancer?.name}`
-          : "請建立「教學用Load Balancer 1」，至少加入 1 個 instance，並使用 Groq credential + moonshotai/kimi-k2-instruct-0905。"
+          : `請建立「教學用Load Balancer 1」，至少加入 1 個 instance，並使用 Groq credential + ${TUTORIAL_PRIMARY_MODEL}。`
       };
     }
     case "create_groq_agent": {
@@ -418,11 +462,11 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         !!secondary &&
         loadBalancer.instances[0]?.credentialId === primary.credential.id &&
         loadBalancer.instances[0]?.credentialKeyId === primary.key.id &&
-        loadBalancer.instances[0]?.model === "moonshotai/kimi-k2-instruct-0905" &&
+        loadBalancer.instances[0]?.model === TUTORIAL_PRIMARY_MODEL &&
         loadBalancer.instances[1]?.credentialId === primary.credential.id &&
         loadBalancer.instances[1]?.credentialKeyId === primary.key.id &&
-        loadBalancer.instances[1]?.model === "groq/compound" &&
-        loadBalancer.instances[2]?.model === "moonshotai/kimi-k2-instruct-0905" &&
+        loadBalancer.instances[1]?.model === TUTORIAL_SECONDARY_MODEL &&
+        loadBalancer.instances[2]?.model === TUTORIAL_PRIMARY_MODEL &&
         (loadBalancer.instances[2]?.credentialId !== primary.credential.id ||
           loadBalancer.instances[2]?.credentialKeyId !== primary.key.id);
       return {
@@ -533,10 +577,15 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
       const agent = findTutorialAgentBase(state);
       const timeTool = findTutorialTimeTool(state);
       const builtInEnabled = !!agent && agent.enableBuiltInTools === true;
-      const customSelection = !!agent && Array.isArray(agent.allowedBuiltInToolIds);
-      const hasTimeTool = !!timeTool && !!agent && !!agent.allowedBuiltInToolIds?.includes(timeTool.id);
-      const hasProfileTool = !!agent && !!agent.allowedBuiltInToolIds?.includes(SYSTEM_USER_PROFILE_TOOL_ID);
-      const completed = builtInEnabled && customSelection && hasTimeTool && hasProfileTool;
+      const allowAllBuiltIns = !!agent && agent.allowedBuiltInToolIds === undefined;
+      const hasTimeTool =
+        !!timeTool &&
+        !!agent &&
+        (allowAllBuiltIns || !!agent.allowedBuiltInToolIds?.includes(timeTool.id));
+      const hasProfileTool =
+        !!agent &&
+        (allowAllBuiltIns || !!agent.allowedBuiltInToolIds?.includes(SYSTEM_USER_PROFILE_TOOL_ID));
+      const completed = builtInEnabled && hasTimeTool && hasProfileTool;
       return {
         completed,
         targetId:
@@ -546,7 +595,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? "目前 Agent 已允許使用教學用時鐘工具與 get_user_profile。"
-          : "請在 Agent 的 Built-in Tools 中勾選 Custom selection，並允許教學用時鐘工具與 get_user_profile。"
+          : "請在 Agent 的 Built-in Tools 中允許全部工具，或至少允許教學用時鐘工具與 get_user_profile。"
       };
     }
     case "first_chat_time_tool": {

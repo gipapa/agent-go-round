@@ -2,7 +2,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
-import { applyTutorialStepEntry, evaluateTutorialStep } from "../onboarding/runtime";
+import {
+  applyTutorialStepEntry,
+  evaluateTutorialStep,
+  TUTORIAL_PRIMARY_MODEL
+} from "../onboarding/runtime";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../onboarding/types";
 import type { AgentConfig, ChatMessage, LoadBalancerConfig } from "../types";
 import type { ModelCredentialEntry } from "../storage/settingsStore";
@@ -30,7 +34,7 @@ function makeTutorialLoadBalancer(): LoadBalancerConfig {
         id: "lb-groq-instance-1",
         credentialId: "credential-groq",
         credentialKeyId: "credential-groq-key-1",
-        model: "moonshotai/kimi-k2-instruct-0905",
+        model: TUTORIAL_PRIMARY_MODEL,
         description: "",
         maxRetries: 4,
         delaySecond: 5,
@@ -154,6 +158,75 @@ describe("tutorial YAML automation linkage", () => {
     );
   });
 
+  it("never selects managed MAGI agents as tutorial active agents", () => {
+    const step = getStep("agent-browser-mcp-chat", "set-history-limit");
+    const controller: TutorialEntryController = {
+      setActiveTab: vi.fn(),
+      setConfigModal: vi.fn(),
+      setActiveAgentId: vi.fn(),
+      setSelectedAgentId: vi.fn(),
+      setSkillExecutionMode: vi.fn(),
+      setSkillVerifyMax: vi.fn(),
+      setSkillToolLoopMax: vi.fn(),
+      setAgentLoadBalancerRetryPolicy: vi.fn(),
+      setComposerSeed: vi.fn(),
+      clearChat: vi.fn(),
+      seedTutorialLoadBalancerDraft: vi.fn(),
+      ensureTutorialAgentBrowserMcpTools: vi.fn(),
+      ensureTutorialSequentialSkill: vi.fn(),
+      ensureTutorialChatgptBrowserSkill: vi.fn()
+    };
+    const now = Date.now();
+    const magiAgent = makeTutorialAgentBase({
+      id: "agent-casper",
+      name: "Casper",
+      managedBy: "magi",
+      managedUnitId: "Casper"
+    });
+    const tutorialAgent = makeTutorialAgentBase({
+      id: "agent-tutorial",
+      name: "教學測試 Agent"
+    });
+
+    applyTutorialStepEntry(
+      step,
+      makeState({
+        agents: [magiAgent, tutorialAgent],
+        activeAgentId: tutorialAgent.id,
+        selectedAgentId: tutorialAgent.id,
+        loadBalancers: [
+          {
+            id: "lb-groq",
+            name: "教學用Load Balancer 1",
+            instances: [
+              {
+                id: "lb-groq-instance-1",
+                credentialId: "credential-groq",
+                credentialKeyId: "credential-groq-key-1",
+                model: TUTORIAL_PRIMARY_MODEL,
+                description: "",
+                maxRetries: 4,
+                delaySecond: 5,
+                resumeMinute: 60,
+                failure: false,
+                failureCount: 0,
+                nextCheckTime: null,
+                createdAt: now,
+                updatedAt: now
+              }
+            ],
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      }),
+      controller
+    );
+
+    expect(controller.setActiveAgentId).toHaveBeenCalledWith(tutorialAgent.id);
+    expect(controller.setSelectedAgentId).toHaveBeenCalledWith(tutorialAgent.id);
+  });
+
   it("requires tool result to be opened when YAML says requireOpenedToolResult", () => {
     const step = getStep("built-in-tools-chat", "chat-user-profile-tool");
     const prompt = step.automation?.expect?.userPrompt ?? "";
@@ -166,6 +239,51 @@ describe("tutorial YAML automation linkage", () => {
 
     const completed = evaluateTutorialStep(step, makeState({ history, openedToolResultMessageIds: [assistant.id] }));
     expect(completed.completed).toBe(true);
+  });
+
+  it("uses the latest assistant reply within the same chat turn for tool-result steps", () => {
+    const step = getStep("built-in-tools-chat", "chat-time-tool");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const assistantEarly = makeAssistant("assistant-early", "我先確認一下要呼叫哪個工具");
+    const assistantFinal = makeAssistant("assistant-final", "已打開時鐘 dashboard，目前時區是 Asia/Taipei。");
+    const history = [
+      makeUser(prompt),
+      assistantEarly,
+      assistantFinal,
+      makeTool("Built-in tool -> 教學用時鐘工具\ninput:\n{}\noutput:\n{\"started\":true}")
+    ];
+
+    const result = evaluateTutorialStep(step, makeState({ history, openedToolResultMessageIds: [assistantFinal.id] }));
+    expect(result.completed).toBe(true);
+  });
+
+  it("accepts All built-in tools for the tutorial built-in access step", () => {
+    const step = getStep("built-in-tools-chat", "enable-tool-access");
+    const result = evaluateTutorialStep(
+      step,
+      makeState({
+        agents: [
+          makeTutorialAgentBase({
+            enableBuiltInTools: true,
+            allowedBuiltInToolIds: undefined
+          })
+        ],
+        builtInTools: [
+          {
+            id: "tutorial-time-tool",
+            name: "教學用時鐘工具",
+            description: "desc",
+            inputSchema: {},
+            code: "return {}",
+            source: "custom",
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+          }
+        ]
+      })
+    );
+
+    expect(result.completed).toBe(true);
   });
 
   it("uses YAML skill-load assertions for sequential skill chat steps", () => {

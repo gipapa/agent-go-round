@@ -91,9 +91,10 @@ steps:
 
       在 Access Control 的 Built-in Tools 區塊中：
       - 勾選 Built-in Tools
-      - 選擇 Custom selection
-      - 勾選「教學用時鐘工具」
-      - 勾選「[系統工具]允許存取使用者資訊(get_user_profile)」
+      - 你可以直接選擇 `All built-in tools`
+      - 或選擇 `Custom selection`，並勾選：
+        - 「教學用時鐘工具」
+        - 「[系統工具]允許存取使用者資訊(get_user_profile)」
 
       儲存後，這個 Agent 才能在 normal 對話模式下呼叫這兩個工具。
     completionLabel: 等待你開啟 Agent 的 Built-in Tools 權限
