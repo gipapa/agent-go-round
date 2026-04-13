@@ -144,11 +144,11 @@ steps:
       這一步不驗證 repo 名稱內容是否正確；只驗證：
       - 有正常回覆
       - Agent 真的呼叫了 `browser_snapshot`
-      - 你有展開 `查看 tool result`
+      如果你想看細節，仍然可以自行展開 `查看 tool result`
     tab: chat
     targetId: chat-input
     behavior: first_chat_mcp_browser_snapshot
-    completionLabel: 等待 Agent 使用 browser_snapshot 並展開 tool result
+    completionLabel: 等待 Agent 使用 browser_snapshot 完成回覆
     actionLabel: 完成案例教學
     automation:
       composerSeed: 請明確使用 MCP 工具 browser_snapshot 讀取目前瀏覽器頁面，整理出 GitHub Trending 前十個熱門 repo 名稱。
@@ -158,4 +158,3 @@ steps:
         requireAssistant: true
         successfulToolMessageIncludes:
           - MCP 教學用MCP -> browser_snapshot
-        requireOpenedToolResult: true

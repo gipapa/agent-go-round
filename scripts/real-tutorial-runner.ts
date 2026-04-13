@@ -10,6 +10,7 @@ import {
   TUTORIAL_TIME_TOOL_DESCRIPTION,
   TUTORIAL_TIME_TOOL_NAME
 } from "../src/onboarding/tutorialBuiltInToolTemplate";
+import { TUTORIAL_PRIMARY_MODEL } from "../src/onboarding/runtime";
 import { AGENT_GO_ROUND_INDEXED_DB_TARGETS, AGENT_GO_ROUND_LOCAL_STORAGE_KEYS } from "../src/utils/resetAppStorage";
 import { normalizeCredentialUrl } from "../src/utils/credential";
 
@@ -785,7 +786,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
             {
               credentialLabel: "Groq",
               keyLabel: "Key 1",
-              model: config.model,
+              model: TUTORIAL_PRIMARY_MODEL,
               description: "Primary tutorial instance",
               maxRetries: 4,
               delaySecond: 5

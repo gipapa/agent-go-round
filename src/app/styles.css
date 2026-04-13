@@ -756,6 +756,12 @@ hr {
   gap: 10px;
 }
 
+.log-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .log-title {
   font-weight: 800;
   font-size: 12px;
@@ -791,7 +797,7 @@ hr {
 .log-row-head,
 .log-summary {
   display: grid;
-  grid-template-columns: 110px 140px 70px 170px minmax(140px, 1fr);
+  grid-template-columns: 110px 140px 96px 140px 170px minmax(140px, 1fr);
   gap: 10px;
   align-items: center;
 }
@@ -842,18 +848,56 @@ hr {
   text-overflow: ellipsis;
 }
 
-.log-ok.ok {
-  color: #7dffb2;
+.log-outcome {
   font-weight: 700;
 }
 
-.log-ok.fail {
+.log-outcome.success {
+  color: #7dffb2;
+}
+
+.log-outcome.failure {
   color: #ff8f8f;
-  font-weight: 700;
+}
+
+.log-outcome.degraded {
+  color: #ffd37d;
+}
+
+.log-outcome.info {
+  color: #9cc2ff;
+}
+
+.log-request-id {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  color: rgba(232, 232, 232, 0.72);
 }
 
 .log-message {
   color: rgba(232, 232, 232, 0.75);
+}
+
+.log-details-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.log-copy-btn {
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(232, 232, 232, 0.88);
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.log-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  font-weight: 700;
 }
 
 .log-details {

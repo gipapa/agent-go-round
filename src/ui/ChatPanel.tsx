@@ -86,9 +86,13 @@ function parseMessageSegments(content: string): MessageSegment[] {
 }
 
 async function copyText(text: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // Fall through to textarea fallback below.
   }
 
   const area = document.createElement("textarea");
@@ -96,8 +100,11 @@ async function copyText(text: string) {
   area.setAttribute("readonly", "true");
   area.style.position = "fixed";
   area.style.opacity = "0";
+  area.style.pointerEvents = "none";
   document.body.appendChild(area);
+  area.focus();
   area.select();
+  area.setSelectionRange(0, area.value.length);
   document.execCommand("copy");
   area.remove();
 }

@@ -112,9 +112,9 @@ steps:
       請前往 Chat 頁籤，送出這句話：
       - 請使用工具打開一個會持續更新的時鐘 dashboard，並告訴我目前時區。
 
-      這一步除了要等 agent 正常回覆，也請你展開下方的「查看 tool result」，確認工具真的有被呼叫。
-      只要有成功回覆、畫面正常，且你有打開 tool result，就算完成。
-    completionLabel: 等待 Agent 使用教學用時鐘工具並顯示 tool result
+      這一步只要 agent 有正常回覆，而且畫面右下角真的有打開時鐘 dashboard，就算完成。
+      如果你想確認細節，仍然可以自行展開下方的「查看 tool result」。
+    completionLabel: 等待 Agent 使用教學用時鐘工具並成功顯示時鐘
     tab: chat
     targetId: chat-input
     behavior: first_chat_time_tool
@@ -127,7 +127,6 @@ steps:
         requireAssistant: true
         successfulToolMessageIncludes:
           - Built-in tool -> 教學用時鐘工具
-        requireOpenedToolResult: true
 
   - id: chat-user-profile-tool
     title: 用對話呼叫系統工具
@@ -138,9 +137,9 @@ steps:
       - 請使用工具讀取我的個人資訊，並用一句話介紹我是誰
 
       如果設定正確，agent 會使用系統工具 `get_user_profile` 讀取你在 Profile 頁填寫的內容。
-      這一步同樣要打開「查看 tool result」，確認工具調用結果有出現，才算完成。
+      只要有正常回覆，而且內容明顯是根據你的 Profile 產生，就算完成。
     actionLabel: 完成案例教學
-    completionLabel: 等待 Agent 使用 get_user_profile 並顯示 tool result
+    completionLabel: 等待 Agent 使用 get_user_profile 完成回覆
     tab: chat
     targetId: chat-input
     behavior: first_chat_user_profile_tool
@@ -152,4 +151,3 @@ steps:
         requireAssistant: true
         successfulToolMessageIncludes:
           - Built-in tool -> get_user_profile
-        requireOpenedToolResult: true

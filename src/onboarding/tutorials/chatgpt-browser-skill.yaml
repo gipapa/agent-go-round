@@ -93,9 +93,9 @@ steps:
       - 新增另一個 provider
 
       當系統偵測到第二個可用來源後，會自動建立 `教學用Load Balancer 2`，其中三個 instances 會是：
-      - Instance 1：沿用目前對話用的 provider / key，model=`moonshotai/kimi-k2-instruct-0905`
-      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound`
-      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`moonshotai/kimi-k2-instruct-0905`
+      - Instance 1：沿用目前對話用的 provider / key，model=`groq/compound`
+      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound-mini`
+      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`groq/compound`
 
       這個案例不會驗證 failover 是否真的發生；這一步只確認第二個 load balancer 已建立完成。
     completionLabel: 等待你新增第二把 key / 其他 provider，並讓系統建立第二個 Load Balancer
@@ -253,7 +253,7 @@ steps:
     tab: chat
     targetId: chat-input
     behavior: first_chat_skill_chatgpt_ask
-    completionLabel: 等待 Agent 使用 multi-turn skill 完成整個 GitHub Trending 流程，必要時展開 tool result 查看細節
+    completionLabel: 等待 Agent 使用 multi-turn skill 完成整個 GitHub Trending 流程
     actionLabel: 完成案例教學
     automation:
       clearChatOnEnter: true
@@ -273,7 +273,6 @@ steps:
           - MCP 教學用MCP -> browser_open
           - MCP 教學用MCP -> browser_snapshot
           - MCP 教學用MCP -> browser_click
-        requireOpenedToolResult: true
         skillLoadContainsAny:
           - browser-workflow-multiturn
           - browser-workflow-multi-turn-skill

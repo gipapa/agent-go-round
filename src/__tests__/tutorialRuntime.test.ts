@@ -227,18 +227,14 @@ describe("tutorial YAML automation linkage", () => {
     expect(controller.setSelectedAgentId).toHaveBeenCalledWith(tutorialAgent.id);
   });
 
-  it("requires tool result to be opened when YAML says requireOpenedToolResult", () => {
+  it("does not require tool result to be opened once a successful tool call is present", () => {
     const step = getStep("built-in-tools-chat", "chat-user-profile-tool");
     const prompt = step.automation?.expect?.userPrompt ?? "";
     const assistant = makeAssistant("assistant-1", "這是回覆");
     const history = [makeUser(prompt), makeTool("Built-in tool -> get_user_profile"), assistant];
 
-    const incomplete = evaluateTutorialStep(step, makeState({ history }));
-    expect(incomplete.completed).toBe(false);
-    expect(incomplete.statusText).toContain("查看 tool result");
-
-    const completed = evaluateTutorialStep(step, makeState({ history, openedToolResultMessageIds: [assistant.id] }));
-    expect(completed.completed).toBe(true);
+    const result = evaluateTutorialStep(step, makeState({ history }));
+    expect(result.completed).toBe(true);
   });
 
   it("uses the latest assistant reply within the same chat turn for tool-result steps", () => {

@@ -149,12 +149,12 @@ steps:
       - skill 有沒有正確判斷這題需要工具
       - Agent 是否真的調用了 `get_user_profile`
 
-      請送出問題後，記得展開下方的「查看 tool result」。
-      只要有回覆、工具被呼叫，且你有打開 tool result，就算完成。
+      請送出問題後，確認有正常回覆，而且 skill 真的呼叫了 `get_user_profile`。
+      如果你想看細節，仍然可以自行展開下方的「查看 tool result」。
     tab: chat
     targetId: chat-input
     behavior: first_chat_skill_user_profile
-    completionLabel: 等待 skill 使用 get_user_profile 並顯示 tool result
+    completionLabel: 等待 skill 使用 get_user_profile 完成回覆
     actionLabel: 下一步
     automation:
       composerSeed: 你知道我是誰嗎?!?!?!
@@ -165,7 +165,6 @@ steps:
         requireAssistant: true
         successfulToolMessageIncludes:
           - Built-in tool -> get_user_profile
-        requireOpenedToolResult: true
 
   - id: references_chat
     title: 用 references 切換進階模式並引用範例

@@ -46,7 +46,7 @@ steps:
       系統會直接依照你剛剛測試成功的 Groq credential，自動建立：
       - Name：`教學用Load Balancer 1`
       - 1 個 instance
-      - Model：`moonshotai/kimi-k2-instruct-0905`
+      - Model：`groq/compound`
 
       這一步不需要再手動選 model、provider 或按 Save。確認它已出現在 Load Balancer 清單中後，就可以前往下一步。
     completionLabel: 等待系統建立單一 instance Load Balancer
@@ -109,9 +109,9 @@ steps:
       - 新增另一個 provider
 
       當系統偵測到第二個可用來源後，會自動建立 `教學用Load Balancer 2`，其中三個 instances 會是：
-      - Instance 1：沿用目前對話用的 provider / key，model=`moonshotai/kimi-k2-instruct-0905`
-      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound`
-      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`moonshotai/kimi-k2-instruct-0905`
+      - Instance 1：沿用目前對話用的 provider / key，model=`groq/compound`
+      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound-mini`
+      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`groq/compound`
 
       這個案例不會驗證 failover 是否真的發生；只要第二個 load balancer 被系統建立完成即可。
     completionLabel: 等待你新增第二把 key / 其他 provider，並讓系統建立第二個 Load Balancer

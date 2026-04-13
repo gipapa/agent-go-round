@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseTutorialScenario } from "../src/onboarding/catalogCore";
-import { applyTutorialStepEntry, evaluateTutorialStep } from "../src/onboarding/runtime";
+import {
+  applyTutorialStepEntry,
+  evaluateTutorialStep,
+  TUTORIAL_PRIMARY_MODEL
+} from "../src/onboarding/runtime";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../src/onboarding/types";
 import type { AgentConfig, ChatMessage, LoadBalancerConfig } from "../src/types";
 import type { ModelCredentialEntry } from "../src/storage/settingsStore";
@@ -40,7 +44,7 @@ function makeTutorialLoadBalancer(): LoadBalancerConfig {
         id: "lb-groq-instance-1",
         credentialId: "credential-groq",
         credentialKeyId: "credential-groq-key-1",
-        model: "moonshotai/kimi-k2-instruct-0905",
+        model: TUTORIAL_PRIMARY_MODEL,
         description: "",
         maxRetries: 4,
         delaySecond: 5,
@@ -195,17 +199,13 @@ async function assertApplyEntryUsesYamlSeed() {
   );
 }
 
-async function assertToolResultOpenIsRequired() {
+async function assertSuccessfulToolCallIsEnoughForTutorialChatSteps() {
   const step = await getStep("built-in-tools-chat", "chat-user-profile-tool");
   const prompt = step.automation?.expect?.userPrompt ?? "";
   const assistant = makeAssistant("assistant-1", "這是回覆");
   const history = [makeUser(prompt), makeTool("Built-in tool -> get_user_profile"), assistant];
 
-  const incomplete = evaluateTutorialStep(step, makeState({ history }));
-  assert.equal(incomplete.completed, false);
-  assert.match(incomplete.statusText ?? "", /tool result/);
-
-  const complete = evaluateTutorialStep(step, makeState({ history, openedToolResultMessageIds: [assistant.id] }));
+  const complete = evaluateTutorialStep(step, makeState({ history }));
   assert.equal(complete.completed, true);
 }
 
@@ -241,7 +241,7 @@ async function assertChatgptBrowserSkillAutomationExists() {
 async function main() {
   await assertAllAutomatedChatStepsAreYamlDriven();
   await assertApplyEntryUsesYamlSeed();
-  await assertToolResultOpenIsRequired();
+  await assertSuccessfulToolCallIsEnoughForTutorialChatSteps();
   await assertSkillLoadExpectationUsesYamlValues();
   await assertHistoryLimitStepRequiresOne();
   await assertChatgptBrowserSkillAutomationExists();
