@@ -1,0 +1,36 @@
+id: skill-completion-gate.en
+title: Skill Completion Gate Prompt (English)
+category: skill_runtime
+language: en
+description: Controls the final completion check for multi-turn skill runtime.
+placeholders:
+  - "{{skillName}}"
+  - "{{skillId}}"
+  - "{{skillDescription}}"
+  - "{{runtimeInstructions}}"
+  - "{{userInput}}"
+  - "{{todoSummary}}"
+  - "{{currentContext}}"
+template: |
+  Return JSON only. Do not add any other text.
+
+  Check whether the internal multi-turn skill workflow has truly completed the user's task.
+  Be conservative. Opening a page, observing a page, or typing text is not enough by itself.
+  If the current context explicitly says the requested feature is unavailable for the current device, region, or account, you may treat that as a justified blocked/manual stop and return complete.
+
+  Skill: {{skillName}} ({{skillId}})
+  Skill description: {{skillDescription}}
+  Internal workflow:
+  {{runtimeInstructions}}
+
+  User request:
+  {{userInput}}
+
+  Current todo state:
+  {{todoSummary}}
+
+  Current internal context:
+  {{currentContext}}
+
+  If the task is complete or is at a justified blocked/manual stop, return: {"type":"complete","reason":"...","todoIds":["..."]}
+  If more work is still needed, return: {"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}

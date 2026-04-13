@@ -1,0 +1,47 @@
+id: skill-verify.en
+title: Skill Verify Prompt (English)
+category: skill_runtime
+language: en
+description: Controls the verifier prompt for multi-turn skill refine.
+placeholders:
+  - "{{skillName}}"
+  - "{{skillId}}"
+  - "{{skillDescription}}"
+  - "{{runtimeInstructions}}"
+  - "{{loadedReferences}}"
+  - "{{loadedAssets}}"
+  - "{{round}}"
+  - "{{userInput}}"
+  - "{{currentInput}}"
+  - "{{answer}}"
+template: |
+  Return JSON only. Do not add any other text.
+
+  You are verifying the result of an internal skill-assisted answer.
+  Do not rewrite the answer unless refinement is necessary.
+
+  Skill: {{skillName}} ({{skillId}})
+  Skill description: {{skillDescription}}
+  Internal skill workflow:
+  {{runtimeInstructions}}
+  Loaded skill references:
+  {{loadedReferences}}
+  Loaded skill assets:
+  {{loadedAssets}}
+
+  Verification round: {{round}}
+
+  Original user request:
+  {{userInput}}
+
+  Current effective prompt sent to the answering agent:
+  {{currentInput}}
+
+  Current answer:
+  {{answer}}
+
+  If the answer is acceptable, return: {"type":"pass","reason":"..."}
+
+  If refinement is needed, return: {"type":"refine","reason":"...","revisionPrompt":"..."}
+
+  Use refine only when the answer clearly failed to follow the skill workflow, skipped necessary verification, or missed an obvious tool/reference usage opportunity.

@@ -66,6 +66,7 @@
 這個專案刻意強調 frontend-only：
 
 - agent 設定、credentials、MCP prompt templates 等資料主要存在 `localStorage`
+- prompt templates 也以 YAML 文字形式保存在瀏覽器本機
 - docs 與 chat history 主要存在 `IndexedDB`
 - built-in tools 直接在目前頁面的瀏覽器環境中執行
 - 如果 provider 支援 CORS，前端可以直接呼叫模型 API
@@ -112,6 +113,7 @@
 - Load Balancer
 - Docs
 - MCP
+- Prompt Templates
 - Skills
 - Built-in Tools
 
@@ -142,7 +144,27 @@
 - `resumeMinute` 代表 instance 被標記 failure 後，要等多久才允許重新嘗試
 - 請求成功後會清掉 failure 狀態；失敗則累積 `failureCount`
 
-### 2.3 Onboarding / 案例教學
+### 2.3 Prompt Templates
+
+- `Chat Config > Prompt Templates` 會把 decision 與 skill runtime 相關 prompt 抽成可編輯的 YAML 檔
+- 目前內建的模板 family 包含：
+  - `Tool Decision`
+  - `Skill Decision`
+  - `Skill Runtime System`
+  - `Skill Verify`
+  - `Skill Bootstrap Plan`
+  - `Skill Planner Step`
+  - `Skill Completion Gate`
+- 每個 family 都有內建 `中文 / English` 兩個版本
+- 上方語言切換會讓整個模板面板一起切到對應語言，不會重複列出一份中文、一份英文
+- 使用者仍然可以手動編輯每個語言版本；編輯後會立即保存到本機
+- 如果 YAML 解析失敗，runtime 會自動退回內建預設模板，不會直接讓整個流程中斷
+- 這套模板會直接影響：
+  - tool decision
+  - skill decision
+  - single-turn / multi-turn skill runtime 的系統 prompt 與 verifier / planner / completion gate
+
+### 2.4 Onboarding / 案例教學
 
 - 入口在首頁 `使用案例教學`
 - 目前提供六個案例：
@@ -380,7 +402,7 @@ REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
   "provider": "groq",
   "apiKey": ["YOUR_GROQ_API_KEY_1", "YOUR_GROQ_API_KEY_2"],
   "endpoint": "https://api.groq.com/openai/v1",
-  "model": "moonshotai/kimi-k2-instruct-0905"
+  "model": "groq/compound"
 }
 ```
 

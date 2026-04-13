@@ -21,6 +21,7 @@ import {
   McpServerConfig,
   McpTool,
   LogEntry,
+  LogOutcome,
   LoadBalancerConfig,
   SkillConfig,
   SkillDocItem,
@@ -46,7 +47,6 @@ import {
   loadModelCredentials,
   ModelCredentialEntry,
   McpPromptTemplates,
-  getDefaultMcpPromptTemplates,
   loadLoadBalancers,
   loadMcpPromptTemplates,
   loadMcpServers,
@@ -78,6 +78,7 @@ import McpPanel from "../ui/McpPanel";
 import SkillsPanel from "../ui/SkillsPanel";
 import TutorialGuide from "../ui/TutorialGuide";
 import LoadBalancersPanel from "../ui/LoadBalancersPanel";
+import PromptTemplatesPanel from "../ui/PromptTemplatesPanel";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   applyTutorialStepEntry,
@@ -90,7 +91,9 @@ import {
   TUTORIAL_TIME_TOOL_DESCRIPTION,
   TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
   TUTORIAL_TIME_TOOL_NAME,
-  TUTORIAL_MCP_NAME
+  TUTORIAL_MCP_NAME,
+  TUTORIAL_PRIMARY_MODEL,
+  TUTORIAL_SECONDARY_MODEL
 } from "../onboarding/runtime";
 import {
   TUTORIAL_CHATGPT_BROWSER_ASSET_CONTENT,
@@ -112,6 +115,7 @@ import {
 } from "../onboarding/tutorialSkillTemplate";
 import { TutorialScenarioDefinition, TutorialStepEvaluation, TutorialWorkspaceSnapshot } from "../onboarding/types";
 import { getMagiSkillBundle } from "../magi/magiSkills";
+import { buildPromptTemplateRuntime, getDefaultPromptTemplate, loadPromptTemplateFiles, PromptTemplateFileState, resetPromptTemplateToDefault, savePromptTemplateFiles } from "../promptTemplates/store";
 import {
   buildSkillDecisionCatalog,
   buildSkillDecisionPrompt,
@@ -197,6 +201,7 @@ type SkillBootstrapPlan = {
 type PreparedSkillExecution = {
   baseInput: string;
   finalInput: string;
+  toolAugmentation?: ToolAugmentationResult | null;
   system?: string;
   trace: ChatTraceEntry[];
   runtime: LoadedSkillRuntime;
@@ -440,7 +445,7 @@ function getThinkStreamingState(buffer: string) {
 }
 
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
-type LogSortKey = "category" | "agent" | "ok" | "ts" | "message";
+type LogSortKey = "category" | "agent" | "outcome" | "requestId" | "ts" | "message";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
 type AppEntryMode = "landing" | "workspace";
 const PROMPT_JSON_PLACEHOLDERS = {
@@ -449,6 +454,78 @@ const PROMPT_JSON_PLACEHOLDERS = {
   builtinToolJson: '{"type":"builtin_tool_call","tool":"your_tool_name","input":{}}',
   mcpCallJson: '{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
 } as const;
+
+function inferLogOutcome(entry: Pick<LogEntry, "ok" | "level" | "outcome">): LogOutcome {
+  if (entry.outcome) return entry.outcome;
+  if (entry.ok === true) return "success";
+  if (entry.ok === false) return "failure";
+  if (entry.level === "error") return "failure";
+  if (entry.level === "warn") return "degraded";
+  return "info";
+}
+
+function createLogRequestId(prefix: string) {
+  return `${prefix}-${Date.now().toString(36)}-${generateId().slice(0, 6)}`;
+}
+
+function formatLogOutcomeLabel(outcome: LogOutcome) {
+  switch (outcome) {
+    case "success":
+      return "SUCCESS";
+    case "failure":
+      return "FAILURE";
+    case "degraded":
+      return "DEGRADED";
+    case "info":
+    default:
+      return "INFO";
+  }
+}
+
+function formatLogEntryForClipboard(entry: LogEntry) {
+  const lines = [
+    `request_id=${entry.requestId ?? "-"}`,
+    `category=${entry.category}`,
+    `agent=${entry.agent ?? "-"}`,
+    `stage=${entry.stage ?? "-"}`,
+    `outcome=${entry.outcome ?? inferLogOutcome(entry)}`,
+    `time=${new Date(entry.ts).toISOString()}`,
+    `message=${entry.message}`
+  ];
+  if (entry.details?.trim()) {
+    lines.push("", entry.details.trim());
+  }
+  return lines.join("\n");
+}
+
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall through to textarea fallback below.
+  }
+
+  try {
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.setAttribute("readonly", "true");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    area.style.pointerEvents = "none";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+    area.setSelectionRange(0, area.value.length);
+    const copied = document.execCommand("copy");
+    area.remove();
+    return copied;
+  } catch {
+    return false;
+  }
+}
 
 function getUserProfileToolPayload(profile: UserProfile) {
   return {
@@ -467,6 +544,7 @@ function findTutorialAgentBaseInList(agents: AgentConfig[], loadBalancers: LoadB
   const primaryNames = new Set(["教學用Load Balancer 1", "教學用Load Balancer 2"]);
   return (
     agents.find((agent) => {
+      if (agent.managedBy === "magi" && agent.managedUnitId) return false;
       if (!agent.loadBalancerId) return false;
       const loadBalancer = loadBalancers.find((entry) => entry.id === agent.loadBalancerId);
       return !!loadBalancer && primaryNames.has(loadBalancer.name);
@@ -860,6 +938,131 @@ function buildAgentFailureContent(errorText: string, task?: string) {
   return lines.join("\n");
 }
 
+function isSequentialThinkingSkill(skill?: SkillConfig | null) {
+  if (!skill) return false;
+  const id = String(skill.id ?? "").toLowerCase();
+  const name = String(skill.name ?? "").toLowerCase();
+  return (
+    id.includes("sequential-thinking") ||
+    id.includes(TUTORIAL_SEQUENTIAL_SKILL_ROOT) ||
+    name.includes("sequential-thinking") ||
+    name.includes("sequential thinking")
+  );
+}
+
+function buildSequentialThinkingFallbackContent(task: string) {
+  const normalized = String(task ?? "").trim();
+
+  if (/模板整理|格式化|【問題】|【拆解】|【最終回答】/.test(normalized)) {
+    return [
+      "模型沒有回傳文字內容，因此以下依照目前的 Sequential Thinking 模板補上：",
+      "",
+      "【問題】",
+      normalized,
+      "",
+      "【拆解】",
+      "1. 先確認問題真正要問的是什麼。",
+      "2. 把答案拆成幾個最小、最穩定的步驟。",
+      "3. 用簡單語句把每一步重新串起來。",
+      "",
+      "【關鍵依據】",
+      "這裡採用的是 calm + structured 的回答方式：先重述問題，再分步拆解，最後給出直接結論。",
+      "",
+      "【最終回答】",
+      /1\s*\+\s*1\s*=\s*2/.test(normalized)
+        ? "因為第一個 1 代表一個單位，第二個 1 再加入後，總數就會從 1 增加到 2，所以 1+1=2。"
+        : "以上已先依模板整理出穩定的回答框架；如果你要，我也可以再把它改寫成更短或更口語的版本。"
+    ].join("\n");
+  }
+
+  if (/進階模式|revi(?:se|sion)|branch|實戰範例|範例/.test(normalized)) {
+    return [
+      "模型沒有回傳文字內容，因此以下先用 Sequential Thinking 的方式補一版簡短回答：",
+      "",
+      "1. 如果原本的方向已經明顯錯了，就用 revise，重新修正問題框架或假設。",
+      "2. 如果有兩條以上都合理的路線要比較，就用 branch，把各自的成本、速度與風險列出來。",
+      "3. 實戰上可以先各做一個最小版本，再根據結果決定保留哪一條路。",
+      "",
+      "簡單例子：如果 production 壞掉而你一開始懷疑是 API key，但後來發現其實是環境變數名稱不同，這就是 revise；如果你在比較兩種都可行的部署方式，那就是 branch。"
+    ].join("\n");
+  }
+
+  if (/1\s*\+\s*1\s*=\s*2/.test(normalized)) {
+    return [
+      "模型沒有回傳文字內容，因此以下先用冷靜、有條理的方式補上說明：",
+      "",
+      "1. 先把第一個 1 看成一個單位。",
+      "2. 再把第二個 1 加進來，代表總數多了一個單位。",
+      "3. 原本有 1 個，現在再加 1 個，所以總數會變成 2 個。",
+      "",
+      "所以 1+1=2，意思就是把兩個單位合在一起計數，最後得到 2。"
+    ].join("\n");
+  }
+
+  return [
+    "模型沒有回傳文字內容，因此以下先用 Sequential Thinking 的方式補一版簡短回答：",
+    "",
+    "1. 先把問題拆成最小步驟。",
+    "2. 每一步只處理一個重點。",
+    "3. 最後再把這些步驟整理成清楚結論。",
+    "",
+    `原始問題：${normalized || "（未提供）"}`
+  ].join("\n");
+}
+
+function buildEmptyResponseFallbackContent(task: string, toolResult?: ToolAugmentationResult | null, skill?: SkillConfig | null) {
+  if (toolResult?.status === "tool_called") {
+    const label = toolResult.toolLabel?.trim() || "最近一次工具";
+    const output = toolResult.toolOutput;
+
+    if (label.includes("get_user_profile") && output && typeof output === "object" && !Array.isArray(output)) {
+      const name = typeof (output as { name?: unknown }).name === "string" ? String((output as { name?: string }).name).trim() : "";
+      const description =
+        typeof (output as { description?: unknown }).description === "string"
+          ? String((output as { description?: string }).description).trim()
+          : "";
+      if (name || description) {
+        return [
+          "【工具已成功執行】",
+          "模型沒有回傳文字內容，因此以下直接根據工具結果整理：",
+          "",
+          description ? `你是 ${name || "這位使用者"}，${description}` : `你是 ${name || "這位使用者"}。`
+        ].join("\n");
+      }
+    }
+
+    if (output && typeof output === "object" && !Array.isArray(output)) {
+      const timezone =
+        typeof (output as { timezone?: unknown }).timezone === "string"
+          ? String((output as { timezone?: string }).timezone).trim()
+          : "";
+      const now = typeof (output as { now?: unknown }).now === "string" ? String((output as { now?: string }).now).trim() : "";
+      if (timezone || now) {
+        return [
+          "【工具已成功執行】",
+          "模型沒有回傳文字內容，因此以下直接根據工具結果整理：",
+          "",
+          now && timezone ? `時鐘 dashboard 已打開，目前時間是 ${now}，時區是 ${timezone}。` : `目前時區是 ${timezone || "未知"}。`
+        ].join("\n");
+      }
+    }
+
+    return [
+      "【工具已成功執行】",
+      "模型沒有回傳文字內容，因此以下直接保留最近一次工具結果：",
+      "",
+      `工具：${label}`,
+      output !== undefined ? `結果：\n${stringifyAny(output)}` : toolResult.detail?.trim() || "（沒有可顯示的工具內容）"
+    ].join("\n");
+  }
+
+  if (isSequentialThinkingSkill(skill)) {
+    return buildSequentialThinkingFallbackContent(task);
+  }
+
+  return buildAgentFailureContent("模型沒有回傳任何內容。", task);
+}
+
 function normalizeBrowserWorkflowStartUrl(userInput: string, startUrl: string) {
   const raw = String(startUrl ?? "").trim();
   if (!raw) return raw;
@@ -1169,7 +1372,7 @@ export default function App() {
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
-  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | null;
+  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
   const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
@@ -1193,6 +1396,7 @@ export default function App() {
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => loadMcpServers());
   const [mcpPromptTemplates, setMcpPromptTemplates] = useState<McpPromptTemplates>(() => loadMcpPromptTemplates());
+  const [promptTemplateFiles, setPromptTemplateFiles] = useState<PromptTemplateFileState[]>(() => loadPromptTemplateFiles());
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
   const globalMcpToolCatalog = useMemo(
@@ -1206,6 +1410,7 @@ export default function App() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [visibleCredentialIds, setVisibleCredentialIds] = useState<Record<string, boolean>>({});
   const [credentialTestResults, setCredentialTestResults] = useState<Record<string, CredentialTestState | undefined>>({});
+  const promptTemplateRuntime = useMemo(() => buildPromptTemplateRuntime(promptTemplateFiles), [promptTemplateFiles]);
   const [testingCredentialIds, setTestingCredentialIds] = useState<Record<string, boolean>>({});
   const [tutorialScenario, setTutorialScenario] = useState<TutorialScenarioDefinition | null>(null);
   const [tutorialScenarioIndex, setTutorialScenarioIndex] = useState<number | null>(null);
@@ -1226,12 +1431,36 @@ export default function App() {
       ok: entry.ok,
       message: entry.message,
       level: entry.level,
+      outcome: inferLogOutcome(entry),
+      requestId: entry.requestId?.trim() || undefined,
+      stage: entry.stage?.trim() || undefined,
       details: entry.details
     };
     setLog((x) => [normalized, ...x].slice(0, 200));
   };
   const logResizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
   const logNow = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => pushLog(entry);
+  const sortedLogEntries = useMemo(() => {
+    return log
+      .map((item, index) => ({ item, index }))
+      .sort((a, b) => {
+        const key = logSort.key;
+        let cmp = 0;
+        if (key === "ts") cmp = a.item.ts - b.item.ts;
+        if (key === "outcome") cmp = formatLogOutcomeLabel(a.item.outcome ?? inferLogOutcome(a.item)).localeCompare(formatLogOutcomeLabel(b.item.outcome ?? inferLogOutcome(b.item)));
+        if (key === "requestId") cmp = (a.item.requestId || "").toLowerCase().localeCompare((b.item.requestId || "").toLowerCase());
+        if (key === "category") cmp = (a.item.category || "").toLowerCase().localeCompare((b.item.category || "").toLowerCase());
+        if (key === "agent") cmp = (a.item.agent || "").toLowerCase().localeCompare((b.item.agent || "").toLowerCase());
+        if (key === "message") cmp = (a.item.message || "").toLowerCase().localeCompare((b.item.message || "").toLowerCase());
+        if (cmp === 0) cmp = a.index - b.index;
+        return logSort.dir === "asc" ? cmp : -cmp;
+      })
+      .map(({ item }) => item);
+  }, [log, logSort]);
+  const visibleLogText = useMemo(
+    () => sortedLogEntries.map((item) => formatLogEntryForClipboard(item)).join("\n\n---\n\n"),
+    [sortedLogEntries]
+  );
   const mcpCountRef = React.useRef(mcpServers.length);
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
@@ -1504,6 +1733,19 @@ export default function App() {
   React.useEffect(() => {
     saveMcpPromptTemplates(mcpPromptTemplates);
   }, [mcpPromptTemplates]);
+
+  React.useEffect(() => {
+    const nextZh = promptTemplateRuntime.resolve("tool-decision", "zh").template;
+    const nextEn = promptTemplateRuntime.resolve("tool-decision", "en").template;
+    setMcpPromptTemplates((prev) => {
+      if (prev.zh === nextZh && prev.en === nextEn) return prev;
+      return { ...prev, zh: nextZh, en: nextEn };
+    });
+  }, [promptTemplateRuntime]);
+
+  React.useEffect(() => {
+    savePromptTemplateFiles(promptTemplateFiles);
+  }, [promptTemplateFiles]);
 
   React.useEffect(() => {
     saveBuiltInTools(builtInTools);
@@ -1866,7 +2108,8 @@ export default function App() {
       availableMcpTools: [],
       availableBuiltinTools: [],
       userInput: question,
-      skillInput: {}
+      skillInput: {},
+      systemPromptTemplate: promptTemplateRuntime.resolve("skill-runtime-system", mcpPromptTemplates.activeId).template
     });
 
     const profileLines = [
@@ -1966,7 +2209,6 @@ export default function App() {
   }
 
   function queueTutorialLoadBalancerDraft(kind: "single" | "multi") {
-    const tutorialModel = "moonshotai/kimi-k2-instruct-0905";
     const draft =
       kind === "single"
         ? {
@@ -1974,7 +2216,7 @@ export default function App() {
             description: "教學用單一 instance Load Balancer",
             instances: [
               createLoadBalancerInstance({
-                model: tutorialModel,
+                model: TUTORIAL_PRIMARY_MODEL,
                 description: "Primary tutorial instance"
               })
             ]
@@ -1982,19 +2224,26 @@ export default function App() {
         : {
             ...createLoadBalancer("教學用Load Balancer 2"),
             description: "教學用多 instance Load Balancer",
-            instances: Array.from({ length: 3 }, (_, index) =>
+            instances: [
               createLoadBalancerInstance({
-                model: tutorialModel,
-                description: `Tutorial instance ${index + 1}`
+                model: TUTORIAL_PRIMARY_MODEL,
+                description: "Primary provider / model baseline"
+              }),
+              createLoadBalancerInstance({
+                model: TUTORIAL_SECONDARY_MODEL,
+                description: "Same key with alternate model"
+              }),
+              createLoadBalancerInstance({
+                model: TUTORIAL_PRIMARY_MODEL,
+                description: "Different key or provider with primary model"
               })
-            )
+            ]
           };
     setConfigModal("load_balancers");
     setLoadBalancerDraftSeed({ token: Date.now(), draft });
   }
 
   function ensureTutorialPrimaryLoadBalancer() {
-    const tutorialModel = "moonshotai/kimi-k2-instruct-0905";
     const credential =
       modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => credentialTestResults[key.id]?.ok === true)) ??
       modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => key.apiKey.trim())) ??
@@ -2018,7 +2267,7 @@ export default function App() {
           ...(existingInstance ?? createLoadBalancerInstance()),
           credentialId: credential.id,
           credentialKeyId: key.id,
-          model: tutorialModel,
+          model: TUTORIAL_PRIMARY_MODEL,
           description: "Primary tutorial instance",
           failure: false,
           failureCount: 0,
@@ -2055,12 +2304,11 @@ export default function App() {
       category: "load_balancer",
       ok: true,
       message: `Tutorial load balancer ensured: ${nextEntry.name}`,
-      details: `${credential.label} / ${tutorialModel}`
+      details: `${credential.label} / ${TUTORIAL_PRIMARY_MODEL}`
     });
   }
 
   function ensureTutorialSecondaryLoadBalancer() {
-    const tutorialModel = "moonshotai/kimi-k2-instruct-0905";
     const primaryLoadBalancer = loadBalancers.find((entry) => entry.name.trim() === "教學用Load Balancer 1") ?? null;
     const primaryInstance = primaryLoadBalancer?.instances[0] ?? null;
     const primaryCredential =
@@ -2098,7 +2346,7 @@ export default function App() {
         id: existing?.instances[0]?.id,
         credentialId: primaryCredential.id,
         credentialKeyId: primaryKey.id,
-        model: tutorialModel,
+        model: TUTORIAL_PRIMARY_MODEL,
         description: "Primary provider / model baseline",
         maxRetries: existing?.instances[0]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[0]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
@@ -2112,7 +2360,7 @@ export default function App() {
         id: existing?.instances[1]?.id,
         credentialId: primaryCredential.id,
         credentialKeyId: primaryKey.id,
-        model: "groq/compound",
+        model: TUTORIAL_SECONDARY_MODEL,
         description: "Same key with alternate model",
         maxRetries: existing?.instances[1]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[1]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
@@ -2126,9 +2374,9 @@ export default function App() {
         id: existing?.instances[2]?.id,
         credentialId: secondaryCredential.id,
         credentialKeyId: secondaryKey.id,
-        model: tutorialModel,
+        model: TUTORIAL_PRIMARY_MODEL,
         description:
-          secondaryCredential.id === primaryCredential.id ? "Different key with same model" : "Different provider with same model",
+          secondaryCredential.id === primaryCredential.id ? "Different key with primary model" : "Different provider with primary model",
         maxRetries: existing?.instances[2]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[2]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
         resumeMinute: existing?.instances[2]?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
@@ -2178,7 +2426,7 @@ export default function App() {
       category: "load_balancer",
       ok: true,
       message: `Tutorial load balancer ensured: ${nextEntry.name}`,
-      details: `${primaryCredential.label} / ${tutorialModel}\n${primaryCredential.label} / groq/compound\n${secondaryCredential.label} / ${tutorialModel}`
+      details: `${primaryCredential.label} / ${TUTORIAL_PRIMARY_MODEL}\n${primaryCredential.label} / ${TUTORIAL_SECONDARY_MODEL}\n${secondaryCredential.label} / ${TUTORIAL_PRIMARY_MODEL}`
     });
   }
 
@@ -2288,6 +2536,7 @@ export default function App() {
     onDelta: (text: string) => void;
     onLog?: (text: string) => void;
     requestLabel?: string;
+    requestId?: string;
   }) {
     const requestLabel = args.requestLabel ?? "chat response";
     let candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
@@ -2296,6 +2545,8 @@ export default function App() {
         category: "load_balancer",
         agent: args.logicalAgent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: requestLabel,
         message: `LB no available instance [${requestLabel}]`,
         details: describeLoadBalancerAvailability(args.logicalAgent)
       });
@@ -2313,10 +2564,14 @@ export default function App() {
     }
 
     let lastFailureText = "No available load balancer instance.";
+    let lastFailureDetails = lastFailureText;
+    let shouldReturnEmptyResponse = false;
     for (const [candidateIndex, candidate] of candidates.entries()) {
       logNow({
         category: "load_balancer",
         agent: args.logicalAgent.name,
+        requestId: args.requestId,
+        stage: requestLabel,
         message: `LB selected [${requestLabel}]`,
         details: describeResolvedLoadBalancerCandidate(candidate)
       });
@@ -2334,9 +2589,39 @@ export default function App() {
         retry,
         onLog: args.onLog
       });
+      const trimmedText = String(text ?? "").trim();
+      if (!trimmedText) {
+        shouldReturnEmptyResponse = true;
+        lastFailureText = "";
+        lastFailureDetails = "模型沒有回傳任何內容。";
+        const nextCandidate = candidates[candidateIndex + 1] ?? null;
+        logNow({
+          category: "load_balancer",
+          agent: args.logicalAgent.name,
+          ok: false,
+          outcome: "degraded",
+          requestId: args.requestId,
+          stage: requestLabel,
+          message: `${nextCandidate ? "LB empty response failover" : "LB empty response exhausted"} [${requestLabel}]`,
+          details: [
+            describeResolvedLoadBalancerCandidate(candidate),
+            "response_length=0",
+            "marked_failure=false",
+            nextCandidate
+              ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}`
+              : "next_candidate: none"
+          ].join("\n\n")
+        });
+        if (nextCandidate) {
+          continue;
+        }
+        break;
+      }
       const failure = classifyRetryableAgentFailure(text);
       if (failure?.retryable) {
+        shouldReturnEmptyResponse = false;
         lastFailureText = text;
+        lastFailureDetails = text;
         const nextCandidate = candidates[candidateIndex + 1] ?? null;
         const failureUpdateDetails = failure.markFailure
           ? `updated_failure_count=${candidate.instance.failureCount + 1}\nupdated_next_check_time=${formatLoadBalancerDateTime(
@@ -2356,6 +2641,8 @@ export default function App() {
           category: "load_balancer",
           agent: args.logicalAgent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: requestLabel,
           message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${requestLabel}]`,
           details: [
             describeResolvedLoadBalancerCandidate(candidate),
@@ -2377,6 +2664,8 @@ export default function App() {
           category: "load_balancer",
           agent: args.logicalAgent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: requestLabel,
           message: `LB terminal error [${requestLabel}]`,
           details: [describeResolvedLoadBalancerCandidate(candidate), `error=${text}`].join("\n\n")
         });
@@ -2390,12 +2679,17 @@ export default function App() {
           instanceId: candidate.instance.id
         })
       );
+      shouldReturnEmptyResponse = false;
+      const responseLength = String(text ?? "").length;
       logNow({
         category: "load_balancer",
         agent: args.logicalAgent.name,
-        ok: true,
-        message: `LB success [${requestLabel}]`,
-        details: [describeResolvedLoadBalancerCandidate(candidate), `response_length=${text.length}`].join("\n\n")
+        ok: responseLength > 0,
+        outcome: responseLength > 0 ? "success" : "degraded",
+        requestId: args.requestId,
+        stage: requestLabel,
+        message: responseLength > 0 ? `LB success [${requestLabel}]` : `LB empty response [${requestLabel}]`,
+        details: [describeResolvedLoadBalancerCandidate(candidate), `response_length=${responseLength}`].join("\n\n")
       });
       return text;
     }
@@ -2404,10 +2698,12 @@ export default function App() {
       category: "load_balancer",
       agent: args.logicalAgent.name,
       ok: false,
+      requestId: args.requestId,
+      stage: requestLabel,
       message: `LB final failure [${requestLabel}]`,
-      details: lastFailureText
+      details: lastFailureDetails
     });
-    return lastFailureText;
+    return shouldReturnEmptyResponse ? "" : lastFailureText;
   }
 
   async function detectWithLoadBalancer(agent: AgentConfig): Promise<DetectResult> {
@@ -2500,7 +2796,7 @@ export default function App() {
 
   async function ensureMcpToolsLoadedForServers(
     servers: McpServerConfig[],
-    options?: { onStatus?: (text: string) => void }
+    options?: { onStatus?: (text: string) => void; requestId?: string }
   ) {
     const unknownServers = servers.filter((server) => !Object.prototype.hasOwnProperty.call(mcpToolsByServer, server.id));
     if (!unknownServers.length) {
@@ -2514,13 +2810,15 @@ export default function App() {
     const loadedEntries = await Promise.all(
       unknownServers.map(async (server) => {
         const client = new McpSseClient(server);
-        client.connect((text) => pushLog({ category: "mcp", agent: server.name, message: text }));
+        client.connect((text) => pushLog({ category: "mcp", agent: server.name, requestId: options?.requestId, stage: "mcp_connect", message: text }));
         try {
           const tools = await listTools(client);
           logNow({
             category: "mcp",
             agent: server.name,
             ok: true,
+            requestId: options?.requestId,
+            stage: "mcp_tools_load",
             message: `Auto-loaded MCP tools: ${tools.length}`,
             details: tools.map((tool) => tool.name).join("\n") || "(no tools)"
           });
@@ -2530,6 +2828,8 @@ export default function App() {
             category: "mcp",
             agent: server.name,
             ok: false,
+            requestId: options?.requestId,
+            stage: "mcp_tools_load",
             message: "Auto-load MCP tools failed",
             details: String(error?.message ?? error)
           });
@@ -2780,6 +3080,15 @@ export default function App() {
     return restoreMap;
   }
 
+  async function removeTutorialDocIfPresent(reason: string) {
+    const tutorialDocs = (await listDocs()).filter((doc) => doc.title === TUTORIAL_DOC_NAME);
+    if (tutorialDocs.length === 0) return false;
+    await Promise.all(tutorialDocs.map((doc) => deleteDoc(doc.id)));
+    setDocs(await listDocs());
+    logNow({ category: "tutorial", ok: true, message: `Tutorial doc removed: ${reason}` });
+    return true;
+  }
+
   async function startTutorial(scenarioId: string) {
     const scenario = getTutorialScenario(scenarioId);
     if (!scenario) {
@@ -2807,7 +3116,7 @@ export default function App() {
     logNow({ category: "tutorial", ok: true, message: `Tutorial started: ${scenario.title}` });
   }
 
-  function moveToNextTutorialScenario() {
+  async function moveToNextTutorialScenario() {
     const restoredHistoryLimit = restoreTutorialHistoryLimitIfNeeded();
     restoreTutorialLoadBalancerRetryIfNeeded();
     if (tutorialScenarioIndex === null) {
@@ -2818,6 +3127,9 @@ export default function App() {
     if (!nextScenario) {
       setShowTutorialExitPrompt(true);
       return;
+    }
+    if (nextScenario.id !== "docs-persona-chat") {
+      await removeTutorialDocIfPresent(`left case 2 before entering ${nextScenario.title}`);
     }
     tutorialStepKeyRef.current = "";
     tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(nextScenario)
@@ -2849,6 +3161,7 @@ export default function App() {
       setMcpServers((prev) => prev.filter((server) => server.name !== TUTORIAL_MCP_NAME));
       logNow({ category: "tutorial", ok: true, message: "Tutorial changes discarded for docs, MCP, tools, and skills" });
     } else if (tutorialScenario) {
+      await removeTutorialDocIfPresent("tutorial finished");
       logNow({ category: "tutorial", ok: true, message: `Tutorial ended: ${tutorialScenario.title}` });
     }
 
@@ -2868,7 +3181,7 @@ export default function App() {
   function advanceTutorialStep() {
     if (!tutorialScenario || !currentTutorialStep || !currentTutorialEvaluation?.canContinue) return;
     if (tutorialStepIndex >= tutorialScenario.steps.length - 1) {
-      moveToNextTutorialScenario();
+      void moveToNextTutorialScenario();
       return;
     }
     setTutorialStepIndex((current) => current + 1);
@@ -2877,7 +3190,7 @@ export default function App() {
   function skipTutorialScenario() {
     if (!tutorialScenario) return;
     logNow({ category: "tutorial", ok: true, message: `Tutorial case skipped: ${tutorialScenario.title}` });
-    moveToNextTutorialScenario();
+    void moveToNextTutorialScenario();
   }
 
   async function onSaveAgent(a: AgentConfig) {
@@ -2923,6 +3236,7 @@ export default function App() {
     toolEntries: ToolEntry[];
     promptTemplate: string;
     fallbackPromptTemplate: string;
+    requestId?: string;
   }): Promise<ToolDecision | null> {
     const toolList = args.toolEntries.map((entry) =>
       entry.kind === "mcp"
@@ -2954,9 +3268,10 @@ export default function App() {
         logicalAgent: args.agent,
         input: decisionPrompt,
         history: [],
+        requestId: args.requestId,
         requestLabel: "tool decision",
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: t })
       });
 
       const terminalFailure = detectTerminalAgentFailure(raw);
@@ -2965,6 +3280,8 @@ export default function App() {
           category: "mcp",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: "tool decision",
           message: "Tool decision failed after model retries",
           details: terminalFailure
         });
@@ -2977,6 +3294,8 @@ export default function App() {
           category: "mcp",
           agent: args.agent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: "tool decision",
           message: `Tool decision: ${decision.type}`,
           details: raw
         });
@@ -2987,6 +3306,8 @@ export default function App() {
         category: "mcp",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: "tool decision",
         message: `Tool decision invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
@@ -3006,18 +3327,21 @@ export default function App() {
     retry: { delaySec: number; max: number };
     skills: SkillConfig[];
     language: "zh" | "en";
+    promptTemplate?: string;
+    requestId?: string;
   }): Promise<SkillDecision | null> {
     const skillList = buildSkillDecisionCatalog(args.skills);
-    const prompt = buildSkillDecisionPrompt(args.userInput, JSON.stringify(skillList, null, 2), args.language);
+    const prompt = buildSkillDecisionPrompt(args.userInput, JSON.stringify(skillList, null, 2), args.language, args.promptTemplate);
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
       const raw = await runOneToOneWithLoadBalancer({
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestId: args.requestId,
         requestLabel: "skill decision",
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill decision", message: t })
       });
 
       const terminalFailure = detectTerminalAgentFailure(raw);
@@ -3026,6 +3350,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: "skill decision",
           message: "Skill decision failed after model retries",
           details: terminalFailure
         });
@@ -3038,6 +3364,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: "skill decision",
           message: `Skill decision: ${decision.type}`,
           details: raw
         });
@@ -3048,6 +3376,8 @@ export default function App() {
         category: "skills",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: "skill decision",
         message: `Skill decision invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
@@ -3071,6 +3401,8 @@ export default function App() {
     runtime: LoadedSkillRuntime;
     round: number;
     retry: { delaySec: number; max: number };
+    promptTemplate?: string;
+    requestId?: string;
   }) {
     const prompt = buildSkillVerifyPrompt({
       skill: args.skill,
@@ -3078,7 +3410,8 @@ export default function App() {
       userInput: args.userInput,
       currentInput: args.currentInput,
       answer: args.answer,
-      round: args.round
+      round: args.round,
+      template: args.promptTemplate
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
@@ -3086,9 +3419,10 @@ export default function App() {
         logicalAgent: args.verifierAgent,
         input: prompt,
         history: [],
+        requestId: args.requestId,
         requestLabel: `skill verify round ${args.round}`,
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, requestId: args.requestId, stage: `skill verify round ${args.round}`, message: t })
       });
 
       const terminalFailure = detectTerminalAgentFailure(raw);
@@ -3097,6 +3431,8 @@ export default function App() {
           category: "skills",
           agent: args.answeringAgent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: `skill verify round ${args.round}`,
           message: `Skill verify round ${args.round} failed after model retries`,
           details: terminalFailure
         });
@@ -3109,6 +3445,8 @@ export default function App() {
           category: "skills",
           agent: args.answeringAgent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: `skill verify round ${args.round}`,
           message: `Skill verify round ${args.round}: ${decision.type}`,
           details: raw
         });
@@ -3119,6 +3457,8 @@ export default function App() {
         category: "skills",
         agent: args.answeringAgent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: `skill verify round ${args.round}`,
         message: `Skill verify invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
@@ -3138,12 +3478,15 @@ export default function App() {
     skill: SkillConfig;
     runtime: LoadedSkillRuntime;
     userInput: string;
+    promptTemplate?: string;
+    requestId?: string;
     onTrace?: (label: string, content: string) => void;
   }): Promise<SkillBootstrapPlan> {
     const prompt = buildBootstrapPlanPrompt({
       skill: args.skill,
       runtime: args.runtime,
-      userInput: args.userInput
+      userInput: args.userInput,
+      template: args.promptTemplate
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
@@ -3151,9 +3494,10 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestId: args.requestId,
         requestLabel: "skill bootstrap plan",
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill bootstrap plan", message: t })
       });
 
       const terminalFailure = detectTerminalAgentFailure(raw);
@@ -3162,6 +3506,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: "skill bootstrap plan",
           message: "Skill bootstrap plan failed after model retries",
           details: terminalFailure
         });
@@ -3175,6 +3521,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: "skill bootstrap plan",
           message: "Skill bootstrap plan created",
           details: raw
         });
@@ -3199,6 +3547,8 @@ export default function App() {
         category: "skills",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: "skill bootstrap plan",
         message: `Skill bootstrap plan invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
@@ -3234,6 +3584,8 @@ export default function App() {
     mustObserve: boolean;
     mustAct: boolean;
     phaseHint?: string;
+    promptTemplate?: string;
+    requestId?: string;
     onTrace?: (label: string, content: string) => void;
   }): Promise<SkillStepDecision | null> {
     const prompt = buildPlannerStepPrompt({
@@ -3245,7 +3597,8 @@ export default function App() {
       toolScopeSummary: args.toolScopeSummary,
       todoSummary: summarizeTodo(args.state.todo),
       mustObserve: args.mustObserve,
-      mustAct: args.mustAct
+      mustAct: args.mustAct,
+      template: args.promptTemplate
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
@@ -3253,9 +3606,10 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestId: args.requestId,
         requestLabel: `skill planner step ${args.state.stepIndex + 1}`,
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill planner step ${args.state.stepIndex + 1}`, message: t })
       });
 
       const terminalFailure = detectTerminalAgentFailure(raw);
@@ -3264,6 +3618,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: `skill planner step ${args.state.stepIndex + 1}`,
           message: `Skill planner step ${args.state.stepIndex + 1} failed after model retries`,
           details: terminalFailure
         });
@@ -3277,6 +3633,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: `skill planner step ${args.state.stepIndex + 1}`,
           message: `Skill planner step: ${decision.type}`,
           details: raw
         });
@@ -3291,6 +3649,8 @@ export default function App() {
         category: "skills",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: `skill planner step ${args.state.stepIndex + 1}`,
         message: `Skill planner step invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
@@ -3314,6 +3674,8 @@ export default function App() {
     userInput: string;
     currentContext: string;
     toolScopeSummary: string;
+    promptTemplate?: string;
+    requestId?: string;
     onTrace?: (label: string, content: string) => void;
   }): Promise<SkillCompletionDecision | null> {
     const prompt = buildCompletionGatePrompt({
@@ -3321,7 +3683,8 @@ export default function App() {
       runtime: args.runtime,
       userInput: args.userInput,
       currentContext: args.currentContext,
-      todoSummary: summarizeTodo(args.state.todo)
+      todoSummary: summarizeTodo(args.state.todo),
+      template: args.promptTemplate
     });
 
     for (let attempt = 0; attempt <= args.retry.max; attempt++) {
@@ -3329,9 +3692,10 @@ export default function App() {
         logicalAgent: args.agent,
         input: prompt,
         history: [],
+        requestId: args.requestId,
         requestLabel: `skill completion gate ${args.state.stepIndex}`,
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill completion gate ${args.state.stepIndex}`, message: t })
       });
 
       const terminalFailure = detectTerminalAgentFailure(raw);
@@ -3340,6 +3704,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: `skill completion gate ${args.state.stepIndex}`,
           message: `Skill completion gate step ${args.state.stepIndex} failed after model retries`,
           details: terminalFailure
         });
@@ -3353,6 +3719,8 @@ export default function App() {
           category: "skills",
           agent: args.agent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: `skill completion gate ${args.state.stepIndex}`,
           message: `Skill completion gate: ${decision.type}`,
           details: raw
         });
@@ -3367,6 +3735,8 @@ export default function App() {
         category: "skills",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: `skill completion gate ${args.state.stepIndex}`,
         message: `Skill completion gate invalid schema (${attempt + 1}/${args.retry.max + 1})`,
         details: raw
       });
@@ -3391,14 +3761,15 @@ export default function App() {
     decisionContext?: string;
     onStatus?: (text: string) => void;
     promptDetail?: ToolPromptDetailMode;
+    requestId?: string;
   }): Promise<ToolAugmentationResult> {
     if (args.toolEntries.length === 0) {
       if (args.availableBuiltinTools.length > 0) {
-        logNow({ category: "tool", agent: args.agent.name, message: "Tool decision skipped: no available tool entries" });
+        logNow({ category: "tool", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision skipped: no available tool entries" });
       } else if (args.availableMcpServers.length === 0) {
         return { input: args.input, status: "no_entries", detail: "沒有可用的工具或 MCP server。" };
       } else if (args.availableMcpTools.length === 0) {
-        logNow({ category: "mcp", agent: args.agent.name, message: "Tool decision skipped: no MCP tools loaded yet" });
+        logNow({ category: "mcp", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision skipped: no MCP tools loaded yet" });
       }
       return { input: args.input, status: "no_entries", detail: "目前沒有可用的工具項目。" };
     }
@@ -3410,12 +3781,13 @@ export default function App() {
       userInput: args.decisionContext ? `${args.input}\n\nCurrent loaded skill context (internal only):\n${args.decisionContext}` : args.input,
       retry: getRetryPolicyForAgent(args.agent),
       toolEntries: args.toolEntries,
-      promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
-      fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
+      promptTemplate: promptTemplateRuntime.resolve("tool-decision", mcpPromptTemplates.activeId).template,
+      fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`),
+      requestId: args.requestId
     });
 
     if (!decision) {
-      logNow({ category: "tool", agent: args.agent.name, ok: false, message: "Tool decision failed after retries; continue without tools" });
+      logNow({ category: "tool", agent: args.agent.name, ok: false, requestId: args.requestId, stage: "tool decision", message: "Tool decision failed after retries; continue without tools" });
       return { input: args.input, status: "decision_failed", detail: "工具判斷在重試後仍失敗，已略過。" };
     }
 
@@ -3431,13 +3803,15 @@ export default function App() {
         category: "tool",
         agent: args.agent.name,
         ok: true,
+        requestId: args.requestId,
+        stage: "tool decision",
         message: `Tool decision normalized from MCP to built-in: ${decision.tool}`,
         details: JSON.stringify({ original: decision, normalized: normalizedDecision }, null, 2)
       });
     }
 
     if (normalizedDecision.type === "no_tool") {
-      logNow({ category: "tool", agent: args.agent.name, message: "Tool decision resolved: no_tool" });
+      logNow({ category: "tool", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision resolved: no_tool" });
       return { input: args.input, status: "no_tool", detail: "模型判斷這一輪不需要工具。" };
     }
 
@@ -3449,7 +3823,8 @@ export default function App() {
       availableMcpServers: args.availableMcpServers,
       availableMcpTools: args.availableMcpTools,
       onStatus: args.onStatus,
-      promptDetail: args.promptDetail ?? "default"
+      promptDetail: args.promptDetail ?? "default",
+      requestId: args.requestId
     });
   }
 
@@ -3462,6 +3837,7 @@ export default function App() {
     availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
     onStatus?: (text: string) => void;
     promptDetail: ToolPromptDetailMode;
+    requestId?: string;
   }): Promise<ToolAugmentationResult> {
     const normalizedDecision = args.selection;
 
@@ -3480,6 +3856,8 @@ export default function App() {
           category: "tool",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: "tool execution",
           message: `Built-in tool not found: ${normalizedDecision.tool}`,
           details: JSON.stringify(normalizedDecision)
         });
@@ -3507,6 +3885,8 @@ export default function App() {
             category: "tool",
             agent: args.agent.name,
             ok: false,
+            requestId: args.requestId,
+            stage: "tool execution",
             message: `Built-in tool blocked by user: ${normalizedDecision.tool}`,
             details: stringifyAny(normalizedDecision.input ?? {})
           });
@@ -3565,6 +3945,8 @@ export default function App() {
           category: "tool",
           agent: args.agent.name,
           ok: true,
+          requestId: args.requestId,
+          stage: "tool execution",
           message: `Built-in tool call OK: ${normalizedDecision.tool}`,
           details: toolOutputText
         });
@@ -3589,6 +3971,8 @@ export default function App() {
           category: "tool",
           agent: args.agent.name,
           ok: false,
+          requestId: args.requestId,
+          stage: "tool execution",
           message: `Built-in tool call failed: ${normalizedDecision.tool}`,
           details: briefError
         });
@@ -3621,6 +4005,8 @@ export default function App() {
         category: "mcp",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: "tool execution",
         message: `Tool decision selected unavailable server: ${normalizedDecision.serverId}`,
         details: JSON.stringify(normalizedDecision)
       });
@@ -3631,13 +4017,15 @@ export default function App() {
         category: "mcp",
         agent: args.agent.name,
         ok: false,
+        requestId: args.requestId,
+        stage: "tool execution",
         message: `Tool decision selected unavailable tool: ${normalizedDecision.tool}`,
         details: JSON.stringify(normalizedDecision)
       });
       append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
     } else {
       const client = new McpSseClient(targetServer);
-      client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, message: t }));
+      client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, requestId: args.requestId, stage: "tool execution", message: t }));
       try {
         const timeoutMs = getMcpToolTimeoutMs(targetServer, normalizedDecision.tool);
         const toolOutput = await callMcpToolWithTimeout(client, normalizedDecision.tool, normalizedDecision.input ?? {}, timeoutMs);
@@ -3658,6 +4046,8 @@ export default function App() {
           category: "mcp",
           agent: targetServer.name,
           ok: true,
+          requestId: args.requestId,
+          stage: "tool execution",
           message: `MCP tool call OK: ${normalizedDecision.tool}`,
           details: toolOutputText
         });
@@ -3691,6 +4081,8 @@ export default function App() {
           category: "mcp",
           agent: targetServer.name,
           ok: false,
+          requestId: args.requestId,
+          stage: "tool execution",
           message: `Tool call failed: ${normalizedDecision.tool}`,
           details: briefError
         });
@@ -3711,21 +4103,6 @@ export default function App() {
       : { input: args.input, ok: false, status: "no_tool", detail: "沒有產生可回填的工具摘要。" };
   }
 
-  async function resolveToolAugmentedInput(args: {
-    input: string;
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    availableBuiltinTools: BuiltInToolConfig[];
-    availableMcpServers: McpServerConfig[];
-    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-    toolEntries: ToolEntry[];
-    decisionContext?: string;
-    onStatus?: (text: string) => void;
-  }): Promise<string> {
-    const result = await resolveToolAugmentedInputDetailed(args);
-    return result.input;
-  }
-
   async function prepareSkillExecution(args: {
     skill: SkillConfig;
     skillInput: any;
@@ -3737,6 +4114,7 @@ export default function App() {
     availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
     deferToolDecision?: boolean;
     onStatus?: (text: string) => void;
+    requestId?: string;
   }): Promise<PreparedSkillExecution> {
     args.onStatus?.(`正在載入 skill「${args.skill.name}」中…`);
     const loaded = loadSkillRuntime({
@@ -3748,7 +4126,8 @@ export default function App() {
       availableMcpTools: args.availableMcpTools,
       availableBuiltinTools: args.availableBuiltinTools,
       userInput: args.userInput,
-      skillInput: args.skillInput
+      skillInput: args.skillInput,
+      systemPromptTemplate: promptTemplateRuntime.resolve("skill-runtime-system", mcpPromptTemplates.activeId).template
     });
 
     const scopedMcpServers = loaded.runtime.allowMcp
@@ -3778,23 +4157,30 @@ export default function App() {
       assets: loaded.runtime.loadedAssets
     });
 
+    let toolAugmentation: ToolAugmentationResult | null = null;
     const finalInput = args.deferToolDecision
       ? loaded.finalInput
-      : await resolveToolAugmentedInput({
-          input: loaded.finalInput,
-          agent: args.agent,
-          adapter: args.adapter,
-          availableBuiltinTools: scopedBuiltInTools,
-          availableMcpServers: scopedMcpServers,
-          availableMcpTools: scopedMcpTools,
-          toolEntries: scopedToolEntries,
-          decisionContext,
-          onStatus: args.onStatus
-        });
+      : await (async () => {
+          const result = await resolveToolAugmentedInputDetailed({
+            input: loaded.finalInput,
+            agent: args.agent,
+            adapter: args.adapter,
+            availableBuiltinTools: scopedBuiltInTools,
+            availableMcpServers: scopedMcpServers,
+            availableMcpTools: scopedMcpTools,
+            toolEntries: scopedToolEntries,
+            decisionContext,
+            onStatus: args.onStatus,
+            requestId: args.requestId
+          });
+          toolAugmentation = result.status === "tool_called" ? result : null;
+          return result.input;
+        })();
 
     return {
       baseInput: loaded.finalInput,
       finalInput,
+      toolAugmentation,
       system: loaded.system,
       trace: loaded.trace,
       runtime: loaded.runtime,
@@ -3814,6 +4200,7 @@ export default function App() {
     userInput: string;
     assistantMessageId: string;
     onStatus?: (text: string) => void;
+    requestId?: string;
   }): Promise<{ finalInput: string; trace: ChatTraceEntry[]; todo: SkillTodoItem[]; phase: SkillPhase; finalAnswerOverride?: string }> {
     const verifierAgent = resolveSkillVerifierAgent(args.agent);
     const verifierAdapter = pickAdapter(verifierAgent);
@@ -3959,6 +4346,8 @@ export default function App() {
               skill: args.skill,
               runtime: args.prepared.runtime,
               userInput: args.userInput,
+              promptTemplate: promptTemplateRuntime.resolve("skill-bootstrap-plan", mcpPromptTemplates.activeId).template,
+              requestId: args.requestId,
               onTrace: (label, content) => {
                 pushSkillTrace(trace, label, content);
                 updateAssistantProgress(bootstrapPlanMeta?.todo?.length ? bootstrapTodoList(bootstrapPlanMeta.todo) : [], "bootstrap_plan", trace);
@@ -4087,8 +4476,8 @@ export default function App() {
                 userInput: args.prepared.decisionContext ? `${fastPrompt}\n\nCurrent loaded skill context (internal only):\n${args.prepared.decisionContext}` : fastPrompt,
                 retry: getRetryPolicyForAgent(args.agent),
                 toolEntries: fastPathScope.toolEntries,
-                promptTemplate: mcpPromptTemplates[mcpPromptTemplates.activeId],
-                fallbackPromptTemplate: getDefaultMcpPromptTemplates()[mcpPromptTemplates.activeId]
+                promptTemplate: promptTemplateRuntime.resolve("tool-decision", mcpPromptTemplates.activeId).template,
+                fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`)
               });
 
               if (fastDecision) {
@@ -4118,6 +4507,8 @@ export default function App() {
               mustObserve,
               mustAct,
               phaseHint,
+              promptTemplate: promptTemplateRuntime.resolve("skill-planner-step", mcpPromptTemplates.activeId).template,
+              requestId: args.requestId,
               onTrace: (label, content) => {
                 pushSkillTrace(trace, label, content);
                 updateAssistantProgress(state.todo, "plan_next_step", trace);
@@ -4291,6 +4682,8 @@ export default function App() {
                 userInput: args.userInput,
                 currentContext,
                 toolScopeSummary,
+                promptTemplate: promptTemplateRuntime.resolve("skill-completion-gate", mcpPromptTemplates.activeId).template,
+                requestId: args.requestId,
                 onTrace: (label, content) => {
                   pushSkillTrace(trace, label, content);
                   updateAssistantProgress(state.todo, "completion_gate", trace);
@@ -4352,9 +4745,10 @@ export default function App() {
       input: currentInput,
       history: limitHistory(history),
       system: args.prepared.system,
+      requestId: args.requestId,
       requestLabel: "skill final answer round 1",
       onDelta: () => {},
-      onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+      onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill final answer round 1", message: t })
     });
 
     const firstAnswerFailure = detectTerminalAgentFailure(currentAnswer);
@@ -4391,7 +4785,9 @@ export default function App() {
         skill: args.skill,
         runtime: args.prepared.runtime,
         round,
-        retry: getRetryPolicyForAgent(verifierAgent)
+        retry: getRetryPolicyForAgent(verifierAgent),
+        promptTemplate: promptTemplateRuntime.resolve("skill-verify", mcpPromptTemplates.activeId).template,
+        requestId: args.requestId
       });
 
       if (!verifyDecision) {
@@ -4469,9 +4865,10 @@ export default function App() {
         input: currentInput,
         history: limitHistory(history),
         system: args.prepared.system,
+        requestId: args.requestId,
         requestLabel: `skill final answer round ${round + 1}`,
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill final answer round ${round + 1}`, message: t })
       });
 
       const refinedAnswerFailure = detectTerminalAgentFailure(currentAnswer);
@@ -4522,10 +4919,13 @@ export default function App() {
     }
 
     const startedAt = Date.now();
+    const requestId = createLogRequestId(mode === "one_to_one" ? "chat" : "magi");
     const logAgentLabel = mode === "one_to_one" ? activeAgent?.name ?? "Unknown agent" : "S.C. MAGI";
     logNow({
       category: "chat",
       agent: logAgentLabel,
+      requestId,
+      stage: "request_start",
       message: `Send (${mode})`,
       details: input
     });
@@ -4535,6 +4935,8 @@ export default function App() {
     logNow({
       category: "chat",
       agent: logAgentLabel,
+      requestId,
+      stage: "context_prepare",
       message: "Context prepared",
       details: `docs=${mode === "one_to_one" ? docsForAgent.length : 0} history=${history.length}`
     });
@@ -4552,7 +4954,7 @@ export default function App() {
         if (!oneToOneAgent) {
           throw new Error("No active agent selected.");
         }
-        logNow({ category: "chat", agent: oneToOneAgent.name, message: "normal talking started" });
+        logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "request_start", message: "normal talking started" });
         const assistantId = generateId();
         streamingAssistantId = assistantId;
         append({
@@ -4580,7 +4982,8 @@ export default function App() {
         const resolvedActiveAgent = hydrateAgentCredentials(oneToOneAgent);
         const adapter = pickAdapter(resolvedActiveAgent);
         const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
-          onStatus: setAssistantStatus
+          onStatus: setAssistantStatus,
+          requestId
         });
         const resolvedToolEntries: ToolEntry[] = [
           ...resolvedMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
@@ -4591,6 +4994,27 @@ export default function App() {
         const skillTrace: ChatTraceEntry[] = [];
         let preparedSkillExecution: PreparedSkillExecution | null = null;
         let selectedSkillForExecution: SkillConfig | null = null;
+        let latestToolAugmentation: ToolAugmentationResult | null = null;
+        const resolveToolAugmentedInputForSend = async (toolArgs: {
+          input: string;
+          decisionContext?: string;
+          onStatus?: (text: string) => void;
+        }) => {
+          const result = await resolveToolAugmentedInputDetailed({
+            input: toolArgs.input,
+            agent: resolvedActiveAgent,
+            adapter,
+            availableBuiltinTools: availableBuiltinToolsForAgent,
+            availableMcpServers: availableMcpServersForAgent,
+            availableMcpTools: resolvedMcpToolsForAgent,
+            toolEntries: resolvedToolEntries,
+            decisionContext: toolArgs.decisionContext,
+            onStatus: toolArgs.onStatus,
+            requestId
+          });
+          latestToolAugmentation = result.status === "tool_called" ? result : null;
+          return result.input;
+        };
         if (skillSessionSnapshot && activeAgent.enableSkills === true) {
           const allowedSkills = skillSessionSnapshot.availableSkills.filter((item) => item.allowed);
           const blockedSkills = skillSessionSnapshot.availableSkills.filter((item) => !item.allowed && item.reason);
@@ -4615,33 +5039,23 @@ export default function App() {
             userInput: input,
             retry: getRetryPolicyForAgent(resolvedActiveAgent),
             skills: availableSkillsForAgent,
-            language: mcpPromptTemplates.activeId
+            language: mcpPromptTemplates.activeId,
+            promptTemplate: promptTemplateRuntime.resolve("skill-decision", mcpPromptTemplates.activeId).template,
+            requestId
           });
 
           if (!skillDecision) {
             pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：skill decision 重試後仍失敗，改走一般 tool decision。`);
-            logNow({ category: "skills", agent: oneToOneAgent.name, ok: false, message: "Skill decision failed after retries; continue without skills" });
-            finalInput = await resolveToolAugmentedInput({
+            logNow({ category: "skills", agent: oneToOneAgent.name, ok: false, requestId, stage: "skill decision", message: "Skill decision failed after retries; continue without skills" });
+            finalInput = await resolveToolAugmentedInputForSend({
               input,
-              agent: resolvedActiveAgent,
-              adapter,
-              availableBuiltinTools: availableBuiltinToolsForAgent,
-              availableMcpServers: availableMcpServersForAgent,
-              availableMcpTools: resolvedMcpToolsForAgent,
-              toolEntries: resolvedToolEntries,
               onStatus: setAssistantStatus
             });
           } else if (skillDecision.type === "no_skill") {
             pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：這一回合不使用 skill。`);
-            logNow({ category: "skills", agent: oneToOneAgent.name, message: "Skill decision resolved: no_skill" });
-            finalInput = await resolveToolAugmentedInput({
+            logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision resolved: no_skill" });
+            finalInput = await resolveToolAugmentedInputForSend({
               input,
-              agent: resolvedActiveAgent,
-              adapter,
-              availableBuiltinTools: availableBuiltinToolsForAgent,
-              availableMcpServers: availableMcpServersForAgent,
-              availableMcpTools: resolvedMcpToolsForAgent,
-              toolEntries: resolvedToolEntries,
               onStatus: setAssistantStatus
             });
           } else {
@@ -4656,17 +5070,13 @@ export default function App() {
                 category: "skills",
                 agent: oneToOneAgent.name,
                 ok: false,
+                requestId,
+                stage: "skill decision",
                 message: `Skill decision selected unavailable skill: ${skillDecision.skillId}`,
                 details: JSON.stringify(skillDecision)
               });
-              finalInput = await resolveToolAugmentedInput({
+              finalInput = await resolveToolAugmentedInputForSend({
                 input,
-                agent: resolvedActiveAgent,
-                adapter,
-                availableBuiltinTools: availableBuiltinToolsForAgent,
-                availableMcpServers: availableMcpServersForAgent,
-                availableMcpTools: resolvedMcpToolsForAgent,
-                toolEntries: resolvedToolEntries,
                 onStatus: setAssistantStatus
               });
             } else {
@@ -4686,17 +5096,23 @@ export default function App() {
                 availableMcpServers: availableMcpServersForAgent,
                 availableMcpTools: resolvedMcpToolsForAgent,
                 deferToolDecision: skillExecutionMode === "multi_turn",
-                onStatus: setAssistantStatus
+                onStatus: setAssistantStatus,
+                requestId
               });
               preparedSkillExecution = prepared;
               selectedSkillForExecution = selectedSkill;
               finalInput = prepared.finalInput;
               finalSystem = prepared.system;
+              if (prepared.toolAugmentation?.status === "tool_called") {
+                latestToolAugmentation = prepared.toolAugmentation;
+              }
               skillTrace.push(...prepared.trace);
               logNow({
                 category: "skills",
                 agent: oneToOneAgent.name,
                 ok: true,
+                requestId,
+                stage: "skill decision",
                 message: `Skill selected: ${selectedSkill.name}`,
                 details: JSON.stringify(skillDecision.input ?? {})
               });
@@ -4706,15 +5122,9 @@ export default function App() {
           if (activeAgent.enableSkills === true) {
             pushSkillTrace(skillTrace, "Skill decision", "沒有可用的 skill，已略過 skill decision。");
           }
-          logNow({ category: "skills", agent: oneToOneAgent.name, message: "Skill decision skipped: no available skills" });
-          finalInput = await resolveToolAugmentedInput({
+          logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision skipped: no available skills" });
+          finalInput = await resolveToolAugmentedInputForSend({
             input,
-            agent: resolvedActiveAgent,
-            adapter,
-            availableBuiltinTools: availableBuiltinToolsForAgent,
-            availableMcpServers: availableMcpServersForAgent,
-            availableMcpTools: resolvedMcpToolsForAgent,
-            toolEntries: resolvedToolEntries,
             onStatus: setAssistantStatus
           });
         }
@@ -4729,7 +5139,8 @@ export default function App() {
               adapter,
               userInput: input,
               assistantMessageId: assistantId,
-              onStatus: setAssistantStatus
+              onStatus: setAssistantStatus,
+              requestId
             });
             finalInput = executed.finalInput;
             finalSystem = preparedSkillExecution.system;
@@ -4757,6 +5168,9 @@ export default function App() {
                 category: "chat",
                 agent: oneToOneAgent.name,
                 ok: !runtimeOverrideFailed,
+                requestId,
+                stage: "final",
+                outcome: runtimeOverrideFailed ? "failure" : "success",
                 message: runtimeOverrideFailed ? "normal talking failed via multi-turn runtime override" : "normal talking completed via multi-turn runtime override",
                 details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
               });
@@ -4792,7 +5206,7 @@ export default function App() {
           });
           if (!sawDelta && t) {
             sawDelta = true;
-            logNow({ category: "chat", agent: oneToOneAgent.name, message: "normal talking streaming started" });
+            logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "stream", message: "normal talking streaming started" });
           }
         };
 
@@ -4801,9 +5215,10 @@ export default function App() {
           input: finalInput,
           history: limitHistory(history),
           system: finalSystem,
+          requestId,
           requestLabel: "chat response",
           onDelta,
-          onLog: (t) => pushLog({ category: "retry", agent: oneToOneAgent.name, message: t })
+          onLog: (t) => pushLog({ category: "retry", agent: oneToOneAgent.name, requestId, stage: "chat response", message: t })
         });
         const terminalFailure = detectTerminalAgentFailure(full);
         if (terminalFailure) {
@@ -4817,8 +5232,41 @@ export default function App() {
             category: "chat",
             agent: oneToOneAgent.name,
             ok: false,
+            requestId,
+            stage: "final",
+            outcome: "failure",
             message: "normal talking failed",
             details: terminalFailure
+          });
+          return;
+        }
+        if (!String(full ?? "").trim()) {
+          const latestToolResult = latestToolAugmentation as ToolAugmentationResult | null;
+          const fallbackContent = buildEmptyResponseFallbackContent(input, latestToolResult, selectedSkillForExecution);
+          const emptyResponseDetails = [`elapsed_ms=${Date.now() - startedAt}`];
+          if (latestToolResult?.toolLabel) {
+            emptyResponseDetails.push(`last_tool=${latestToolResult.toolLabel}`);
+          }
+          if (selectedSkillForExecution) {
+            emptyResponseDetails.push(`selected_skill=${selectedSkillForExecution.name} (${selectedSkillForExecution.id})`);
+          }
+          if (latestToolResult?.toolOutput !== undefined) {
+            emptyResponseDetails.push(`last_tool_output=\n${stringifyAny(latestToolResult.toolOutput)}`);
+          }
+          finalizeAssistant({
+            content: fallbackContent,
+            skillTrace: skillTrace.length ? skillTrace : undefined,
+            skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined
+          });
+          logNow({
+            category: "chat",
+            agent: oneToOneAgent.name,
+            ok: false,
+            requestId,
+            stage: "final",
+            outcome: "degraded",
+            message: "normal talking returned empty response",
+            details: emptyResponseDetails.join("\n\n")
           });
           return;
         }
@@ -4831,6 +5279,9 @@ export default function App() {
           category: "chat",
           agent: oneToOneAgent.name,
           ok: true,
+          requestId,
+          stage: "final",
+          outcome: "success",
           message: "normal talking completed",
           details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${full.length}\n\n${full}`
         });
@@ -4879,6 +5330,9 @@ export default function App() {
         logNow({
           category: "magi",
           ok: false,
+          requestId,
+          stage: "preflight",
+          outcome: "failure",
           message: "MAGI preflight failed",
           details: initialMagiState.reason
         });
@@ -4898,9 +5352,10 @@ export default function App() {
             input: prompt,
             history: [],
             system: unit.system,
+            requestId,
             requestLabel,
             onDelta: () => {},
-            onLog: (t) => pushLog({ category: "retry", agent: unit.agent.name, message: t })
+            onLog: (t) => pushLog({ category: "retry", agent: unit.agent.name, requestId, stage: requestLabel, message: t })
           });
         },
         onState: (magiState) => {
@@ -4917,6 +5372,8 @@ export default function App() {
             category: "magi",
             agent: entry.unitId ?? "S.C. MAGI",
             ok: entry.ok,
+            requestId,
+            stage: entry.round ? `round_${entry.round}` : "magi",
             message: [
               entry.unitId ? `unit=${entry.unitId}` : "",
               entry.round ? `round=${entry.round}` : "",
@@ -4936,6 +5393,9 @@ export default function App() {
       logNow({
         category: "magi",
         ok: result.state.status !== "failed",
+        requestId,
+        stage: "final",
+        outcome: result.state.status === "failed" ? "failure" : "success",
         message: "MAGI finished",
         details: `elapsed_ms=${Date.now() - startedAt}\nfinal_verdict=${result.state.finalVerdict ?? "DEADLOCK"}`
       });
@@ -4955,6 +5415,9 @@ export default function App() {
         category: mode === "one_to_one" ? "chat" : "magi",
         agent: mode === "one_to_one" ? activeAgent?.name : "S.C. MAGI",
         ok: false,
+        requestId,
+        stage: "final",
+        outcome: "failure",
         message: "Send failed",
         details: String(e?.message ?? e)
       });
@@ -5217,6 +5680,19 @@ export default function App() {
     }
   }
 
+  function updatePromptTemplateFile(id: PromptTemplateFileState["id"], content: string) {
+    const now = Date.now();
+    setPromptTemplateFiles((prev) =>
+      prev.map((entry) => (entry.id === id ? { ...entry, content, updatedAt: now } : entry))
+    );
+  }
+
+  function resetPromptTemplateFile(id: PromptTemplateFileState["id"]) {
+    const next = resetPromptTemplateToDefault(id);
+    if (!next) return;
+    updatePromptTemplateFile(id, next);
+  }
+
   function exportRawHistory() {
     const payload: ExportPayload = {
       kind: "raw_history",
@@ -5238,6 +5714,7 @@ export default function App() {
     }
 
     setIsSummaryExporting(true);
+    const requestId = createLogRequestId("summary");
     try {
       const summary = await runOneToOneWithLoadBalancer({
         logicalAgent: activeAgent,
@@ -5246,9 +5723,10 @@ export default function App() {
         history,
         system:
           "You are preparing a conversation carry-over note. Write in Traditional Chinese when possible. Do not include markdown code fences.",
+        requestId,
         requestLabel: "summary export",
         onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, message: t })
+        onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, requestId, stage: "summary export", message: t })
       });
 
       const payload: ExportPayload = {
@@ -5258,9 +5736,9 @@ export default function App() {
         agent: { id: activeAgent.id, name: activeAgent.name, model: activeAgent.model }
       };
       downloadBlob(`agent-go-round-summary-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
-      logNow({ category: "chat", agent: activeAgent.name, ok: true, message: "Summary history exported", details: summary });
+      logNow({ category: "chat", agent: activeAgent.name, ok: true, requestId, stage: "summary export", outcome: "success", message: "Summary history exported", details: summary });
     } catch (e: any) {
-      logNow({ category: "chat", agent: activeAgent.name, ok: false, message: "Summary export failed", details: String(e?.message ?? e) });
+      logNow({ category: "chat", agent: activeAgent.name, ok: false, requestId, stage: "summary export", outcome: "failure", message: "Summary export failed", details: String(e?.message ?? e) });
     } finally {
       setIsSummaryExporting(false);
     }
@@ -5452,6 +5930,11 @@ export default function App() {
                 <span className="cc-card-label">Skills</span>
                 <strong className="cc-card-value">{skills.length}</strong>
                 <span className="cc-card-hint">Workflow layer</span>
+              </button>
+              <button className="cc-card" onClick={() => setConfigModal("prompts")}>
+                <span className="cc-card-label">Prompt Templates</span>
+                <strong className="cc-card-value">{promptTemplateRuntime.groups.length}</strong>
+                <span className="cc-card-hint">YAML prompt files</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("tools")} data-tutorial-id="chat-config-tools-card">
                 <span className="cc-card-label">Built-in Tools</span>
@@ -5793,8 +6276,6 @@ export default function App() {
                   servers={mcpServers}
                   activeId={mcpPanelActiveId}
                   toolsByServer={mcpToolsByServer}
-                  promptTemplates={mcpPromptTemplates}
-                  onChangePromptTemplates={setMcpPromptTemplates}
                   onChangeServers={onChangeMcpServers}
                   onSelectActive={(id) => {
                     setMcpPanelActiveId(id);
@@ -5809,6 +6290,21 @@ export default function App() {
                     logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
                   }}
                   pushLog={pushLog}
+                />
+              </HelpModal>
+            )}
+
+            {configModal === "prompts" && (
+              <HelpModal title="Prompt Templates" onClose={() => setConfigModal(null)} width="min(1100px, 96vw)">
+                <PromptTemplatesPanel
+                  files={promptTemplateFiles}
+                  groups={promptTemplateRuntime.groups}
+                  activeDecisionLanguage={mcpPromptTemplates.activeId}
+                  onChangeActiveDecisionLanguage={(language) =>
+                    setMcpPromptTemplates((prev) => ({ ...prev, activeId: language }))
+                  }
+                  onChangeFileContent={updatePromptTemplateFile}
+                  onResetFile={resetPromptTemplateFile}
                 />
               </HelpModal>
             )}
@@ -5995,9 +6491,23 @@ export default function App() {
       <div className="log-shell card">
         <div className="log-header">
           <div className="log-title">Log</div>
-          <button className="log-toggle" onClick={() => setLogCollapsed((c) => !c)}>
-            {logCollapsed ? "Expand" : "Collapse"}
-          </button>
+          <div className="log-actions">
+            <button
+              className="log-toggle"
+              onClick={async () => {
+                if (!visibleLogText.trim()) return;
+                await copyText(visibleLogText);
+              }}
+            >
+              Copy Visible
+            </button>
+            <button className="log-toggle" onClick={() => setLog([])}>
+              Clear
+            </button>
+            <button className="log-toggle" onClick={() => setLogCollapsed((c) => !c)}>
+              {logCollapsed ? "Expand" : "Collapse"}
+            </button>
+          </div>
         </div>
         {!logCollapsed && (
           <div className="log-body" style={{ height: logHeight }}>
@@ -6018,8 +6528,11 @@ export default function App() {
                   <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "agent", dir: s.key === "agent" && s.dir === "asc" ? "desc" : "asc" }))}>
                     Agent{logSort.key === "agent" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
                   </button>
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "ok", dir: s.key === "ok" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    OK{logSort.key === "ok" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "outcome", dir: s.key === "outcome" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    Outcome{logSort.key === "outcome" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
+                  </button>
+                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "requestId", dir: s.key === "requestId" && s.dir === "asc" ? "desc" : "asc" }))}>
+                    Req{logSort.key === "requestId" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
                   </button>
                   <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "ts", dir: s.key === "ts" && s.dir === "asc" ? "desc" : "asc" }))}>
                     Time{logSort.key === "ts" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
@@ -6028,38 +6541,36 @@ export default function App() {
                     Log{logSort.key === "message" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
                   </button>
                 </div>
-                {log
-                  .map((item, index) => ({ item, index }))
-                  .sort((a, b) => {
-                    const key = logSort.key;
-                    let cmp = 0;
-                    if (key === "ts") cmp = a.item.ts - b.item.ts;
-                    if (key === "ok") {
-                      const av = a.item.ok === true ? 1 : a.item.ok === false ? 0 : -1;
-                      const bv = b.item.ok === true ? 1 : b.item.ok === false ? 0 : -1;
-                      cmp = av - bv;
-                    }
-                    if (key === "category") cmp = (a.item.category || "").toLowerCase().localeCompare((b.item.category || "").toLowerCase());
-                    if (key === "agent") cmp = (a.item.agent || "").toLowerCase().localeCompare((b.item.agent || "").toLowerCase());
-                    if (key === "message") cmp = (a.item.message || "").toLowerCase().localeCompare((b.item.message || "").toLowerCase());
-                    if (cmp === 0) cmp = a.index - b.index;
-                    return logSort.dir === "asc" ? cmp : -cmp;
-                  })
-                  .map(({ item }) => {
-                    const okLabel = item.ok === true ? "OK" : item.ok === false ? "FAIL" : "-";
+                {sortedLogEntries.map((item) => {
+                    const outcome = item.outcome ?? inferLogOutcome(item);
+                    const outcomeLabel = formatLogOutcomeLabel(outcome);
                     const tsLabel = new Date(item.ts).toLocaleString();
-                    const detailsText = item.details ? `${item.message}\n\n${item.details}` : item.message;
+                    const detailsText = formatLogEntryForClipboard(item);
                     return (
                       <details key={item.id} className="log-row log-entry">
                         <summary className="log-summary">
                           <div className="log-cell log-category">{item.category}</div>
                           <div className="log-cell log-agent">{item.agent ?? "-"}</div>
-                          <div className={`log-cell log-ok ${item.ok === true ? "ok" : item.ok === false ? "fail" : ""}`}>{okLabel}</div>
+                          <div className={`log-cell log-outcome ${outcome}`}>{outcomeLabel}</div>
+                          <div className="log-cell log-request-id">{item.requestId ?? "-"}</div>
                           <div className="log-cell log-time">{tsLabel}</div>
                           <div className="log-cell log-message">{item.message}</div>
                         </summary>
                         <div className="log-details">
-                          <div className="log-details-label">Log</div>
+                          <div className="log-details-head">
+                            <div className="log-details-label">Log</div>
+                            <button
+                              type="button"
+                              className="log-copy-btn"
+                              onClick={async (event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                await copyText(detailsText);
+                              }}
+                            >
+                              Copy
+                            </button>
+                          </div>
                           <pre className="log-details-body">{detailsText}</pre>
                         </div>
                       </details>

@@ -1,0 +1,34 @@
+id: tool-decision.en
+title: Tool Decision Prompt (English)
+category: tool_decision
+language: en
+description: Controls the preflight prompt used to decide whether this turn needs a tool.
+placeholders:
+  - "{{userInput}}"
+  - "{{toolListJson}}"
+  - "{{noToolJson}}"
+  - "{{userProfileJson}}"
+  - "{{builtinToolJson}}"
+  - "{{mcpCallJson}}"
+template: |
+  Return JSON only. Do not add any other text.
+
+  Decide whether this turn needs a tool.
+
+  User request:
+  {{userInput}}
+
+  Available tools:
+  {{toolListJson}}
+
+  If no tool is needed, return:
+  {{noToolJson}}
+
+  If the user profile tool is needed, return:
+  {{userProfileJson}}
+
+  If a browser-side built-in JS tool is needed, return:
+  {{builtinToolJson}}
+
+  If an MCP tool is needed, return:
+  {{mcpCallJson}}

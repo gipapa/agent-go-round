@@ -381,6 +381,7 @@ export type SkillFileItem = {
 };
 
 export type LogLevel = "info" | "warn" | "error" | "debug";
+export type LogOutcome = "info" | "success" | "failure" | "degraded";
 
 export type LogEntry = {
   id: string;
@@ -390,5 +391,8 @@ export type LogEntry = {
   ts: number;
   message: string;
   level?: LogLevel;
+  outcome?: LogOutcome;
+  requestId?: string;
+  stage?: string;
   details?: string;
 };

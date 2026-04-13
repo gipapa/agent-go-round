@@ -1,0 +1,29 @@
+id: skill-bootstrap-plan.zh
+title: Skill Bootstrap Plan Prompt（中文）
+category: skill_runtime
+language: zh
+description: 控制 multi-turn skill 初始 todo 與 startUrl 推論。
+placeholders:
+  - "{{skillName}}"
+  - "{{skillId}}"
+  - "{{skillDescription}}"
+  - "{{runtimeInstructions}}"
+  - "{{userInput}}"
+template: |
+  請只回傳 JSON，不要加任何其他文字。
+
+  請為 multi-turn skill workflow 建立一份簡短的內部執行計畫。
+  產生 3 到 7 個簡潔的 todo，每一項都應該是使用者可感知或 workflow 可觀察的重要里程碑。
+  如果這是瀏覽器任務，也請在使用者要求足夠明確時推論最直接、最穩定的 startUrl。
+  當直接進入 canonical page 明顯更有效率時，優先使用 canonical page，不要先去 generic homepage。
+  例：GitHub Trending 優先用 https://github.com/trending?since=daily，而不是 https://github.com 或未固定條件的 Trending URL。
+
+  Skill: {{skillName}} ({{skillId}})
+  Skill description: {{skillDescription}}
+  Internal workflow:
+  {{runtimeInstructions}}
+
+  User request:
+  {{userInput}}
+
+  回傳：{"taskSummary":"...","startUrl":"https://... or empty string","todo":["...","..."]}

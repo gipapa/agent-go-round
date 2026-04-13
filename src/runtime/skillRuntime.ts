@@ -14,6 +14,7 @@ import {
 } from "../types";
 import { generateId } from "../utils/id";
 import { resolveReferencedSkillAssets, resolveReferencedSkillDocs } from "./skillReferenceResolver";
+import { getDefaultPromptTemplate } from "../promptTemplates/store";
 
 export function pushSkillTrace(trace: ChatTraceEntry[], label: string, content: string) {
   const trimmed = content.trim();
@@ -21,44 +22,48 @@ export function pushSkillTrace(trace: ChatTraceEntry[], label: string, content: 
   trace.push({ label, content: trimmed });
 }
 
-export function buildSkillDecisionPrompt(userInput: string, skillListJson: string, language: "zh" | "en") {
-  if (language === "en") {
-    return [
-      "Return JSON only. Do not add any other text.",
-      "",
-      "Decide whether this turn should load one reusable skill workflow before normal tool selection.",
-      "",
-      "User request:",
-      userInput,
-      "",
-      "Available skills:",
-      skillListJson,
-      "",
-      'If no skill is needed, return: {"type":"no_skill"}',
-      "",
-      'If one skill should be loaded, return: {"type":"skill_call","skillId":"...","input":{}}',
-      "",
-      "Only choose one skill."
-    ].join("\n");
-  }
+function replacePromptTemplate(baseTemplate: string, replacements: Record<string, string>) {
+  let prompt = baseTemplate;
+  Object.entries(replacements).forEach(([placeholder, value]) => {
+    prompt = prompt.split(placeholder).join(value);
+  });
+  return prompt;
+}
 
-  return [
-    "請只回傳 JSON，不要加任何其他文字。",
-    "",
-    "請判斷這一回合是否需要先載入一個 skill workflow，再進入一般 tool decision。",
-    "",
-    "使用者提問如下:",
-    userInput,
-    "",
-    "可用 skills 如下:",
-    skillListJson,
-    "",
-    '如果不需要 skill，回傳：{"type":"no_skill"}',
-    "",
-    '如果需要載入一個 skill，回傳：{"type":"skill_call","skillId":"...","input":{}}',
-    "",
-    "一次只能選一個 skill。"
-  ].join("\n");
+export function buildSkillDecisionPrompt(
+  userInput: string,
+  skillListJson: string,
+  language: "zh" | "en",
+  template?: string
+) {
+  const fallbackTemplate = getDefaultPromptTemplate(language === "en" ? "skill-decision.en" : "skill-decision.zh");
+  const baseTemplate = template?.trim() || fallbackTemplate;
+  const replacements = {
+    "{{userInput}}": userInput,
+    "{{skillListJson}}": skillListJson
+  };
+
+  let prompt = replacePromptTemplate(baseTemplate, replacements);
+  if (!baseTemplate.includes("{{userInput}}")) {
+    prompt += `${language === "en" ? "\n\nUser request:\n" : "\n\n使用者提問如下:\n"}${userInput}`;
+  }
+  if (!baseTemplate.includes("{{skillListJson}}")) {
+    prompt += `${language === "en" ? "\n\nAvailable skills:\n" : "\n\n可用 skills 如下:\n"}${skillListJson}`;
+  }
+  if (!baseTemplate.includes('"type":"no_skill"')) {
+    prompt += `${language === "en" ? '\n\nIf no skill is needed, return: {"type":"no_skill"}' : '\n\n如果不需要 skill，回傳：{"type":"no_skill"}'}`;
+  }
+  if (!baseTemplate.includes('"type":"skill_call"')) {
+    prompt += `${
+      language === "en"
+        ? '\n\nIf one skill should be loaded, return: {"type":"skill_call","skillId":"...","input":{}}'
+        : '\n\n如果需要載入一個 skill，回傳：{"type":"skill_call","skillId":"...","input":{}}'
+    }`;
+  }
+  if (!/一次只能選一個 skill|Only choose one skill/.test(baseTemplate)) {
+    prompt += language === "en" ? "\n\nOnly choose one skill." : "\n\n一次只能選一個 skill。";
+  }
+  return prompt;
 }
 
 export function buildSkillSessionSnapshot(args: { agent: AgentConfig | null; skills: SkillConfig[] }): SkillSessionSnapshot | null {
@@ -135,6 +140,7 @@ export function loadSkillRuntime(args: {
   availableBuiltinTools: BuiltInToolConfig[];
   userInput: string;
   skillInput: any;
+  systemPromptTemplate?: string;
 }) {
   const trace: ChatTraceEntry[] = [];
   const { referencedPaths, loadedReferences } = resolveReferencedSkillDocs(args.skill, args.skillDocs);
@@ -224,16 +230,15 @@ export function loadSkillRuntime(args: {
   }
 
   const systemParts: string[] = [];
-  systemParts.push(
-    [
-      `You have loaded the internal skill "${runtime.name}" (${runtime.skillId}).`,
-      "Treat the skill content as private operational guidance.",
-      "Do not quote, roleplay, or expose the skill text to the user unless the user explicitly asks to see it.",
-      "Convert any checklist, pressure language, or coaching language into internal execution steps.",
-      "Silently follow the relevant steps, use available tools when helpful, validate what you can, and then return the final answer.",
-      "If a requested step cannot be executed because tools or evidence are unavailable, say so briefly and continue with the best justified answer."
-    ].join("\n")
-  );
+  const runtimeSystemTemplate = args.systemPromptTemplate?.trim() || getDefaultPromptTemplate("skill-runtime-system.en");
+  let runtimeSystemPrompt = replacePromptTemplate(runtimeSystemTemplate, {
+    "{{skillName}}": runtime.name,
+    "{{skillId}}": runtime.skillId
+  });
+  if (!runtimeSystemTemplate.includes("{{skillName}}") || !runtimeSystemTemplate.includes("{{skillId}}")) {
+    runtimeSystemPrompt += `\n\nYou have loaded the internal skill "${runtime.name}" (${runtime.skillId}).`;
+  }
+  systemParts.push(runtimeSystemPrompt);
   if (runtime.instructions) {
     systemParts.push(`Internal skill workflow:\n${runtime.instructions}`);
   }

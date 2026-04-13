@@ -1,4 +1,5 @@
 import { LoadedSkillRuntime, SkillCompletionDecision, SkillConfig, SkillStepDecision } from "../types";
+import { getDefaultPromptTemplate } from "../promptTemplates/store";
 
 function compactBlock(text: string | undefined, maxChars: number) {
   const normalized = String(text ?? "").replace(/\r/g, "").trim();
@@ -59,27 +60,28 @@ export function buildBootstrapPlanPrompt(args: {
   skill: SkillConfig;
   runtime: LoadedSkillRuntime;
   userInput: string;
+  template?: string;
 }) {
-  return [
-    "Return JSON only. Do not add any other text.",
-    "",
-    "Create a short internal execution plan for a multi-turn skill workflow.",
-    "Generate 3 to 7 concise todo items. Each item should represent a meaningful user-visible or workflow-visible milestone.",
-    "If this is a browser task, also infer the most direct stable startUrl when it is reasonably obvious from the user request.",
-    "Prefer a direct canonical page over a generic homepage when it clearly shortens the workflow.",
-    "Example: for GitHub Trending, prefer https://github.com/trending?since=daily instead of https://github.com or an unfixed Trending URL.",
-    "",
-    `Skill: ${args.skill.name} (${args.skill.id})`,
-    args.skill.description ? `Skill description: ${args.skill.description}` : "",
-    args.runtime.instructions ? `Internal workflow:\n${compactBlock(args.runtime.instructions, 1600)}` : "",
-    "",
-    "User request:",
-    args.userInput,
-    "",
-    'Return: {"taskSummary":"...","startUrl":"https://... or empty string","todo":["...","..."]}'
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const baseTemplate = args.template?.trim() || getDefaultPromptTemplate("skill-bootstrap-plan.en");
+  let prompt = baseTemplate
+    .split("{{skillName}}")
+    .join(args.skill.name)
+    .split("{{skillId}}")
+    .join(args.skill.id)
+    .split("{{skillDescription}}")
+    .join(args.skill.description || "")
+    .split("{{runtimeInstructions}}")
+    .join(compactBlock(args.runtime.instructions, 1600))
+    .split("{{userInput}}")
+    .join(args.userInput);
+
+  if (!baseTemplate.includes("{{userInput}}")) {
+    prompt += `\n\nUser request:\n${args.userInput}`;
+  }
+  if (!baseTemplate.includes('"taskSummary"')) {
+    prompt += '\n\nReturn: {"taskSummary":"...","startUrl":"https://... or empty string","todo":["...","..."]}';
+  }
+  return prompt;
 }
 
 export function buildPlannerStepPrompt(args: {
@@ -92,6 +94,7 @@ export function buildPlannerStepPrompt(args: {
   todoSummary: string;
   mustObserve: boolean;
   mustAct: boolean;
+  template?: string;
 }) {
   const allowedOutputs = args.mustObserve
     ? [
@@ -110,41 +113,42 @@ export function buildPlannerStepPrompt(args: {
           '{"type":"finish","reason":"...","todoIds":["..."]}'
         ];
 
-  return [
-    "Return JSON only. Do not add any other text.",
-    "",
-    "You are the internal planner for a multi-turn skill runtime.",
-    "Choose the next step conservatively. Do not answer the user directly.",
-    "Prefer the smallest next action that visibly advances the workflow.",
-    "If the current context already contains a usable page/session/result, do not reset the workflow by repeating the same open action unless the context clearly shows the state is gone or invalid.",
-    "If the current context contains interactive targets, form fields, suggestions, or submit controls, prefer act over another observe.",
-    "If the current context explicitly says the requested feature is unavailable for the current device, region, or account, and no reasonable tool step can recover from that, choose finish instead of looping.",
-    "If the current context shows login, verification, or consent that a human can reasonably resolve, choose ask_user instead of finishing immediately.",
-    "",
-    `Skill: ${args.skill.name} (${args.skill.id})`,
-    args.skill.description ? `Skill description: ${args.skill.description}` : "",
-    args.runtime.instructions ? `Internal workflow:\n${compactBlock(args.runtime.instructions, 1400)}` : "",
-    "",
-    "User request:",
-    args.userInput,
-    "",
-    "Current todo state:",
-    args.todoSummary,
-    "",
-    "Current internal context:",
-    compactBlock(args.currentContext, 2200),
-    "",
-    "Available tools:",
-    args.toolScopeSummary,
-    "",
+  const constraintBlock = [
     args.mustObserve ? "Constraint: the next step must be observe or ask_user because the previous action changed state." : "",
-    args.mustAct ? "Constraint: repeated observation did not advance the workflow; the next step must be act or ask_user." : "",
-    args.currentPhaseHint ? `Runtime hint:\n${args.currentPhaseHint}` : "",
-    "",
-    ...allowedOutputs
+    args.mustAct ? "Constraint: repeated observation did not advance the workflow; the next step must be act or ask_user." : ""
   ]
     .filter(Boolean)
     .join("\n");
+
+  const baseTemplate = args.template?.trim() || getDefaultPromptTemplate("skill-planner-step.en");
+  let prompt = baseTemplate
+    .split("{{skillName}}")
+    .join(args.skill.name)
+    .split("{{skillId}}")
+    .join(args.skill.id)
+    .split("{{skillDescription}}")
+    .join(args.skill.description || "")
+    .split("{{runtimeInstructions}}")
+    .join(compactBlock(args.runtime.instructions, 1400))
+    .split("{{userInput}}")
+    .join(args.userInput)
+    .split("{{todoSummary}}")
+    .join(args.todoSummary)
+    .split("{{currentContext}}")
+    .join(compactBlock(args.currentContext, 2200))
+    .split("{{toolScopeSummary}}")
+    .join(args.toolScopeSummary)
+    .split("{{constraintBlock}}")
+    .join(constraintBlock)
+    .split("{{currentPhaseHint}}")
+    .join(args.currentPhaseHint ? `Runtime hint:\n${args.currentPhaseHint}` : "")
+    .split("{{allowedOutputs}}")
+    .join(allowedOutputs.join("\n"));
+
+  if (!baseTemplate.includes("{{allowedOutputs}}")) {
+    prompt += `\n\n${allowedOutputs.join("\n")}`;
+  }
+  return prompt;
 }
 
 export function buildCompletionGatePrompt(args: {
@@ -153,30 +157,30 @@ export function buildCompletionGatePrompt(args: {
   userInput: string;
   currentContext: string;
   todoSummary: string;
+  template?: string;
 }) {
-  return [
-    "Return JSON only. Do not add any other text.",
-    "",
-    "Check whether the internal multi-turn skill workflow has truly completed the user's task.",
-    "Be conservative. Opening a page, observing a page, or typing text is not enough by itself.",
-    "If the current context explicitly says the requested feature is unavailable for the current device, region, or account, you may treat that as a justified blocked/manual stop and return complete.",
-    "",
-    `Skill: ${args.skill.name} (${args.skill.id})`,
-    args.skill.description ? `Skill description: ${args.skill.description}` : "",
-    args.runtime.instructions ? `Internal workflow:\n${compactBlock(args.runtime.instructions, 1200)}` : "",
-    "",
-    "User request:",
-    args.userInput,
-    "",
-    "Current todo state:",
-    args.todoSummary,
-    "",
-    "Current internal context:",
-    compactBlock(args.currentContext, 1800),
-    "",
-    'If the task is complete or is at a justified blocked/manual stop, return: {"type":"complete","reason":"...","todoIds":["..."]}',
-    'If more work is still needed, return: {"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}'
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const baseTemplate = args.template?.trim() || getDefaultPromptTemplate("skill-completion-gate.en");
+  let prompt = baseTemplate
+    .split("{{skillName}}")
+    .join(args.skill.name)
+    .split("{{skillId}}")
+    .join(args.skill.id)
+    .split("{{skillDescription}}")
+    .join(args.skill.description || "")
+    .split("{{runtimeInstructions}}")
+    .join(compactBlock(args.runtime.instructions, 1200))
+    .split("{{userInput}}")
+    .join(args.userInput)
+    .split("{{todoSummary}}")
+    .join(args.todoSummary)
+    .split("{{currentContext}}")
+    .join(compactBlock(args.currentContext, 1800));
+
+  if (!baseTemplate.includes('"type":"complete"')) {
+    prompt += '\n\nIf the task is complete or is at a justified blocked/manual stop, return: {"type":"complete","reason":"...","todoIds":["..."]}';
+  }
+  if (!baseTemplate.includes('"type":"incomplete"')) {
+    prompt += '\nIf more work is still needed, return: {"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}';
+  }
+  return prompt;
 }

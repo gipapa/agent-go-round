@@ -3,15 +3,12 @@ import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { McpSseClient } from "../mcp/sseClient";
 import { listTools, callTool } from "../mcp/toolRegistry";
 import { generateId } from "../utils/id";
-import { McpPromptTemplateKey, McpPromptTemplates, getDefaultMcpPromptTemplates } from "../storage/settingsStore";
 import HelpModal from "./HelpModal";
 
 export default function McpPanel(props: {
   servers: McpServerConfig[];
   activeId: string | null;
   toolsByServer: Record<string, McpTool[]>;
-  promptTemplates: McpPromptTemplates;
-  onChangePromptTemplates: (next: McpPromptTemplates) => void;
   onChangeServers: (s: McpServerConfig[]) => void;
   onSelectActive: (id: string | null) => void;
   onUpdateTools: (id: string, tools: McpTool[]) => void;
@@ -19,8 +16,6 @@ export default function McpPanel(props: {
 }) {
   const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? props.servers[0] ?? null, [props.servers, props.activeId]);
   const [showHelp, setShowHelp] = useState(false);
-  const [showPromptConfig, setShowPromptConfig] = useState(false);
-  const [templateEditorId, setTemplateEditorId] = useState<McpPromptTemplateKey>(props.promptTemplates.activeId);
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
   const [serverDraft, setServerDraft] = useState<McpServerConfig | null>(null);
   const [draftTools, setDraftTools] = useState<McpTool[]>([]);
@@ -31,11 +26,6 @@ export default function McpPanel(props: {
   const [toolOutput, setToolOutput] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [isCallingTool, setIsCallingTool] = useState(false);
-  const defaultTemplates = useMemo(() => getDefaultMcpPromptTemplates(), []);
-
-  React.useEffect(() => {
-    setTemplateEditorId(props.promptTemplates.activeId);
-  }, [props.promptTemplates.activeId]);
 
   React.useEffect(() => {
     if (props.activeId && props.servers.some((server) => server.id === props.activeId)) return;
@@ -54,18 +44,6 @@ export default function McpPanel(props: {
 
   function resolveToolName(input: string) {
     return input.trim();
-  }
-
-  function updateTemplate(id: McpPromptTemplateKey, value: string) {
-    props.onChangePromptTemplates({ ...props.promptTemplates, [id]: value });
-  }
-
-  function setActiveTemplate(id: McpPromptTemplateKey) {
-    props.onChangePromptTemplates({ ...props.promptTemplates, activeId: id });
-  }
-
-  function resetTemplate(id: McpPromptTemplateKey) {
-    updateTemplate(id, defaultTemplates[id]);
   }
 
   function openEditor(server?: McpServerConfig) {
@@ -256,16 +234,7 @@ export default function McpPanel(props: {
             自動換成 `/rpc` 作為工具呼叫端點。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
-            `Tool Decision Prompt` 用來控制每次自動判斷是否要使用 MCP 工具時，前面那段 preflight prompt 的內容。
-            你可以同時保存中文模板與英文模板，再指定目前要使用哪一份。
-          </div>
-          <div style={{ ...helpText, marginTop: 8 }}>
-            模板 placeholders：
-            <br />
-            <code>{'{{userInput}}'}</code>, <code>{'{{toolListJson}}'}</code>, <code>{'{{noToolJson}}'}</code>,{" "}
-            <code>{'{{userProfileJson}}'}</code>, <code>{'{{builtinToolJson}}'}</code>, <code>{'{{mcpCallJson}}'}</code>
-            <br />
-            這些 placeholders 會插入最後要給模型看的 JSON 範例，所以請保留原樣。JSON schema 與 key 會維持英文。
+            Tool / skill 相關的 prompt templates 已移到 Chat Config 裡的 `Prompt Templates` 面板集中管理，不再放在 MCP 視窗內單獨設定。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
             補充：
@@ -286,72 +255,6 @@ export default function McpPanel(props: {
             3. 按下 `Connect & List Tools`
             <br />
             4. 若成功，才會出現下方 `Call Tool` 區塊
-          </div>
-        </HelpModal>
-      ) : null}
-
-      <div className="card" style={{ padding: 12, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 800 }}>Tool Decision Prompt</div>
-        <button type="button" onClick={() => setShowPromptConfig(true)} style={btnPrimary}>
-          {props.promptTemplates.activeId === "zh" ? "中文模板" : "English Template"}
-        </button>
-      </div>
-
-      {showPromptConfig ? (
-        <HelpModal title="Tool Decision Prompt 設定" onClose={() => setShowPromptConfig(false)} width="min(760px, 96vw)">
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
-              這裡設定的是「自動判斷要不要使用 MCP 工具」之前，送給模型的模板內容。透過 placeholders 插入的 JSON 範例會維持英文。
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {([
-                ["zh", "中文模板"],
-                ["en", "English Template"]
-              ] as const).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setTemplateEditorId(id)}
-                  style={{
-                    ...btnSmall,
-                    border: templateEditorId === id ? "1px solid var(--primary)" : btnSmall.border,
-                    background: templateEditorId === id ? "rgba(91, 123, 255, 0.14)" : btnSmall.background
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => setActiveTemplate(templateEditorId)}
-                style={props.promptTemplates.activeId === templateEditorId ? btnActiveSmall : btnPrimarySmall}
-              >
-                {props.promptTemplates.activeId === templateEditorId ? "目前啟用中" : "設為啟用模板"}
-              </button>
-              <button type="button" onClick={() => resetTemplate(templateEditorId)} style={btnSmall}>
-                重設目前模板
-              </button>
-            </div>
-
-            <textarea
-              value={props.promptTemplates[templateEditorId]}
-              onChange={(e) => updateTemplate(templateEditorId, e.target.value)}
-              rows={14}
-              style={{ ...inp, minHeight: 240, fontFamily: 'Consolas, "SFMono-Regular", monospace', lineHeight: 1.55 }}
-            />
-
-            <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
-              Placeholders：
-              <br />
-              <code>{'{{userInput}}'}</code>, <code>{'{{toolListJson}}'}</code>, <code>{'{{noToolJson}}'}</code>,{" "}
-              <code>{'{{userProfileJson}}'}</code>, <code>{'{{builtinToolJson}}'}</code>, <code>{'{{mcpCallJson}}'}</code>
-              <br />
-              請盡量保留這些 placeholders。就算模板周圍文字改成中文，插入進去的 JSON schema 與 key 也會維持英文。
-            </div>
           </div>
         </HelpModal>
       ) : null}
@@ -575,11 +478,6 @@ const btnPrimarySmall: React.CSSProperties = {
   background: "var(--primary)",
   color: "#0b0e14",
   fontWeight: 700
-};
-
-const btnActiveSmall: React.CSSProperties = {
-  ...btnPrimarySmall,
-  opacity: 0.82
 };
 
 const btnSmall: React.CSSProperties = {

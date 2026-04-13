@@ -1,0 +1,34 @@
+id: tool-decision.zh
+title: Tool Decision Prompt（中文）
+category: tool_decision
+language: zh
+description: 控制自動判斷這一輪是否需要使用工具時的 preflight prompt。
+placeholders:
+  - "{{userInput}}"
+  - "{{toolListJson}}"
+  - "{{noToolJson}}"
+  - "{{userProfileJson}}"
+  - "{{builtinToolJson}}"
+  - "{{mcpCallJson}}"
+template: |
+  請只回傳 JSON，不要加任何其他文字。
+
+  請判斷這次是否需要使用工具。
+
+  使用者提問如下:
+  {{userInput}}
+
+  工具清單如下:
+  {{toolListJson}}
+
+  如果不需要工具，回傳：
+  {{noToolJson}}
+
+  如果需要使用使用者資訊工具，回傳：
+  {{userProfileJson}}
+
+  如果需要使用 browser 內建 JS 工具，回傳：
+  {{builtinToolJson}}
+
+  如果需要使用 MCP 工具，回傳：
+  {{mcpCallJson}}

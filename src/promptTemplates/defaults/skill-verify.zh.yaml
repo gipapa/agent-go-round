@@ -1,0 +1,47 @@
+id: skill-verify.zh
+title: Skill Verify Prompt（中文）
+category: skill_runtime
+language: zh
+description: 控制多輪 skill refine 中 verifier 判斷 pass / refine 的 prompt。
+placeholders:
+  - "{{skillName}}"
+  - "{{skillId}}"
+  - "{{skillDescription}}"
+  - "{{runtimeInstructions}}"
+  - "{{loadedReferences}}"
+  - "{{loadedAssets}}"
+  - "{{round}}"
+  - "{{userInput}}"
+  - "{{currentInput}}"
+  - "{{answer}}"
+template: |
+  請只回傳 JSON，不要加任何其他文字。
+
+  你現在要驗證一段經過 skill 輔助後產生的回答。
+  除非真的需要修正，否則不要重寫答案。
+
+  Skill: {{skillName}} ({{skillId}})
+  Skill description: {{skillDescription}}
+  Internal skill workflow:
+  {{runtimeInstructions}}
+  Loaded skill references:
+  {{loadedReferences}}
+  Loaded skill assets:
+  {{loadedAssets}}
+
+  Verification round: {{round}}
+
+  Original user request:
+  {{userInput}}
+
+  Current effective prompt sent to the answering agent:
+  {{currentInput}}
+
+  Current answer:
+  {{answer}}
+
+  如果答案可接受，回傳：{"type":"pass","reason":"..."}
+
+  如果需要 refine，回傳：{"type":"refine","reason":"...","revisionPrompt":"..."}
+
+  只有在答案明顯沒有遵守 skill workflow、跳過必要驗證、或明顯錯過可用工具 / reference 時才使用 refine。

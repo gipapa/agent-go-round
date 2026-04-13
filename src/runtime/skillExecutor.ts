@@ -1,5 +1,6 @@
 import { ChatTraceEntry, LoadedSkillRuntime, SkillConfig, SkillExecutionMode } from "../types";
 import { pushSkillTrace } from "./skillRuntime";
+import { getDefaultPromptTemplate } from "../promptTemplates/store";
 
 export type SkillVerifyDecision =
   | { type: "pass"; reason?: string }
@@ -46,42 +47,45 @@ export function buildSkillVerifyPrompt(args: {
   currentInput: string;
   answer: string;
   round: number;
+  template?: string;
 }) {
-  return [
-    "Return JSON only. Do not add any other text.",
-    "",
-    "You are verifying the result of an internal skill-assisted answer.",
-    "Do not rewrite the answer unless refinement is necessary.",
-    "",
-    `Skill: ${args.skill.name} (${args.skill.id})`,
-    args.skill.description ? `Skill description: ${args.skill.description}` : "",
-    args.runtime.instructions ? `Internal skill workflow:\n${args.runtime.instructions}` : "",
-    args.runtime.loadedReferences.length
-      ? `Loaded skill references:\n${args.runtime.loadedReferences.map((doc) => `- ${doc.path}`).join("\n")}`
-      : "Loaded skill references: none",
-    args.runtime.loadedAssets.length
-      ? `Loaded skill assets:\n${args.runtime.loadedAssets.map((file) => `- ${file.path}`).join("\n")}`
-      : "Loaded skill assets: none",
-    "",
-    `Verification round: ${args.round}`,
-    "",
-    "Original user request:",
-    args.userInput,
-    "",
-    "Current effective prompt sent to the answering agent:",
-    args.currentInput,
-    "",
-    "Current answer:",
-    args.answer,
-    "",
-    'If the answer is acceptable, return: {"type":"pass","reason":"..."}',
-    "",
-    'If refinement is needed, return: {"type":"refine","reason":"...","revisionPrompt":"..."}',
-    "",
-    "Use refine only when the answer clearly failed to follow the skill workflow, skipped necessary verification, or missed an obvious tool/reference usage opportunity."
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const baseTemplate = args.template?.trim() || getDefaultPromptTemplate("skill-verify.en");
+  const loadedReferences = args.runtime.loadedReferences.length
+    ? args.runtime.loadedReferences.map((doc) => `- ${doc.path}`).join("\n")
+    : "none";
+  const loadedAssets = args.runtime.loadedAssets.length
+    ? args.runtime.loadedAssets.map((file) => `- ${file.path}`).join("\n")
+    : "none";
+
+  let prompt = baseTemplate
+    .split("{{skillName}}")
+    .join(args.skill.name)
+    .split("{{skillId}}")
+    .join(args.skill.id)
+    .split("{{skillDescription}}")
+    .join(args.skill.description || "")
+    .split("{{runtimeInstructions}}")
+    .join(args.runtime.instructions || "")
+    .split("{{loadedReferences}}")
+    .join(loadedReferences)
+    .split("{{loadedAssets}}")
+    .join(loadedAssets)
+    .split("{{round}}")
+    .join(String(args.round))
+    .split("{{userInput}}")
+    .join(args.userInput)
+    .split("{{currentInput}}")
+    .join(args.currentInput)
+    .split("{{answer}}")
+    .join(args.answer);
+
+  if (!baseTemplate.includes('"type":"pass"')) {
+    prompt += '\n\nIf the answer is acceptable, return: {"type":"pass","reason":"..."}';
+  }
+  if (!baseTemplate.includes('"type":"refine"')) {
+    prompt += '\n\nIf refinement is needed, return: {"type":"refine","reason":"...","revisionPrompt":"..."}';
+  }
+  return prompt;
 }
 
 export function normalizeSkillVerifyDecision(obj: any): SkillVerifyDecision | null {
