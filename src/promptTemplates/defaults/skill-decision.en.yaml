@@ -7,18 +7,26 @@ placeholders:
   - "{{userInput}}"
   - "{{skillListJson}}"
 template: |
-  Return JSON only. Do not add any other text.
+  Return exactly one JSON object. No prose. No markdown.
 
-  Decide whether this turn should load one reusable skill workflow before normal tool selection.
+  Task: decide whether this turn should load one reusable skill before normal tool selection.
 
-  User request:
+  Rules:
+  - Choose no_skill unless one skill clearly matches the user request.
+  - Choose at most one skill.
+  - Use exact skillId from SKILL_CATALOG.
+  - Keep input as {} unless the request clearly needs structured input.
+
+  USER_REQUEST:
   {{userInput}}
 
-  Available skills:
+  SKILL_CATALOG:
   {{skillListJson}}
 
-  If no skill is needed, return: {"type":"no_skill"}
+  Allowed JSON:
+  {"type":"no_skill"}
+  {"type":"skill_call","skillId":"...","input":{}}
 
-  If one skill should be loaded, return: {"type":"skill_call","skillId":"...","input":{}}
-
-  Only choose one skill.
+  Examples:
+  - calm, structured, step-by-step explanation -> sequential thinking skill
+  - open page, click target, read page content -> browser workflow skill

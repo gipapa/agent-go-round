@@ -43,9 +43,14 @@ export const TUTORIAL_PRIMARY_LOAD_BALANCER_NAME = "教學用Load Balancer 1";
 export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
 export const TUTORIAL_PRIMARY_MODEL = "groq/compound";
 export const TUTORIAL_SECONDARY_MODEL = "groq/compound-mini";
+export const TUTORIAL_AGENT_ROLE = "primary";
 
 function isManagedMagiAgent(agent: AgentConfig) {
   return agent.managedBy === "magi" && !!agent.managedUnitId;
+}
+
+function isTutorialPrimaryAgent(agent: AgentConfig) {
+  return agent.tutorialRole === TUTORIAL_AGENT_ROLE && !isManagedMagiAgent(agent);
 }
 
 function findLoadBalancerByName(state: TutorialRuntimeState, name: string) {
@@ -97,29 +102,8 @@ function findTutorialSecondaryCredentialKey(state: TutorialRuntimeState) {
   return { credential: otherCredential, key: otherKey };
 }
 
-function findTutorialAgentPrimaryInstance(state: TutorialRuntimeState, agent: AgentConfig) {
-  if (!agent.loadBalancerId) return null;
-  const loadBalancer = state.loadBalancers.find((entry) => entry.id === agent.loadBalancerId) ?? null;
-  if (!loadBalancer) return null;
-  const instance = loadBalancer.instances[0] ?? null;
-  if (!instance) return null;
-  const credential = state.credentials.find((entry) => entry.id === instance.credentialId) ?? null;
-  return { loadBalancer, instance, credential };
-}
-
 function findTutorialAgentBase(state: TutorialRuntimeState) {
-  return (
-    state.agents.find((agent) => {
-      if (isManagedMagiAgent(agent)) return false;
-      const primary = findTutorialAgentPrimaryInstance(state, agent);
-      return (
-        !!primary &&
-        primary.credential?.preset === "groq" &&
-        normalizeCredentialUrl(primary.credential.endpoint) === "https://api.groq.com/openai/v1" &&
-        primary.instance.model === TUTORIAL_PRIMARY_MODEL
-      );
-    }) ?? null
-  );
+  return state.agents.find((agent) => isTutorialPrimaryAgent(agent)) ?? null;
 }
 
 function findTutorialAgent(state: TutorialRuntimeState) {
@@ -266,6 +250,17 @@ function toolMessageSucceeded(message: TutorialRuntimeState["history"][number] |
   return !/工具執行失敗/.test(message.content);
 }
 
+function extractSuccessfulToolName(message: TutorialRuntimeState["history"][number] | null | undefined) {
+  if (!toolMessageSucceeded(message)) return "";
+  const firstLine = String(message?.content ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return "";
+  const match = firstLine.match(/->\s*([^\n]+)$/);
+  return match ? match[1].trim() : "";
+}
+
 function buildGenericTutorialPendingStatus(step: TutorialStepDefinition, issues: string[]) {
   if (issues.length === 0) return step.completionLabel ?? "等待完成本步驟。";
   return issues.join(" ");
@@ -324,6 +319,22 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     });
     if (!matched) {
       issues.push(`已收到回覆，但還沒有看到這些成功工具調用中的任一項：${expect.successfulToolMessageIncludesAny.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.successfulToolNames?.length) {
+    const successfulToolNames = toolMessages.map((item) => extractSuccessfulToolName(item)).filter(Boolean);
+    const missing = expect.successfulToolNames.filter((name) => !successfulToolNames.includes(name));
+    if (missing.length) {
+      issues.push(`已收到回覆，但還沒有看到成功的工具名稱：${missing.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.successfulToolNamesAny?.length) {
+    const successfulToolNames = toolMessages.map((item) => extractSuccessfulToolName(item)).filter(Boolean);
+    const matched = expect.successfulToolNamesAny.some((name) => successfulToolNames.includes(name));
+    if (!matched) {
+      issues.push(`已收到回覆，但還沒有看到這些成功工具名稱中的任一項：${expect.successfulToolNamesAny.join("、")}。`);
     }
   }
 

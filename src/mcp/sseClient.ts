@@ -30,6 +30,36 @@ export class McpSseClient {
 
   constructor(private cfg: McpServerConfig) {}
 
+  private clearConnectTimeout() {
+    if (this.connectTimeoutId !== null) {
+      window.clearTimeout(this.connectTimeoutId);
+      this.connectTimeoutId = null;
+    }
+  }
+
+  private failPending(error: string) {
+    if (this.pending.size === 0) return;
+    for (const [id, resolve] of this.pending.entries()) {
+      resolve({ id, error });
+    }
+    this.pending.clear();
+  }
+
+  private invalidateConnection(pendingError?: string) {
+    this.clearConnectTimeout();
+    if (this.es) {
+      this.es.onopen = null;
+      this.es.onmessage = null;
+      this.es.onerror = null;
+      this.es.close();
+      this.es = undefined;
+    }
+    this.connected = false;
+    if (pendingError) {
+      this.failPending(pendingError);
+    }
+  }
+
   private getToolTimeoutMs() {
     const seconds =
       typeof this.cfg.toolTimeoutSecond === "number" && Number.isFinite(this.cfg.toolTimeoutSecond)
@@ -51,27 +81,31 @@ export class McpSseClient {
   }
 
   connect(onLog?: (msg: string) => void) {
-    if (this.connected) return;
-    this.onLog = onLog;
-    this.es = new EventSource(this.cfg.sseUrl);
-    this.connected = true;
+    if (this.connected && this.es) return;
+    this.onLog = onLog ?? this.onLog;
+    this.invalidateConnection();
+    const es = new EventSource(this.cfg.sseUrl);
+    this.es = es;
+    this.connected = false;
     this.connectTimeoutId = window.setTimeout(() => {
       this.onLog?.(`MCP SSE open timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s`);
     }, this.getToolTimeoutMs());
 
-    this.es.onopen = () => {
-      if (this.connectTimeoutId !== null) {
-        window.clearTimeout(this.connectTimeoutId);
-        this.connectTimeoutId = null;
-      }
+    es.onopen = () => {
+      if (this.es !== es) return;
+      this.clearConnectTimeout();
+      this.connected = true;
       this.markHealthy();
-      onLog?.(`MCP SSE connected: ${this.cfg.sseUrl}`);
+      this.onLog?.(`MCP SSE connected: ${this.cfg.sseUrl}`);
     };
-    this.es.onerror = () => {
-      onLog?.("MCP SSE error");
+    es.onerror = () => {
+      if (this.es !== es) return;
+      this.onLog?.("MCP SSE error");
+      this.invalidateConnection("MCP SSE disconnected");
     };
 
-    this.es.onmessage = (ev) => {
+    es.onmessage = (ev) => {
+      if (this.es !== es) return;
       try {
         this.markHealthy();
         const msg = JSON.parse(ev.data) as RpcRes;
@@ -81,18 +115,13 @@ export class McpSseClient {
           cb(msg);
         }
       } catch {
-        onLog?.(`MCP SSE parse failed: ${ev.data}`);
+        this.onLog?.(`MCP SSE parse failed: ${ev.data}`);
       }
     };
   }
 
   close() {
-    this.es?.close();
-    this.connected = false;
-    if (this.connectTimeoutId !== null) {
-      window.clearTimeout(this.connectTimeoutId);
-      this.connectTimeoutId = null;
-    }
+    this.invalidateConnection("MCP SSE closed");
   }
 
   private async postRpc(req: RpcReq): Promise<RpcRes> {
@@ -137,6 +166,7 @@ export class McpSseClient {
       const probe = await this.postRpc({ id: generateId(), method: "tools/list" });
       if (probe.error) {
         this.onLog?.(`MCP heartbeat failed: ${probe.error}`);
+        this.invalidateConnection("MCP heartbeat failed");
         throw new Error(String(probe.error));
       }
       this.onLog?.(`MCP heartbeat OK: ${this.cfg.sseUrl}`);

@@ -12,25 +12,31 @@ placeholders:
   - "{{todoSummary}}"
   - "{{currentContext}}"
 template: |
-  請只回傳 JSON，不要加任何其他文字。
+  請只回傳一個 JSON 物件。不要加說明、不要加 markdown。
 
-  請檢查這個 multi-turn skill workflow 是否真的完成了使用者的任務。
-  要保守判斷。光是打開頁面、觀察頁面、或輸入文字，本身都不代表任務完成。
-  如果 current context 明確表示目前裝置、地區或帳號無法使用該功能，你可以把它視為合理的 blocked/manual stop，並回傳 complete。
+  任務：判斷 multi-turn skill 任務是否已完成。
 
-  Skill: {{skillName}} ({{skillId}})
-  Skill description: {{skillDescription}}
-  Internal workflow:
+  規則：
+  - 保守判斷。
+  - 光是打開頁面或拿到部分狀態，不代表完成。
+  - 合理的 blocked/manual stop 也可以視為 complete。
+
+  SKILL:
+  {{skillName}} ({{skillId}})
+  {{skillDescription}}
+
+  INTERNAL_WORKFLOW:
   {{runtimeInstructions}}
 
-  User request:
+  USER_REQUEST:
   {{userInput}}
 
-  Current todo state:
+  TODO_STATE:
   {{todoSummary}}
 
-  Current internal context:
+  CURRENT_CONTEXT:
   {{currentContext}}
 
-  如果任務已完成，或目前已處於合理的 blocked/manual stop，回傳：{"type":"complete","reason":"...","todoIds":["..."]}
-  如果還需要繼續做，回傳：{"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}
+  允許的 JSON：
+  {"type":"complete","reason":"...","todoIds":["..."]}
+  {"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}

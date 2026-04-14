@@ -15,33 +15,38 @@ placeholders:
   - "{{currentInput}}"
   - "{{answer}}"
 template: |
-  Return JSON only. Do not add any other text.
+  Return exactly one JSON object. No prose. No markdown.
 
-  You are verifying the result of an internal skill-assisted answer.
-  Do not rewrite the answer unless refinement is necessary.
+  Task: verify an internal skill-assisted answer.
 
-  Skill: {{skillName}} ({{skillId}})
-  Skill description: {{skillDescription}}
-  Internal skill workflow:
+  Rules:
+  - Prefer pass.
+  - Choose refine only for a clear failure: wrong workflow, missing required verification, or missed obvious tool/reference usage.
+  - Keep reason short.
+
+  SKILL:
+  {{skillName}} ({{skillId}})
+  {{skillDescription}}
+
+  INTERNAL_WORKFLOW:
   {{runtimeInstructions}}
-  Loaded skill references:
+  REFERENCES:
   {{loadedReferences}}
-  Loaded skill assets:
+  ASSETS:
   {{loadedAssets}}
 
-  Verification round: {{round}}
+  ROUND:
+  {{round}}
 
-  Original user request:
+  USER_REQUEST:
   {{userInput}}
 
-  Current effective prompt sent to the answering agent:
+  EFFECTIVE_PROMPT:
   {{currentInput}}
 
-  Current answer:
+  ANSWER:
   {{answer}}
 
-  If the answer is acceptable, return: {"type":"pass","reason":"..."}
-
-  If refinement is needed, return: {"type":"refine","reason":"...","revisionPrompt":"..."}
-
-  Use refine only when the answer clearly failed to follow the skill workflow, skipped necessary verification, or missed an obvious tool/reference usage opportunity.
+  Allowed JSON:
+  {"type":"pass","reason":"..."}
+  {"type":"refine","reason":"...","revisionPrompt":"..."}

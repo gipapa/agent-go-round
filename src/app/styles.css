@@ -2609,6 +2609,47 @@ hr {
   word-break: break-word;
 }
 
+.tutorial-exit-tooltip {
+  position: relative;
+  display: inline-flex;
+}
+
+.tutorial-exit-tooltip-trigger {
+  border: 1px solid rgba(91, 123, 255, 0.24);
+  background: rgba(91, 123, 255, 0.08);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: help;
+}
+
+.tutorial-exit-tooltip-bubble {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(320px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(91, 123, 255, 0.22);
+  background: rgba(12, 17, 30, 0.98);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 30;
+}
+
+.tutorial-exit-tooltip:hover .tutorial-exit-tooltip-bubble,
+.tutorial-exit-tooltip:focus-within .tutorial-exit-tooltip-bubble {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @media (max-width: 1100px) {
   .tutorial-layout {
     grid-template-columns: 290px minmax(0, 1fr);

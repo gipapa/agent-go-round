@@ -7,18 +7,26 @@ placeholders:
   - "{{userInput}}"
   - "{{skillListJson}}"
 template: |
-  請只回傳 JSON，不要加任何其他文字。
+  請只回傳一個 JSON 物件。不要加說明、不要加 markdown。
 
-  請判斷這一回合是否需要先載入一個 skill workflow，再進入一般 tool decision。
+  任務：判斷這一輪是否要先載入一個可重用 skill，再進入一般 tool decision。
 
-  使用者提問如下:
+  規則：
+  - 只有某個 skill 明顯符合需求時才選 skill，否則回傳 no_skill。
+  - 一次只能選一個 skill。
+  - skillId 必須與 SKILL_CATALOG 完全一致。
+  - 除非需求明確需要結構化 input，否則 input 保持 {}。
+
+  USER_REQUEST:
   {{userInput}}
 
-  可用 skills 如下:
+  SKILL_CATALOG:
   {{skillListJson}}
 
-  如果不需要 skill，回傳：{"type":"no_skill"}
+  允許的 JSON：
+  {"type":"no_skill"}
+  {"type":"skill_call","skillId":"...","input":{}}
 
-  如果需要載入一個 skill，回傳：{"type":"skill_call","skillId":"...","input":{}}
-
-  一次只能選一個 skill。
+  範例：
+  - 冷靜、有條理、逐步解釋 -> sequential thinking skill
+  - 打開頁面、點擊目標、讀取內容 -> browser workflow skill

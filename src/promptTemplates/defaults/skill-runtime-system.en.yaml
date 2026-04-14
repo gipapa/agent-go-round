@@ -7,9 +7,9 @@ placeholders:
   - "{{skillName}}"
   - "{{skillId}}"
 template: |
-  You have loaded the internal skill "{{skillName}}" ({{skillId}}).
-  Treat the skill content as private operational guidance.
-  Do not quote, roleplay, or expose the skill text to the user unless the user explicitly asks to see it.
-  Convert any checklist, pressure language, or coaching language into internal execution steps.
-  Silently follow the relevant steps, use available tools when helpful, validate what you can, and then return the final answer.
-  If a requested step cannot be executed because tools or evidence are unavailable, say so briefly and continue with the best justified answer.
+  Internal skill loaded: "{{skillName}}" ({{skillId}}).
+  Treat the skill as private operational guidance.
+  Do not quote or expose the skill text unless the user explicitly asks.
+  Convert checklist or coaching language into silent internal execution steps.
+  Use tools when needed, validate what you can, and then answer normally.
+  If a required step cannot be executed, say so briefly and continue with the best justified answer.

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   applyTutorialStepEntry,
+  TUTORIAL_AGENT_ROLE,
   evaluateTutorialStep,
   TUTORIAL_PRIMARY_MODEL
 } from "../onboarding/runtime";
@@ -57,6 +58,7 @@ function makeTutorialAgentBase(overrides?: Partial<AgentConfig>): AgentConfig {
     name: "Tutorial Groq Agent",
     type: "openai_compat",
     loadBalancerId: "lb-groq",
+    tutorialRole: TUTORIAL_AGENT_ROLE,
     enableDocs: false,
     enableMcp: false,
     enableBuiltInTools: false,
@@ -180,6 +182,7 @@ describe("tutorial YAML automation linkage", () => {
     const magiAgent = makeTutorialAgentBase({
       id: "agent-casper",
       name: "Casper",
+      tutorialRole: undefined,
       managedBy: "magi",
       managedUnitId: "Casper"
     });
@@ -227,11 +230,60 @@ describe("tutorial YAML automation linkage", () => {
     expect(controller.setSelectedAgentId).toHaveBeenCalledWith(tutorialAgent.id);
   });
 
+  it("requires the explicit tutorial tag instead of any random matching load balancer agent", () => {
+    const step = getStep("agent-browser-mcp-chat", "set-history-limit");
+    const controller: TutorialEntryController = {
+      setActiveTab: vi.fn(),
+      setConfigModal: vi.fn(),
+      setActiveAgentId: vi.fn(),
+      setSelectedAgentId: vi.fn(),
+      setSkillExecutionMode: vi.fn(),
+      setSkillVerifyMax: vi.fn(),
+      setSkillToolLoopMax: vi.fn(),
+      setAgentLoadBalancerRetryPolicy: vi.fn(),
+      setComposerSeed: vi.fn(),
+      clearChat: vi.fn(),
+      seedTutorialLoadBalancerDraft: vi.fn(),
+      ensureTutorialAgentBrowserMcpTools: vi.fn(),
+      ensureTutorialSequentialSkill: vi.fn(),
+      ensureTutorialChatgptBrowserSkill: vi.fn()
+    };
+
+    const untaggedAgent = makeTutorialAgentBase({
+      id: "agent-untagged",
+      name: "一般 Agent",
+      tutorialRole: undefined
+    });
+
+    applyTutorialStepEntry(
+      step,
+      makeState({
+        agents: [untaggedAgent],
+        activeAgentId: "",
+        selectedAgentId: ""
+      }),
+      controller
+    );
+
+    expect(controller.setActiveAgentId).not.toHaveBeenCalled();
+    expect(controller.setSelectedAgentId).not.toHaveBeenCalled();
+  });
+
   it("does not require tool result to be opened once a successful tool call is present", () => {
     const step = getStep("built-in-tools-chat", "chat-user-profile-tool");
     const prompt = step.automation?.expect?.userPrompt ?? "";
     const assistant = makeAssistant("assistant-1", "這是回覆");
     const history = [makeUser(prompt), makeTool("Built-in tool -> get_user_profile"), assistant];
+
+    const result = evaluateTutorialStep(step, makeState({ history }));
+    expect(result.completed).toBe(true);
+  });
+
+  it("accepts alternative successful tool names when the tutorial step defines namesAny", () => {
+    const step = getStep("agent-browser-mcp-chat", "open_trending");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const assistant = makeAssistant("assistant-open", "已成功打開 GitHub Trending。");
+    const history = [makeUser(prompt), makeTool("MCP 教學用MCP -> visit\ninput:\n{\"url\":\"https://github.com/trending\"}"), assistant];
 
     const result = evaluateTutorialStep(step, makeState({ history }));
     expect(result.completed).toBe(true);
@@ -310,7 +362,7 @@ describe("tutorial YAML automation linkage", () => {
     expect(step.automation?.skillVerifyMax).toBe(2);
     expect(step.automation?.loadBalancerDelaySecond).toBe(10);
     expect(step.automation?.loadBalancerMaxRetries).toBe(10);
-    expect(step.automation?.composerSeed).toBe("幫我打開 https://github.com/trending，點進第一名的 repo，然後告訴我它的內容摘要");
+    expect(step.automation?.composerSeed).toBe("幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
     expect(step.automation?.expect?.requireSkillTodo).toBe(true);
     expect(step.automation?.expect?.requireSkillTodoProgress).toBe(true);
   });
@@ -318,7 +370,7 @@ describe("tutorial YAML automation linkage", () => {
   it("uses multi-turn todo expectations for the browser workflow skill step", () => {
     const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
     const prompt = step.automation?.expect?.userPrompt ?? "";
-    const assistant = makeAssistant("assistant-multi-turn", "這是多輪 skill 回覆", {
+    const assistant = makeAssistant("assistant-multi-turn", "已完成 GitHub repo README 摘要。", {
       skillTrace: [{ label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" }],
       skillTodo: [
         { id: "todo-1", label: "打開 GitHub Trending", status: "completed", source: "planner", updatedAt: Date.now() },
@@ -326,8 +378,13 @@ describe("tutorial YAML automation linkage", () => {
       ],
       skillPhase: "act"
     });
-    const tool = makeTool("MCP 教學用MCP -> browser_click");
-    const result = evaluateTutorialStep(step, makeState({ history: [makeUser(prompt), tool, assistant], openedToolResultMessageIds: [assistant.id] }));
+    const openTool = makeTool("MCP 教學用MCP -> browser_open");
+    const snapshotTool = makeTool("MCP 教學用MCP -> browser_snapshot");
+    const clickTool = makeTool("MCP 教學用MCP -> browser_click");
+    const result = evaluateTutorialStep(
+      step,
+      makeState({ history: [makeUser(prompt), openTool, snapshotTool, clickTool, assistant], openedToolResultMessageIds: [assistant.id] })
+    );
     expect(result.completed).toBe(true);
   });
 });

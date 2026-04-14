@@ -103,22 +103,23 @@ steps:
 
   - id: open_trending
     title: 用 browser_open 開啟 GitHub Trending
-    checklistLabel: 使用 browser_open 開啟 GitHub Trending
+    checklistLabel: 使用開頁工具打開 GitHub Trending
     instructionTitle: 第一段對話：先開啟目標頁面
     instructionBody: |
       我已經幫你切到 Chat，並填好測試問題。
 
-      這一題的目標是要求 Agent 明確使用：
+      這一題的目標是要求 Agent 使用可以「直接打開目標頁面」的 MCP 工具，例如：
       - `browser_open`
+      - `visit`
 
       來開啟：
       - `https://github.com/trending`
 
-      只要送出後有正常回覆，且 tool result 顯示真的呼叫了 `browser_open`，就算完成。
+      只要送出後有正常回覆，且 tool result 顯示真的呼叫了開頁類工具，就算完成。
     tab: chat
     targetId: chat-input
     behavior: first_chat_mcp_browser_open
-    completionLabel: 等待 Agent 使用 browser_open 開啟 GitHub Trending
+    completionLabel: 等待 Agent 使用開頁類工具打開 GitHub Trending
     actionLabel: 下一步
     automation:
       clearChatOnEnter: true
@@ -127,8 +128,9 @@ steps:
       expect:
         userPrompt: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，不要只口頭描述你要做什麼。
         requireAssistant: true
-        successfulToolMessageIncludes:
-          - MCP 教學用MCP -> browser_open
+        successfulToolNamesAny:
+          - browser_open
+          - visit
 
   - id: snapshot_trending
     title: 用 browser_snapshot 讀取前十個熱門 repo

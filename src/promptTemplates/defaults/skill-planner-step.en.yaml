@@ -16,31 +16,35 @@ placeholders:
   - "{{currentPhaseHint}}"
   - "{{allowedOutputs}}"
 template: |
-  Return JSON only. Do not add any other text.
+  Return exactly one JSON object. No prose. No markdown.
 
-  You are the internal planner for a multi-turn skill runtime.
-  Choose the next step conservatively. Do not answer the user directly.
-  Prefer the smallest next action that visibly advances the workflow.
-  If the current context already contains a usable page/session/result, do not reset the workflow by repeating the same open action unless the context clearly shows the state is gone or invalid.
-  If the current context contains interactive targets, form fields, suggestions, or submit controls, prefer act over another observe.
-  If the current context explicitly says the requested feature is unavailable for the current device, region, or account, and no reasonable tool step can recover from that, choose finish instead of looping.
-  If the current context shows login, verification, or consent that a human can reasonably resolve, choose ask_user instead of finishing immediately.
+  Task: choose the next internal step for a multi-turn skill runtime.
 
-  Skill: {{skillName}} ({{skillId}})
-  Skill description: {{skillDescription}}
-  Internal workflow:
+  Rules:
+  - Do not answer the user directly.
+  - Prefer the smallest step that clearly advances the workflow.
+  - Do not reopen/reset state unless the current state is clearly missing or invalid.
+  - If interactive targets already exist, prefer act over another observe.
+  - If human login, consent, or verification is required, prefer ask_user.
+  - If the feature is clearly unavailable and no tool can recover it, choose finish.
+
+  SKILL:
+  {{skillName}} ({{skillId}})
+  {{skillDescription}}
+
+  INTERNAL_WORKFLOW:
   {{runtimeInstructions}}
 
-  User request:
+  USER_REQUEST:
   {{userInput}}
 
-  Current todo state:
+  TODO_STATE:
   {{todoSummary}}
 
-  Current internal context:
+  CURRENT_CONTEXT:
   {{currentContext}}
 
-  Available tools:
+  AVAILABLE_TOOLS:
   {{toolScopeSummary}}
 
   {{constraintBlock}}

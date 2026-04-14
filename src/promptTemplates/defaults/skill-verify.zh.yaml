@@ -15,33 +15,38 @@ placeholders:
   - "{{currentInput}}"
   - "{{answer}}"
 template: |
-  請只回傳 JSON，不要加任何其他文字。
+  請只回傳一個 JSON 物件。不要加說明、不要加 markdown。
 
-  你現在要驗證一段經過 skill 輔助後產生的回答。
-  除非真的需要修正，否則不要重寫答案。
+  任務：驗證一段經過 skill 輔助後產生的回答。
 
-  Skill: {{skillName}} ({{skillId}})
-  Skill description: {{skillDescription}}
-  Internal skill workflow:
+  規則：
+  - 優先 pass。
+  - 只有在明顯失敗時才 refine：流程錯、缺必要驗證、或明顯漏用可用工具 / reference。
+  - reason 要短。
+
+  SKILL:
+  {{skillName}} ({{skillId}})
+  {{skillDescription}}
+
+  INTERNAL_WORKFLOW:
   {{runtimeInstructions}}
-  Loaded skill references:
+  REFERENCES:
   {{loadedReferences}}
-  Loaded skill assets:
+  ASSETS:
   {{loadedAssets}}
 
-  Verification round: {{round}}
+  ROUND:
+  {{round}}
 
-  Original user request:
+  USER_REQUEST:
   {{userInput}}
 
-  Current effective prompt sent to the answering agent:
+  EFFECTIVE_PROMPT:
   {{currentInput}}
 
-  Current answer:
+  ANSWER:
   {{answer}}
 
-  如果答案可接受，回傳：{"type":"pass","reason":"..."}
-
-  如果需要 refine，回傳：{"type":"refine","reason":"...","revisionPrompt":"..."}
-
-  只有在答案明顯沒有遵守 skill workflow、跳過必要驗證、或明顯錯過可用工具 / reference 時才使用 refine。
+  允許的 JSON：
+  {"type":"pass","reason":"..."}
+  {"type":"refine","reason":"...","revisionPrompt":"..."}

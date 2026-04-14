@@ -160,6 +160,7 @@ export type AgentConfig = {
   loadBalancerId?: string;
   managedBy?: "magi";
   managedUnitId?: MagiUnitId;
+  tutorialRole?: "primary";
 
   // Legacy fields kept for backward compatibility during migration.
   endpoint?: string; // e.g. https://api.openai.com/v1

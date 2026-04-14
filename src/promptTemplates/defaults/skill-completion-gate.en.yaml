@@ -12,25 +12,31 @@ placeholders:
   - "{{todoSummary}}"
   - "{{currentContext}}"
 template: |
-  Return JSON only. Do not add any other text.
+  Return exactly one JSON object. No prose. No markdown.
 
-  Check whether the internal multi-turn skill workflow has truly completed the user's task.
-  Be conservative. Opening a page, observing a page, or typing text is not enough by itself.
-  If the current context explicitly says the requested feature is unavailable for the current device, region, or account, you may treat that as a justified blocked/manual stop and return complete.
+  Task: decide whether the multi-turn skill task is complete.
 
-  Skill: {{skillName}} ({{skillId}})
-  Skill description: {{skillDescription}}
-  Internal workflow:
+  Rules:
+  - Be conservative.
+  - Opening a page or collecting partial state is not enough by itself.
+  - A justified blocked/manual stop may still count as complete.
+
+  SKILL:
+  {{skillName}} ({{skillId}})
+  {{skillDescription}}
+
+  INTERNAL_WORKFLOW:
   {{runtimeInstructions}}
 
-  User request:
+  USER_REQUEST:
   {{userInput}}
 
-  Current todo state:
+  TODO_STATE:
   {{todoSummary}}
 
-  Current internal context:
+  CURRENT_CONTEXT:
   {{currentContext}}
 
-  If the task is complete or is at a justified blocked/manual stop, return: {"type":"complete","reason":"...","todoIds":["..."]}
-  If more work is still needed, return: {"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}
+  Allowed JSON:
+  {"type":"complete","reason":"...","todoIds":["..."]}
+  {"type":"incomplete","reason":"...","suggestedFocus":"...","todoIds":["..."]}

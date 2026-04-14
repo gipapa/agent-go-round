@@ -75,6 +75,11 @@
 
 - 優點：部署簡單、開發快速、很適合做 agent workflow 原型
 - 代價：API keys 與自訂 JS tool 都在瀏覽器端，安全性不適合作為正式生產方案
+- 若要公開部署給其他人線上使用，請先重新評估這個信任模型：
+  - provider API keys 目前保存在使用者瀏覽器
+  - custom built-in tools 會以同 origin 權限直接執行任意 JavaScript
+  - 這代表被授權或匯入的工具碼理論上可以碰到本機儲存的 credentials
+  - 若需要對外正式提供服務，建議改成 server-side proxy / gateway，或至少把 secrets 與 arbitrary JS execution 拆開
 
 ## 主要功能
 
@@ -156,9 +161,16 @@
   - `Skill Planner Step`
   - `Skill Completion Gate`
 - 每個 family 都有內建 `中文 / English` 兩個版本
+- 預設語言現在會先使用 `English`，方便對 `groq/compound` 這類對 JSON / routing prompt 較敏感的模型採用更保守的英文模板
 - 上方語言切換會讓整個模板面板一起切到對應語言，不會重複列出一份中文、一份英文
 - 使用者仍然可以手動編輯每個語言版本；編輯後會立即保存到本機
 - 如果 YAML 解析失敗，runtime 會自動退回內建預設模板，不會直接讓整個流程中斷
+- Prompt Templates 面板除了 YAML 格式檢查，現在也內建「真打 API 的模板測試」：
+  - 可測單一模板，也可一次測目前語言的全部模板
+  - 測試會直接走目前 agent / load balancer
+  - tool list、skill list、planner context 會使用內建假資料 catalog
+  - 面板會顯示 rendered prompt、raw output、parsed output 與 pass / fail
+- decision 類 prompt 的預設 catalog 也改成更精簡的摘要格式，避免把過長的 schema 與自然語言描述一起塞給模型
 - 這套模板會直接影響：
   - tool decision
   - skill decision
@@ -174,6 +186,8 @@
   - `[4] 使用 Sequential Thinking Skill 驗證單輪能力`
   - `[5] 使用 agent-browser MCP 讀取 GitHub Trending`
   - `[6] 使用多輪 Skill 操作 GitHub Trending`
+- 案例驗證會盡量依「行為效果」判斷，而不是綁死某個 UI 細節或完整工具訊息字串
+  - 例如 case 5 第一段現在接受多種開頁類 MCP 工具，只要真的成功打開目標頁面即可，不再只認 `browser_open`
 - 教學模式特性：
   - 左側固定 checklist 與系統提示
   - 右側保留真實可操作的 app 介面
@@ -314,10 +328,11 @@ skill-name/
   - `S.C. Magi System (基本版: 三賢人同時表決)`
   - `S.C. Magi System (進階版: 三賢人共識)`
 - MAGI 模式固定尋找三個已存 agent：
-  - `Melchior`
-  - `Balthasar`
-  - `Casper`
-- 若切到 MAGI 模式後直接進入 `Chat`，系統會自動補出這三個受管制 agent，並導向 `Agents` 頁讓使用者只設定各自的 load balancer
+  - `[系統保留] Melchior`
+  - `[系統保留] Balthasar`
+  - `[系統保留] Casper`
+- 這三個 MAGI agent 會常駐存在於 agent 清單中，不需要等切到 MAGI 模式才建立
+- 若切到 MAGI 模式後直接進入 `Chat`，系統會導向 `Agents` 頁讓使用者只設定各自的 load balancer
 - 三者都必須先由使用者自行設定好 provider / load balancer
 - 這三個 MAGI agent 屬於系統管理角色：
   - 名稱固定
@@ -497,6 +512,7 @@ agent-browser:
 - Custom built-in tools 會直接執行使用者輸入的 JavaScript
 - 目前沒有 sandbox
 - 正式上線若要保護 secrets，建議改成 server-side proxy 或自建 gateway
+- 如果要公開給其他人線上使用，請不要把目前這套本機 credentials + arbitrary tool code 的信任模型直接搬上去
 
 ## 專案結構
 

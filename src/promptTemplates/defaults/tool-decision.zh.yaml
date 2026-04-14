@@ -11,24 +11,30 @@ placeholders:
   - "{{builtinToolJson}}"
   - "{{mcpCallJson}}"
 template: |
-  請只回傳 JSON，不要加任何其他文字。
+  請只回傳一個 JSON 物件。不要加說明、不要加 markdown。
 
-  請判斷這次是否需要使用工具。
+  任務：判斷這一輪是否需要工具。
 
-  使用者提問如下:
+  規則：
+  - 只有在工具真的必要時才選工具，否則回傳 no_tool。
+  - 工具名稱必須與 TOOL_CATALOG 完全一致。
+  - 只有在問題和「目前使用者本人」有關時才優先用 get_user_profile。
+  - browser 內建 JS 工具用於頁面內互動或前端效果。
+  - MCP 工具用於瀏覽器自動化或外部工具行為。
+
+  USER_REQUEST:
   {{userInput}}
 
-  工具清單如下:
+  TOOL_CATALOG:
   {{toolListJson}}
 
-  如果不需要工具，回傳：
-  {{noToolJson}}
+  允許的 JSON：
+  NO_TOOL = {{noToolJson}}
+  USER_PROFILE = {{userProfileJson}}
+  BUILTIN = {{builtinToolJson}}
+  MCP = {{mcpCallJson}}
 
-  如果需要使用使用者資訊工具，回傳：
-  {{userProfileJson}}
-
-  如果需要使用 browser 內建 JS 工具，回傳：
-  {{builtinToolJson}}
-
-  如果需要使用 MCP 工具，回傳：
-  {{mcpCallJson}}
+  範例：
+  - 「我是誰？」 -> {"type":"builtin_tool_call","tool":"get_user_profile","input":{}}
+  - 「在頁面上打開時鐘 dashboard」 -> {"type":"builtin_tool_call","tool":"...","input":{}}
+  - 「打個招呼」 -> {"type":"no_tool"}

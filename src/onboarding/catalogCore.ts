@@ -28,6 +28,8 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
           assistantContentIncludesAny: normalizeStringArray(expectInput.assistantContentIncludesAny),
           successfulToolMessageIncludes: normalizeStringArray(expectInput.successfulToolMessageIncludes),
           successfulToolMessageIncludesAny: normalizeStringArray(expectInput.successfulToolMessageIncludesAny),
+          successfulToolNames: normalizeStringArray(expectInput.successfulToolNames),
+          successfulToolNamesAny: normalizeStringArray(expectInput.successfulToolNamesAny),
           requireOpenedToolResult: expectInput.requireOpenedToolResult === true,
           skillTraceIncludes: normalizeStringArray(expectInput.skillTraceIncludes),
           skillTraceIncludesAny: normalizeStringArray(expectInput.skillTraceIncludesAny),

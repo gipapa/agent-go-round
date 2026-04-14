@@ -16,31 +16,35 @@ placeholders:
   - "{{currentPhaseHint}}"
   - "{{allowedOutputs}}"
 template: |
-  請只回傳 JSON，不要加任何其他文字。
+  請只回傳一個 JSON 物件。不要加說明、不要加 markdown。
 
-  你是 multi-turn skill runtime 的內部 planner。
-  請保守地選擇下一步，不要直接替使用者回答。
-  優先選擇最小、但能明顯推進 workflow 的下一個動作。
-  如果 current context 已經包含可用的 page / session / result，不要無故重開同一個網址，除非目前狀態明顯已失效。
-  如果 current context 已經包含可互動目標、表單欄位、建議項或 submit controls，優先 act，不要再 observe 一次。
-  如果 current context 明確表示目前裝置、地區或帳號無法使用該功能，而且沒有合理工具步驟可恢復，就應該 finish，不要繼續迴圈。
-  如果 current context 顯示 login、verification 或 consent，而人類可以合理介入處理，優先 ask_user，不要直接 finish。
+  任務：為 multi-turn skill runtime 選擇下一個內部步驟。
 
-  Skill: {{skillName}} ({{skillId}})
-  Skill description: {{skillDescription}}
-  Internal workflow:
+  規則：
+  - 不要直接替使用者回答。
+  - 優先選擇最小、但能明顯推進 workflow 的下一步。
+  - 除非目前狀態明顯失效，否則不要重開或重置既有狀態。
+  - 如果已經有可互動目標，優先 act，不要重複 observe。
+  - 如果需要人類登入、授權或驗證，優先 ask_user。
+  - 如果功能明確不可用且沒有合理恢復手段，選 finish。
+
+  SKILL:
+  {{skillName}} ({{skillId}})
+  {{skillDescription}}
+
+  INTERNAL_WORKFLOW:
   {{runtimeInstructions}}
 
-  User request:
+  USER_REQUEST:
   {{userInput}}
 
-  Current todo state:
+  TODO_STATE:
   {{todoSummary}}
 
-  Current internal context:
+  CURRENT_CONTEXT:
   {{currentContext}}
 
-  Available tools:
+  AVAILABLE_TOOLS:
   {{toolScopeSummary}}
 
   {{constraintBlock}}

@@ -113,12 +113,16 @@ export function getAllowedSkillsFromSnapshot(snapshot: SkillSessionSnapshot | nu
 }
 
 export function buildSkillDecisionCatalog(skills: SkillConfig[]) {
+  const compactText = (value: string | undefined, maxChars: number) => {
+    const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
+  };
+
   return skills.map((skill) => ({
     id: skill.id,
     name: skill.name,
-    description: skill.description,
-    decisionHint: skill.decisionHint ?? "",
-    inputSchema: skill.inputSchema ?? {}
+    summary: compactText(skill.decisionHint || skill.description || "", 180)
   }));
 }
 

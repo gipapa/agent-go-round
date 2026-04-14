@@ -53,7 +53,7 @@ export type McpPromptTemplates = {
 
 export function getDefaultMcpPromptTemplates(): McpPromptTemplates {
   return {
-    activeId: "zh",
+    activeId: "en",
     zh: [
       "請只回傳 JSON，不要加任何其他文字。",
       "",
@@ -172,7 +172,7 @@ export function loadMcpPromptTemplates(): McpPromptTemplates {
     if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Partial<McpPromptTemplates>;
     return {
-      activeId: parsed.activeId === "en" ? "en" : "zh",
+      activeId: parsed.activeId === "zh" ? "zh" : "en",
       zh: typeof parsed.zh === "string" && parsed.zh.trim() ? parsed.zh : defaults.zh,
       en: typeof parsed.en === "string" && parsed.en.trim() ? parsed.en : defaults.en
     };

@@ -57,6 +57,8 @@ export type TutorialChatExpectation = {
   assistantContentIncludesAny?: string[];
   successfulToolMessageIncludes?: string[];
   successfulToolMessageIncludesAny?: string[];
+  successfulToolNames?: string[];
+  successfulToolNamesAny?: string[];
   requireOpenedToolResult?: boolean;
   skillTraceIncludes?: string[];
   skillTraceIncludesAny?: string[];

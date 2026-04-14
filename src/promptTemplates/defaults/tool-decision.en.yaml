@@ -11,24 +11,30 @@ placeholders:
   - "{{builtinToolJson}}"
   - "{{mcpCallJson}}"
 template: |
-  Return JSON only. Do not add any other text.
+  Return exactly one JSON object. No prose. No markdown.
 
-  Decide whether this turn needs a tool.
+  Task: decide whether this turn needs a tool.
 
-  User request:
+  Rules:
+  - Choose no_tool unless a tool is clearly required.
+  - Use exact tool names from TOOL_CATALOG.
+  - Prefer get_user_profile only for questions about the current user.
+  - Prefer builtin tools for browser-side JS/UI actions.
+  - Prefer MCP tools for browser automation or external tool actions.
+
+  USER_REQUEST:
   {{userInput}}
 
-  Available tools:
+  TOOL_CATALOG:
   {{toolListJson}}
 
-  If no tool is needed, return:
-  {{noToolJson}}
+  Allowed JSON:
+  NO_TOOL = {{noToolJson}}
+  USER_PROFILE = {{userProfileJson}}
+  BUILTIN = {{builtinToolJson}}
+  MCP = {{mcpCallJson}}
 
-  If the user profile tool is needed, return:
-  {{userProfileJson}}
-
-  If a browser-side built-in JS tool is needed, return:
-  {{builtinToolJson}}
-
-  If an MCP tool is needed, return:
-  {{mcpCallJson}}
+  Examples:
+  - "Who am I?" -> {"type":"builtin_tool_call","tool":"get_user_profile","input":{}}
+  - "Open a clock dashboard in the page" -> {"type":"builtin_tool_call","tool":"...","input":{}}
+  - "Say hello" -> {"type":"no_tool"}
