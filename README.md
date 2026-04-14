@@ -1,361 +1,72 @@
 # AgentGoRound
 
-**AgentGoRound is a browser-first, frontend-only agent playground.** It runs entirely in the browser with no required backend, making it easy to experiment with multi-agent chat, docs context, MCP tools, and browser-side built-in tools, then deploy directly to GitHub Pages.
-
-**AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。** 整個專案以純前端為核心，希望從網頁前端直接提供agentic所需能力，不依賴必要後端服務；你可以直接在瀏覽器中管理 agent、文件、MCP tools、built-in tools 與對話歷史，並部署到 GitHub Pages。
+AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。它把多代理對話、skills、tools、docs、MCP、prompt routing、知識圖譜與教學案例整合在同一個前端應用裡，方便你直接在瀏覽器中設計、驗證與展示 agent workflow。
 
 - 產品介紹導覽頁：[線上瀏覽](https://gipapa.github.io/agent-go-round/intro/) ｜ [PPTX](./public/intro/agent-go-round.pptx)
-- WIKI 與圖譜：[WIKI](https://gipapa.github.io/agent-go-round/graphify/wiki/index.html) ｜ [互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) ｜ [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
-- WIKI 入口也整合了產品導覽頁與 PPTX 原始檔，方便用同一個入口瀏覽專案介紹、概念圖譜與文字報告。
+- 專案介紹與知識圖譜：[WIKI](https://gipapa.github.io/agent-go-round/graphify/wiki/index.html) ｜ [互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) ｜ [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
 
-## 專案特色
+## 功能重點
 
-- Landing / Onboarding
-  - 首頁提供 `開始使用` 與 `使用案例教學`
-  - 教學模式採左側 checklist + 右側真實操作介面
-  - 案例內容以 YAML 定義，適合人類操作與 agent 驗證
-  - YAML 解析失敗時不會讓整個 app 白屏，只會停用案例教學
-- 純前端架構
-  - 主要由 `Vite + React + TypeScript` 組成
-  - 可直接部署到 `GitHub Pages`
-  - 不需要自建 app server 才能使用主要功能
-- Agent 管理
-  - 新增 / 編輯 / 刪除 agent
-  - 設定名稱、描述、大頭照與 load balancer
-  - 依 agent 控制可使用的 docs、MCP、built-in tools、skills
-- Chat
-  - 支援一般聊天與 legacy 的 leader / team 協作模式
-  - 對話歷史會保存在 IndexedDB，重新整理後可延續
-  - 可匯入 / 匯出原始歷史與濃縮歷史
-  - 支援全頁聊天模式
-  - assistant 訊息可顯示思考中 / skill / tool 狀態
-  - fenced code block 會以卡片方式顯示，並支援複製與收合
-- Docs
-  - 以 IndexedDB 儲存文件
-  - 允許的 docs 會被注入對應 agent 的 system context
-  - Docs 設定頁改成列表選取後再進入 `Edit` modal
-- MCP
-  - 以 SSE 連接 MCP server
-  - 可自訂 Tool Decision Prompt
-  - 支援中文 / English template
-- Built-in Tools
-  - 可直接撰寫瀏覽器端 JavaScript 工具
-  - 可在編輯器內直接測試
-  - 支援系統工具，例如 `get_user_profile`、`pick_best_agent_for_question`
-  - 提供一個即時渲染的 tool 寫法，但因為可能有較大的失敗率所以不放在案例中：[render_anything.md](render_anything.md)
-
-- Skills
-  - 使用 `skill-name/SKILL.md + references/ + scripts/ + assets/` 格式
-  - 技能包與 skill references 透過 IndexedDB abstraction layer 儲存
-  - 支援單輪與多輪 skill runtime
-- Profile 與 Credentials
-  - 可設定使用者名稱、自我描述、大頭照
-  - `Credentials` 集中管理 OpenAI-compatible provider 與多把 keys
-  - 同一個 credential 可維護 key pool，供 load balancer instances 重複使用
-  - 相同 endpoint 的多個 instances 可共用同一組 credential
+- Agents 與多代理互動
+  - 可建立多個 agent，分別配置描述、權限與 load balancer
+  - 支援一般一對一對話與 `S.C. MAGI` 多代理裁決模式
 - Load Balancer
-  - agent 不再直接綁 provider / endpoint / model，而是綁一個 load balancer
-  - 每個 load balancer 由多個有序 instances 組成
-  - instance 可設定 model、description、retry 與 delay
-  - 若 instance 失敗，runtime 會依序掃描下一個可用 instance
-
-## 架構重點
-
-### Frontend-only
-
-這個專案刻意強調 frontend-only：
-
-- agent 設定、credentials、MCP prompt templates 等資料主要存在 `localStorage`
-- prompt templates 也以 YAML 文字形式保存在瀏覽器本機
-- docs 與 chat history 主要存在 `IndexedDB`
-- built-in tools 直接在目前頁面的瀏覽器環境中執行
-- 如果 provider 支援 CORS，前端可以直接呼叫模型 API
-
-這代表：
-
-- 優點：部署簡單、開發快速、很適合做 agent workflow 原型
-- 代價：API keys 與自訂 JS tool 都在瀏覽器端，安全性不適合作為正式生產方案
-- 若要公開部署給其他人線上使用，請先重新評估這個信任模型：
-  - provider API keys 目前保存在使用者瀏覽器
-  - custom built-in tools 會以同 origin 權限直接執行任意 JavaScript
-  - 這代表被授權或匯入的工具碼理論上可以碰到本機儲存的 credentials
-  - 若需要對外正式提供服務，建議改成 server-side proxy / gateway，或至少把 secrets 與 arbitrary JS execution 拆開
-
-## 主要功能
-
-### 1. Agents
-
-- 遠端模型 agent 目前透過 load balancer 運作
-- agent 編輯頁主要設定：
-  - `Profile`
-  - `Load Balancer`
-  - `Access Control`
-- `Load Balancer` 會決定：
-  - provider / endpoint / key
-  - model
-  - retry / delay
-  - failover 行為
-- `chrome_prompt` 已改成 pseudo provider，可作為 load balancer instance 使用
-- 編輯視窗可設定：
-  - `Profile`
-  - `Access Control`
-- `Access Control` 可控制：
-  - Skills
-  - Docs
-  - MCP tools
-  - Custom JS tools / system built-in tools
-  - `get_user_profile`
-  - `pick_best_agent_for_question`
-
-### 2. Chat Config
-
-`Chat Config` 集中管理：
-
-- Active agent
-- Credentials
-- Mode
-- History
-- Load Balancer
-- Docs
-- MCP
+  - agent 不直接綁死單一模型，而是綁定一個由多個 instances 組成的 load balancer
+  - 支援 retry、delay、resume minute、failure 狀態與 failover
+- Docs / MCP / Built-in Tools / Skills
+  - docs 可直接注入 prompt context
+  - MCP 以 SSE 連接外部工具
+  - built-in tools 可直接執行瀏覽器端 JavaScript
+  - skills 支援單輪與多輪 runtime，可做較複雜的 workflow
 - Prompt Templates
+  - 將 tool decision、skill decision、skill runtime 等提示詞抽成 YAML
+  - 內建中英文模板，並可直接在 UI 內做格式檢查與 API 測試
+  - 目前主要覆蓋一般 chat routing 與 skill runtime；`MAGI` 不走這套模板
+- Onboarding / 教學案例
+  - 以真實 UI 搭配 YAML 定義的案例，引導使用者逐步完成設定與對話驗證
+  - 案例同時可作為 smoke test 與 real tutorial test 的基礎資料
+- Graphify 整合
+  - 專案本身可輸出為 concept-first 的 WIKI、知識圖譜與報告
+  - 讓功能、設計概念與模組之間的關係更容易理解與展示
+
+## 技術重點
+
+- 前端技術棧
+  - `Vite + React + TypeScript`
+  - 可直接部署到 `GitHub Pages`
+- Browser-first 資料模型
+  - `localStorage`：agents、credentials、prompt templates、部分 UI state
+  - `IndexedDB`：docs、chat history、skills 與 skill assets
+- Model routing
+  - 透過 OpenAI-compatible API + load balancer 管理 provider、model 與 key pool
+  - 支援 tool decision、skill decision、chat response 等不同階段的 routing
+- Skill runtime
+  - `single_turn`：適合語氣控制、回答模板、輕量技能
+  - `multi_turn`：適合 observe / act / verify 類流程，如 browser workflow
+- Prompt engineering workflow
+  - decision 類 prompt 以較保守的 machine-oriented 模板為主
+  - 可直接在 Prompt Templates 面板裡用真實 API 驗證模板輸出是否符合預期
+- MCP 與 browser workflow
+  - 目前 MCP 以 SSE 為主，適合串接 agent-browser 這類工具
+  - 多輪 skill 可根據工具結果持續規劃下一步
+
+## 主要模組
+
+- Chat Config
+  - 管理 active agent、credentials、load balancers、docs、MCP、skills、built-in tools、prompt templates
+- Agents
+  - 管理 agent profile、load balancer 與 access control
 - Skills
-- Built-in Tools
-
-### 2.1 Credentials
-
-- 一筆 credential 代表一個 provider/endpoint 設定
-- 每筆 credential 底下可維護多把 key
-- key 可逐把測試連線
-- load balancer instance 會選擇：
-  - credential
-  - credential key
-
-### 2.2 Load Balancer
-
-- `Chat Config > Load Balancer` 採列表 + `Edit/Delete` modal
-- 每個 load balancer 由多個有序 instances 組成
-- instance 可設定：
-  - credential
-  - credential key
-  - model
-  - description
-  - `maxRetries`
-  - `delaySecond`
-  - `resumeMinute`
-- runtime 每次都從第 1 個 instance 開始掃描：
-  - 若 instance 被標記 `failure` 且尚未到 `nextCheckTime`，會跳過
-  - 若已超過 `nextCheckTime`，會重新嘗試
-- `resumeMinute` 代表 instance 被標記 failure 後，要等多久才允許重新嘗試
-- 請求成功後會清掉 failure 狀態；失敗則累積 `failureCount`
-
-### 2.3 Prompt Templates
-
-- `Chat Config > Prompt Templates` 會把 decision 與 skill runtime 相關 prompt 抽成可編輯的 YAML 檔
-- 目前內建的模板 family 包含：
-  - `Tool Decision`
-  - `Skill Decision`
-  - `Skill Runtime System`
-  - `Skill Verify`
-  - `Skill Bootstrap Plan`
-  - `Skill Planner Step`
-  - `Skill Completion Gate`
-- 每個 family 都有內建 `中文 / English` 兩個版本
-- 預設語言現在會先使用 `English`，方便對 `groq/compound` 這類對 JSON / routing prompt 較敏感的模型採用更保守的英文模板
-- 上方語言切換會讓整個模板面板一起切到對應語言，不會重複列出一份中文、一份英文
-- 使用者仍然可以手動編輯每個語言版本；編輯後會立即保存到本機
-- 如果 YAML 解析失敗，runtime 會自動退回內建預設模板，不會直接讓整個流程中斷
-- Prompt Templates 面板除了 YAML 格式檢查，現在也內建「真打 API 的模板測試」：
-  - 可測單一模板，也可一次測目前語言的全部模板
-  - 測試會直接走目前 agent / load balancer
-  - tool list、skill list、planner context 會使用內建假資料 catalog
-  - 面板會顯示 rendered prompt、raw output、parsed output 與 pass / fail
-- decision 類 prompt 的預設 catalog 也改成更精簡的摘要格式，避免把過長的 schema 與自然語言描述一起塞給模型
-- 這套模板會直接影響：
-  - tool decision
-  - skill decision
-  - single-turn / multi-turn skill runtime 的系統 prompt 與 verifier / planner / completion gate
-
-### 2.4 Onboarding / 案例教學
-
-- 入口在首頁 `使用案例教學`
-- 目前提供六個案例：
-  - `[1] 自訂 Agent 並完成第一次對話`
-  - `[2] 建立 DOC 並驗證內容注入`
-  - `[3] 使用 Built-in Tools 完成工具對話`
-  - `[4] 使用 Sequential Thinking Skill 驗證單輪能力`
-  - `[5] 使用 agent-browser MCP 讀取 GitHub Trending`
-  - `[6] 使用多輪 Skill 操作 GitHub Trending`
-- 案例驗證會盡量依「行為效果」判斷，而不是綁死某個 UI 細節或完整工具訊息字串
-  - 例如 case 5 第一段現在接受多種開頁類 MCP 工具，只要真的成功打開目標頁面即可，不再只認 `browser_open`
-- 教學模式特性：
-  - 左側固定 checklist 與系統提示
-  - 右側保留真實可操作的 app 介面
-  - 案例第一步介紹時可先保留 landing preview，再進入實際操作
-  - 可 `略過案例` 或 `離開教學`
-- 離開教學時：
-  - 可選擇是否保留教學期間的 `doc / tool / mcp / skill`
-  - `tool / skill` 會還原到教學開始前狀態
-  - `Docs / MCP` 會清掉固定教學資源名稱：
-    - `教學用DOC`
-    - `教學用MCP`
-
-- 教學案例以 YAML 定義，並搭配 runtime 驗證：
-
-```text
-src/onboarding/
-  catalog.ts         Tutorial catalog + scenario wiring
-  catalogCore.ts     YAML parser / normalization
-  runtime.ts         Step entry / validation / restore logic
-  types.ts           Tutorial schema / runtime types
-  tutorials/
-    first-agent-chat.yaml
-    docs-persona-chat.yaml
-    built-in-tools-chat.yaml
-    sequential-skill-chat.yaml
-    agent-browser-mcp-chat.yaml
-```
-
-#### 案例也可同時當作 Test Case
-
-- onboarding 案例不是只有 UI 文案；預填對話、完成條件、工具 / skill 驗證條件也會跟同一份 YAML 連動
-- 同一份案例資料可以同時服務：
-  - 人類操作的導覽流程
-  - 本地 smoke check
-  - 真實瀏覽器端的 end-to-end 測試
-- 這樣如果 YAML、runtime 行為與 UI selector 不同步，測試會直接失敗，不會等到上線才發現教學壞掉
-
-### 3. Docs
-
-- 每份文件都儲存在瀏覽器本地
-- agent 若被允許使用某份 doc，該內容會在送 request 前注入 prompt context
-- 這不是向量資料庫 / RAG pipeline，而是直接 prompt injection 的 MVP 設計
-- 目前 Docs 案例教學會示範把一份人設文件內容注入 prompt，觀察回答是否受影響
-
-### 4. MCP
-
-- 透過 SSE 連接 MCP server
-- 支援列出工具與手動 call tool
-- 每個 MCP server 可設定：
-  - `toolTimeoutSecond`
-  - `heartbeatSecond`
-- `toolTimeoutSecond` 會中止卡住的 RPC，避免工具無限執行中
-- `heartbeatSecond` 代表閒置超過多久後，下一次工具呼叫前先做一次 `tools/list` 存活檢查；設為 `0` 可停用
-- MCP 面板提供 `Clear All`，可一次清掉所有已存的 servers 與已載入 tools 狀態
-- 自動工具判斷會先跑 `Tool Decision Prompt`
-- 如果 model 回傳合法 schema，前端才會代呼叫 MCP 並把結果回填到最終問題中
-
-### 5. Built-in Tools
-
-- 自訂 JS tool 可直接使用：
-  - `alert`
-  - `window`
-  - `document`
-  - 其他目前頁面可用的瀏覽器環境
-- `Test Runner` 可直接測試 `input schema` 與 JS code
-- 內建系統工具也走同一套 built-in tools 架構：
-  - `get_user_profile`
-  - `pick_best_agent_for_question`
-- 可設定「使用工具前需使用者確認」
-
-### 6. Skills
-
-- 匯入格式：
-
-```text
-skill-name/
-├── SKILL.md
-├── scripts/
-├── references/
-└── assets/
-```
-
-- `SKILL.md` 使用 YAML frontmatter + Markdown body
-- `references/` 會依 `SKILL.md` 內的引用按需載入
-- `scripts/` 與 `assets/` 會被存檔，但 script 目前不執行
-- 支援建立空白 skill、編輯 `SKILL.md`、新增/刪除文字型 `references` 與 `assets`、重新匯出 zip
-
-#### Skill Runtime
-
-- `single_turn`
-  - 輕量 skill 模式
-  - 適合語氣調整、回答框架、輕量 docs/tool 輔助
-  - 不會在最終回答後做 refine
-- `multi_turn`
-  - 採顯式 phase runtime，而不是單輪 tool decision 疊補丁
-  - 會建立 todo 清單、追蹤 phase、在 chat 內顯示唯讀 todo 面板
-  - completion gate 通過後，剩餘 todo 會自動收斂成 `completed`
-  - 適合 browser automation、需要 `observe -> act -> observe` 的 workflow
-  - 可設定工具步數上限、verify 次數與 verifier agent
-
-多輪 skill 的完整設計與實作細節已整理在：
-
-- [agentic.md](./agentic.md)
-
-#### 技能與工具整合
-
-- skill 先做 `skill decision`
-- 若命中 skill，會載入 `SKILL.md`、references 與 skill scope
-- 接著再進入 tool decision
-- tool 仍然受 agent access control 與 skill workflow 的交集限制
-
-### 7. Chat UI 行為
-
-- 一般回答：直接 streaming 顯示
-- `<think>...</think>`：
-  - `</think>` 前只顯示「思考中…」
-  - `</think>` 後的正式內容會繼續 streaming
-- tool / skill：
-  - 執行期間會顯示狀態，例如：
-    - `正在載入 skill...`
-    - `正在呼叫 MCP 工具...`
-    - `正在進行 skill verify...`
-  - multi-turn skill 命中時，assistant 訊息下方會直接顯示 todo 面板：
-    - 目標
-    - 待辦清單
-    - 目前進行中
-    - blocked 原因
-  - 完成後可展開查看：
-    - `查看思考過程`
-    - `查看 tool result`
-    - `查看 skill 流程紀錄`
-- 第一、第二個 onboarding 案例在進入聊天步驟前，會自動清空對話歷史，避免驗證干擾
-
-### 8. S.C. MAGI Mode
-
-- 舊的 `goal-driven talking` 已由 `S.C. MAGI` 取代
-- 目前支援兩種模式：
-  - `S.C. Magi System (基本版: 三賢人同時表決)`
-  - `S.C. Magi System (進階版: 三賢人共識)`
-- MAGI 模式固定尋找三個已存 agent：
-  - `[系統保留] Melchior`
-  - `[系統保留] Balthasar`
-  - `[系統保留] Casper`
-- 這三個 MAGI agent 會常駐存在於 agent 清單中，不需要等切到 MAGI 模式才建立
-- 若切到 MAGI 模式後直接進入 `Chat`，系統會導向 `Agents` 頁讓使用者只設定各自的 load balancer
-- 三者都必須先由使用者自行設定好 provider / load balancer
-- 這三個 MAGI agent 屬於系統管理角色：
-  - 名稱固定
-  - persona description 固定
-  - Access Control 固定
-  - 使用者只需要設定各自的 load balancer
-- 執行 MAGI 時，系統只會使用各自對應的內建 MAGI skill，不會讀取全域 docs / MCP / built-in tools / 其他 user skills
-- 基本版會同步投票後依多數決輸出：
-  - `APPROVE`
-  - `REJECT`
-  - `ABSTAIN`
-  - `DEADLOCK`
-- 進階版最多協商 3 輪；若全體提早同意則提前收斂，否則依最新票型輸出結果
-- assistant 會顯示 EVA 風格的 MAGI 視覺板：
-  - 上方 `Balthasar`
-  - 左下 `Casper`
-  - 右下 `Melchior`
-  - 右側顯示最終決議與狀態說明
-  - 下方保留摘要與對話紀錄
+  - 使用 `SKILL.md + references/ + assets/` 結構管理技能包
+- Onboarding
+  - 用案例教學帶使用者走過 agent、doc、tool、skill、MCP 與 browser automation
+- MAGI
+  - 提供三賢人表決與共識兩種多代理模式
+  - MAGI 目前使用固定的內建 skills 與 orchestrator prompt，不經由 Prompt Templates 面板切換或編輯
+- Graphify
+  - 為專案本身生成 WIKI、互動圖譜與報告
 
 ## 本機啟動
-
-安裝並啟動 dev server：
 
 ```bash
 bash run.sh -dev
@@ -367,167 +78,61 @@ bash run.sh -dev
 http://127.0.0.1:5566/
 ```
 
-一般啟動：
-
-```bash
-bash run.sh
-```
-
 ## 測試與建置
 
-教學案例 smoke check：
+教學案例 smoke test：
 
 ```bash
 npm run test:tutorial
 ```
 
-這個測試不會真的呼叫 LLM，主要確認：
-
-- tutorial YAML 與 runtime 的預填對話保持同步
-- 教學步驟完成條件能正確連動
-- 關鍵案例不會因為文案或 selector 漂移而失效
-
-真實教學案例測試：
+真實案例測試：
 
 ```bash
 npm run test:real_tutorial
 ```
 
-這個測試會：
-
-- 讀取專案根目錄的 `.tutorial-test.local.json`
-- 自動啟動 `./run.sh -dev`
-- 自動啟動 `./mcp-test/run.sh -agent_browser`
-- 用真實瀏覽器跑完整個 onboarding 案例
-- 逐案例列印真實執行狀態與 assistant 回覆
-- 測試完成後自動清除本網站的 `localStorage` 與 `IndexedDB`
-
-若你只想針對某一個案例做真實驗證，可以指定：
+只測單一案例：
 
 ```bash
 REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
 ```
 
-這對 multi-turn skill / agent-browser 這類高成本案例特別有用。
-
-`.tutorial-test.local.json` 範例：
-
-```json
-{
-  "provider": "groq",
-  "apiKey": ["YOUR_GROQ_API_KEY_1", "YOUR_GROQ_API_KEY_2"],
-  "endpoint": "https://api.groq.com/openai/v1",
-  "model": "groq/compound"
-}
-```
-
-注意：
-
-- `test:real_tutorial` 目前是 `Groq-only`
-- 案例 5 只驗證 MCP / browser automation 流程能跑通，不驗證最終內容品質
-- 案例 6 的 acceptance 允許兩條成功路徑：
-  - 真正完成 GitHub Trending -> 點第一名 repo -> 摘要內容
-  - 正確辨識 blocked / manual 狀態並給出最終總結
-
-Vitest 全量測試：
-
-```bash
-npm test
-```
-
-執行 build：
+建置：
 
 ```bash
 npm run build
 ```
 
-## GitHub Pages 部署
-
-直接部署：
-
-```bash
-npm run deploy
-```
-
-此指令會：
-
-1. build 專案
-2. 將 `dist/` 推到 `gh-pages` branch
-
 ## MCP 測試伺服器
 
-專案內附一個本機 MCP 測試環境：
+專案內附本機 MCP 測試環境：
 
 ```bash
 cd mcp-test
 bash run.sh -simple
 ```
 
-提供三種模式：
+常用模式：
 
 - `bash run.sh -simple`
-  - 啟動簡單 SSE MCP server
-  - 內含 `echo` 與 `time`
 - `bash run.sh -agent_browser`
-  - 自動 clone `vercel-labs/agent-browser`
-  - 安裝相依與本地瀏覽器執行環境
-  - 啟動 browser automation 的 SSE MCP server
-  - 啟動前會先清掉佔用 `3334` 的舊測試服務
 - `bash run.sh -uninstall`
-  - 清除這個專案在 `mcp-test` 目錄下建立的 node_modules / vendor / local browser home
-  - 不會刪除使用者原本系統上的 Chrome / Chromium
 
-常用端點：
+## Frontend-only 風險與部署提醒
 
-```text
-simple:
-  http://127.0.0.1:3333/mcp/sse
-  http://127.0.0.1:3333/mcp/rpc
+這個專案刻意採 frontend-only 設計，適合做 agent workflow 原型、教學、展示與 UI/UX 實驗，但不應直接視為可公開線上部署的安全架構。
 
-agent-browser:
-  http://127.0.0.1:3334/mcp/sse
-  http://127.0.0.1:3334/mcp/rpc
-```
+需要注意：
 
-如果你是在 Windows 瀏覽器 + WSL server 的環境中測試，通常應優先使用 WSL IP，而不是 `127.0.0.1`。
+- provider API keys 目前保存在瀏覽器端
+- custom built-in tools 會以同 origin 權限執行 JavaScript
+- docs、skills、prompt templates 與部分設定也都保存在使用者本機
+- MCP 目前以 SSE 為主，整體能力邊界與傳統 server-side agent 平台不同
 
-如果你的環境有全域 `HTTP_PROXY / HTTPS_PROXY`，記得把本機 MCP 加進 `NO_PROXY`，不然 `127.0.0.1` 的請求可能會被代理攔走。
+如果要對外正式提供服務，建議至少補上：
 
-## 資料儲存
-
-- `localStorage`
-  - agents
-  - credentials
-  - MCP prompt templates
-  - UI state
-- `IndexedDB`
-  - docs
-  - chat history
-  - skills
-  - skill references / scripts / assets
-
-## 安全性注意事項
-
-- 這個專案是純前端，所以 provider API keys 會存在瀏覽器端
-- Custom built-in tools 會直接執行使用者輸入的 JavaScript
-- 目前沒有 sandbox
-- 正式上線若要保護 secrets，建議改成 server-side proxy 或自建 gateway
-- 如果要公開給其他人線上使用，請不要把目前這套本機 credentials + arbitrary tool code 的信任模型直接搬上去
-
-## 專案結構
-
-```text
-src/
-  adapters/        Provider adapters
-  app/             App shell
-  mcp/             MCP SSE client + tool registry
-  onboarding/      Tutorial schema / runtime / YAML scenarios
-  orchestrators/   Chat orchestration
-  runtime/         Skill runtime / executor
-  storage/         localStorage / IndexedDB helpers
-  ui/              React panels
-  utils/           Shared utilities
-docs/              Design notes
-mcp-test/          Local MCP test server
-run.sh             Dev / run helper
-```
+- server-side proxy / gateway
+- secret 與 arbitrary JS execution 的隔離
+- 更嚴格的 tool / credential trust boundary
+- 明確的多使用者資料隔離策略
