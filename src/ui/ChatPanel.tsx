@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChatMessage, MagiRenderState, MagiUnitId, MagiVerdict } from "../types";
+import { ChatMessage, MagiRenderState, MagiUnitId, MagiVerdict, OrchestratorMode, RadioSessionState } from "../types";
 
 type MessageSegment =
   | { type: "text"; content: string }
@@ -485,6 +485,7 @@ type ChatPanelProps = {
   onImportHistory: (file: File) => Promise<void>;
   leaderName?: string | null;
   userName: string;
+  mode: OrchestratorMode;
   modeLabel: string;
   isSummaryExporting?: boolean;
   fullscreen?: boolean;
@@ -492,10 +493,28 @@ type ChatPanelProps = {
   onCloseFullscreen?: () => void;
   composerSeed?: { value: string; token: number } | null;
   onOpenToolResult?: (assistantMessageId: string) => void;
+  radioState?: RadioSessionState;
+  onStartRadioSession?: () => void;
+  onStopRadioSession?: () => void;
+  onForceRadioTurn?: () => void;
 };
+
+function isRadioSessionActive(status?: RadioSessionState["status"]) {
+  return !!status && status !== "idle" && status !== "error";
+}
+
+function canForceRadioTurn(state?: RadioSessionState) {
+  if (!state) return false;
+  if (state.turn === "human") {
+    return state.status === "human_listening" || state.status === "human_transcribing" || state.status === "paused";
+  }
+  return state.status === "agent_speaking";
+}
 
 export default function ChatPanel(props: ChatPanelProps) {
   const [text, setText] = useState("");
+  const [radioOverlayOpen, setRadioOverlayOpen] = useState(true);
+  const [radioRefineModalOpen, setRadioRefineModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -523,7 +542,9 @@ export default function ChatPanel(props: ChatPanelProps) {
     const node = threadEndRef.current;
     if (!node) return;
     const raf = window.requestAnimationFrame(() => {
-      node.scrollIntoView({ block: "end" });
+      if (typeof node.scrollIntoView === "function") {
+        node.scrollIntoView({ block: "end" });
+      }
     });
     return () => window.cancelAnimationFrame(raf);
   }, [props.history, text, props.fullscreen]);
@@ -536,18 +557,36 @@ export default function ChatPanel(props: ChatPanelProps) {
     return () => window.cancelAnimationFrame(raf);
   }, [props.fullscreen]);
 
+  useEffect(() => {
+    if (props.mode === "radio") {
+      setRadioOverlayOpen(true);
+    }
+  }, [props.mode]);
+
   const emptyLabel = useMemo(
     () =>
-      props.modeLabel === "normal"
+      props.mode === "one_to_one"
         ? props.leaderName
           ? `Send a goal to ${props.leaderName} and the team will coordinate here.`
           : "Just type to start the conversation."
+        : props.mode === "radio"
+        ? "啟動對講機模式後，系統會持續累積語音草稿；說完停一下，系統就會自動送出。"
         : "輸入提訴內容後，S.C. MAGI 會開始裁決。",
-    [props.leaderName, props.modeLabel]
+    [props.leaderName, props.mode]
   );
 
+  const radioSessionActive = isRadioSessionActive(props.radioState?.status);
+  const radioForceEnabled = canForceRadioTurn(props.radioState);
+  const refinedPreview = props.radioState?.draftTranscriptRefinedPreview ?? "";
+  const refinedPreviewNeedsModal = useMemo(() => {
+    const normalized = refinedPreview.trim();
+    if (!normalized) return false;
+    const lineCount = normalized.split(/\r?\n/).length;
+    return normalized.length > 180 || lineCount > 5;
+  }, [refinedPreview]);
+
   return (
-    <div className={`chat-shell ${props.fullscreen ? "chat-shell-fullscreen" : ""}`} data-tutorial-id="chat-shell">
+    <div className={`chat-shell ${props.fullscreen ? "chat-shell-fullscreen" : ""} ${props.mode === "radio" ? "radio-mode-shell" : ""}`} data-tutorial-id="chat-shell">
       <div className={`chat-header ${props.fullscreen ? "chat-header-fullscreen" : ""}`}>
         <div>
           <div className="chat-title">Conversation</div>
@@ -596,7 +635,7 @@ export default function ChatPanel(props: ChatPanelProps) {
         </div>
       </div>
 
-      <div className={`chat-thread ${props.fullscreen ? "chat-thread-fullscreen" : ""}`}>
+      <div className={`chat-thread ${props.fullscreen ? "chat-thread-fullscreen" : ""} ${props.mode === "radio" ? "chat-thread-radio" : ""}`}>
         {props.history.length === 0 ? <div className="chat-empty">{emptyLabel}</div> : null}
         {props.history.map((m, index) => {
           const isLeader = !!props.leaderName && m.role === "assistant" && m.name === props.leaderName;
@@ -700,28 +739,188 @@ export default function ChatPanel(props: ChatPanelProps) {
         <div ref={threadEndRef} className="chat-thread-end" aria-hidden="true" />
       </div>
 
-      <div className={`chat-composer ${props.fullscreen ? "chat-composer-fullscreen" : ""}`}>
-        <textarea
-          ref={inputRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={async (e) => {
-            if (e.key === "Enter" && e.altKey) {
-              e.preventDefault();
-              await send();
-            }
-          }}
-          rows={3}
-          placeholder="Type message..."
-          className="chat-input"
-          data-tutorial-id="chat-input"
-        />
-        <button onClick={send} className="chat-send-btn" data-tutorial-id="chat-send">
-          Send
-        </button>
-      </div>
+      {props.mode === "radio" ? (
+        <>
+          {radioOverlayOpen ? (
+            <div className={`radio-overlay ${props.fullscreen ? "radio-overlay-fullscreen" : ""}`}>
+              <button
+                type="button"
+                className="radio-overlay-close"
+                onClick={() => setRadioOverlayOpen(false)}
+                aria-label="Hide radio panel"
+                title="Hide radio panel"
+              >
+                ×
+              </button>
+              <div className="radio-overlay-device">
+                <div className="radio-device-svg-wrap">
+                  <svg className="radio-device-svg" viewBox="0 0 320 520" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                    <rect x="70" y="70" width="180" height="360" rx="28" fill="#1F2937" />
+                    <rect x="82" y="82" width="156" height="336" rx="22" fill="#111827" />
+                    <rect x="205" y="25" width="18" height="60" rx="8" fill="#0F172A" />
+                    <rect x="190" y="40" width="20" height="18" rx="6" fill="#374151" />
+                    <circle cx="112" cy="82" r="14" fill="#374151" />
+                    <circle cx="150" cy="82" r="14" fill="#4B5563" />
+                    <rect x="105" y="115" width="110" height="90" rx="12" fill="#1F2937" stroke="#4B5563" strokeWidth="2" />
+                    <line x1="118" y1="132" x2="202" y2="132" stroke="#6B7280" strokeWidth="4" strokeLinecap="round" />
+                    <line x1="118" y1="147" x2="202" y2="147" stroke="#6B7280" strokeWidth="4" strokeLinecap="round" />
+                    <line x1="118" y1="162" x2="202" y2="162" stroke="#6B7280" strokeWidth="4" strokeLinecap="round" />
+                    <line x1="118" y1="177" x2="202" y2="177" stroke="#6B7280" strokeWidth="4" strokeLinecap="round" />
+                    <rect x="105" y="225" width="110" height="54" rx="10" fill="#0EA5E9" />
+                    <rect x="113" y="233" width="94" height="38" rx="6" fill="#BAE6FD" />
+                    <rect x="52" y="170" width="22" height="95" rx="10" fill="#F59E0B" />
+                    <rect x="248" y="165" width="14" height="42" rx="7" fill="#374151" />
+                    <rect x="248" y="218" width="14" height="42" rx="7" fill="#374151" />
+                    <circle cx="122" cy="318" r="14" fill="#374151" />
+                    <circle cx="160" cy="318" r="14" fill="#374151" />
+                    <circle cx="198" cy="318" r="14" fill="#374151" />
+                    <rect x="125" y="348" width="70" height="70" rx="16" fill="#1F2937" stroke="#4B5563" strokeWidth="2" />
+                    <rect x="151" y="358" width="18" height="50" rx="8" fill="#6B7280" />
+                    <rect x="135" y="374" width="50" height="18" rx="8" fill="#6B7280" />
+                    <circle
+                      cx="210"
+                      cy="318"
+                      r="5"
+                      fill={props.radioState?.status === "error" ? "#FB7185" : radioSessionActive ? "#22C55E" : "#94A3B8"}
+                    />
+                    <path d="M95 95C102 88 112 84 122 84H138" stroke="#374151" strokeWidth="6" strokeLinecap="round" opacity="0.7" />
+                  </svg>
+                  <div
+                    className={`radio-device-screen-indicator ${
+                      props.radioState?.status === "error"
+                        ? "error"
+                        : props.radioState?.turn === "agent"
+                        ? "agent"
+                        : radioSessionActive
+                        ? "human"
+                        : "idle"
+                    }`}
+                  />
+                </div>
+                <div className="radio-status-row radio-status-row-centered">
+                  <div className="radio-status-pill">輪到：{props.radioState?.turn === "agent" ? "Agent" : "Human"}</div>
+                  <div className="radio-status-pill">狀態：{formatRadioStatusLabel(props.radioState?.status)}</div>
+                </div>
+              </div>
+              <div className="radio-overlay-meta">
+                {props.radioState?.draftTranscriptRaw.trim() ? (
+                  <div className="radio-draft-card">
+                    <div className="radio-draft-label">Live Transcript Draft</div>
+                    <div className="radio-draft-text">{props.radioState.draftTranscriptRaw}</div>
+                    {props.radioState.draftTranscriptRefinedPreview ? (
+                      <>
+                        <div className="radio-draft-label refined">Refined Preview</div>
+                        <div className="radio-draft-text refined radio-draft-text-fixed">{props.radioState.draftTranscriptRefinedPreview}</div>
+                        {refinedPreviewNeedsModal ? (
+                          <button type="button" className="radio-preview-expand-btn" onClick={() => setRadioRefineModalOpen(true)}>
+                            查看全文
+                          </button>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+                {props.radioState?.lastError ? <div className="radio-error-banner">{props.radioState.lastError}</div> : null}
+                {props.radioState?.lastNotice ? <div className="radio-notice-banner">{props.radioState.lastNotice}</div> : null}
+                <div className="radio-actions">
+                  <button
+                    type="button"
+                    onClick={radioSessionActive ? props.onStopRadioSession : props.onStartRadioSession}
+                    className={`chat-send-btn radio-toggle-btn ${radioSessionActive ? "active" : ""}`}
+                    data-radio-action={radioSessionActive ? "stop" : "start"}
+                  >
+                    {radioSessionActive ? "Stop Session" : "Start Session"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={props.onForceRadioTurn}
+                    className="chat-clear-btn radio-force-btn"
+                    data-radio-action="force"
+                    disabled={!radioForceEnabled}
+                    title={radioForceEnabled ? "Force turn switch" : "目前這個階段無法強制切換"}
+                  >
+                    強制換回合
+                  </button>
+                </div>
+                {!props.radioState?.draftTranscriptRaw.trim() ? <div className="radio-draft-empty">尚未收到語音草稿。</div> : null}
+              </div>
+            </div>
+          ) : (
+            <button type="button" className="radio-overlay-reopen" onClick={() => setRadioOverlayOpen(true)} aria-label="Open radio panel">
+              <span className="radio-overlay-reopen-icon">RADIO</span>
+            </button>
+          )}
+          {radioRefineModalOpen && refinedPreview.trim() ? (
+            <div className="radio-preview-modal-backdrop" onClick={() => setRadioRefineModalOpen(false)}>
+              <div className="radio-preview-modal" onClick={(event) => event.stopPropagation()}>
+                <div className="radio-preview-modal-header">
+                  <div className="radio-preview-modal-title">Refined Preview</div>
+                  <button
+                    type="button"
+                    className="radio-preview-modal-close"
+                    onClick={() => setRadioRefineModalOpen(false)}
+                    aria-label="Close refined preview"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="radio-preview-modal-body">{refinedPreview}</div>
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className={`chat-composer ${props.fullscreen ? "chat-composer-fullscreen" : ""}`}>
+          <textarea
+            ref={inputRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Enter" && e.altKey) {
+                e.preventDefault();
+                await send();
+              }
+            }}
+            rows={3}
+            placeholder="Type message..."
+            className="chat-input"
+            data-tutorial-id="chat-input"
+          />
+          <button onClick={send} className="chat-send-btn" data-tutorial-id="chat-send">
+            Send
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+function formatRadioStatusLabel(status?: RadioSessionState["status"]) {
+  switch (status) {
+    case "requesting_permission":
+      return "請求權限中";
+    case "human_listening":
+      return "人類發話中";
+    case "human_transcribing":
+      return "轉寫中";
+    case "refining_user_turn":
+      return "整理語句中";
+    case "sending_to_agent":
+      return "送往 Agent";
+    case "agent_thinking":
+      return "Agent 思考中";
+    case "agent_synthesizing":
+      return "語音合成中";
+    case "agent_speaking":
+      return "Agent 播音中";
+    case "paused":
+      return "已暫停";
+    case "error":
+      return "錯誤";
+    case "idle":
+    default:
+      return "尚未開始";
+  }
 }
 
 function ExportRawIcon() {

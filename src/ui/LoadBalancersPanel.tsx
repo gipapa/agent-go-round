@@ -190,7 +190,9 @@ export default function LoadBalancersPanel(props: {
     setModelLoadErrors((current) => ({ ...current, [instance.id]: undefined }));
     try {
       const models = await props.onLoadModels({ credential, credentialKeyId: instance.credentialKeyId });
-      const normalized = Array.from(new Set(models.map((item) => item.trim()).filter(Boolean)));
+      const normalized = Array.from(new Set(models.map((item) => item.trim()).filter(Boolean))).sort((left, right) =>
+        left.localeCompare(right, undefined, { sensitivity: "base", numeric: true })
+      );
       setModelOptionsByInstance((current) => ({ ...current, [instance.id]: normalized }));
       if (normalized.length > 0 && !normalized.includes(instance.model)) {
         updateInstance(instance.id, { model: normalized[0] });

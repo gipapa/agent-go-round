@@ -11,6 +11,8 @@ import {
   MagiRenderState,
   MagiUnitId,
   OrchestratorMode,
+  RadioSessionState,
+  RadioSettings,
   SkillExecutionMode,
   SkillStepDecision,
   SkillCompletionDecision,
@@ -79,6 +81,7 @@ import SkillsPanel from "../ui/SkillsPanel";
 import TutorialGuide from "../ui/TutorialGuide";
 import LoadBalancersPanel from "../ui/LoadBalancersPanel";
 import PromptTemplatesPanel from "../ui/PromptTemplatesPanel";
+import RadioConfigPanel, { type RadioProbeState } from "../ui/RadioConfigPanel";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   applyTutorialStepEntry,
@@ -167,6 +170,30 @@ import { buildToolResultPromptBlock, ToolPromptDetailMode } from "../utils/toolR
 import { normalizeCredentialUrl } from "../utils/credential";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 import {
+  DEFAULT_RADIO_REFINE_PROMPT,
+  joinOrderedTranscriptChunks,
+  normalizeRadioSettings,
+  synthesizeGeminiSpeech,
+  transcribeAudioChunk
+} from "../radio/runtime";
+import {
+  buildLocalRadioRefineFallback,
+  buildRadioAgentSystemPrompt,
+  buildRadioTtsFallbackSystemPrompt,
+  createRadioProbeWavBlob,
+  getDefaultRadioSessionState,
+  getRadioMicrophoneSupportIssue,
+  isRadioTtsEmptyAudioError,
+  isRadioTtsQuotaExhaustedError,
+  MIN_RADIO_STT_BLOB_BYTES,
+  normalizeRadioAssistantText,
+  playRadioSystemTone,
+  RADIO_MIN_SPEECH_MS,
+  RADIO_SILENCE_FINALIZE_MS,
+  RADIO_VAD_RMS_THRESHOLD,
+  shouldRejectRadioRefine
+} from "../radio/helpers";
+import {
   applyInstanceFailure,
   applyInstanceSuccess,
   createCredentialEntry,
@@ -176,13 +203,18 @@ import {
   DEFAULT_INSTANCE_DELAY_SECOND,
   DEFAULT_INSTANCE_MAX_RETRIES,
   DEFAULT_INSTANCE_RESUME_MINUTE,
-  describeCredentialPreset,
   getLoadBalancerResumeMs,
   migrateAgentsToLoadBalancers,
   resolveLoadBalancerCandidates,
   ResolvedLoadBalancerInstance,
   setLoadBalancerRetryPolicy
 } from "../utils/loadBalancer";
+import { buildAgentFailureContent, classifyRetryableAgentFailure, detectTerminalAgentFailure } from "../utils/agentFailure";
+import {
+  describeLoadBalancerAvailability,
+  describeResolvedLoadBalancerCandidate,
+  formatLoadBalancerDateTime
+} from "../utils/loadBalancerDiagnostics";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -222,6 +254,19 @@ type PreparedSkillExecution = {
   scopedMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
   decisionContext?: string;
 };
+
+type AssistantResponseFormatResult = {
+  displayContent: string;
+  spokenContent?: string;
+};
+
+type OneToOneTurnResult = {
+  requestId: string;
+  status: "success" | "degraded" | "failure";
+  displayContent: string;
+  spokenContent?: string;
+};
+
 type ToolEntry =
   | {
       kind: "mcp";
@@ -244,29 +289,113 @@ function normalizeToolDecisionAgainstAvailableTools(args: {
   }
 
   const decision = args.decision;
-  const matchingBuiltIn = args.availableBuiltinTools.find((tool) => tool.name === decision.tool) ?? null;
+  const resolveMcpToolName = () => {
+    const exactMatch = args.availableMcpTools.some((entry) => entry.tools.some((tool) => tool.name === decision.tool));
+    if (exactMatch) return decision.tool;
+    const normalizedToolName = decision.tool.trim().toLowerCase();
+    const aliases = new Map<string, string>([
+      ["visit", "browser_open"],
+      ["open_url", "browser_open"],
+      ["openurl", "browser_open"],
+      ["open", "browser_open"],
+      ["snapshot", "browser_snapshot"],
+      ["read", "browser_snapshot"]
+    ]);
+    return aliases.get(normalizedToolName) ?? decision.tool;
+  };
+  const resolvedToolName = resolveMcpToolName();
+  const resolveMcpServerId = () => {
+    const rawServerId = String(decision.serverId ?? "").trim();
+    if (rawServerId) {
+      const exactServer =
+        args.availableMcpServers.find((server) => server.id === rawServerId || server.name === rawServerId) ?? null;
+      if (exactServer) return exactServer.id;
+
+      const normalizedServerId = rawServerId.toLowerCase();
+      const fuzzyServer =
+        args.availableMcpServers.find(
+          (server) =>
+            server.id.trim().toLowerCase() === normalizedServerId || server.name.trim().toLowerCase() === normalizedServerId
+        ) ?? null;
+      if (fuzzyServer) return fuzzyServer.id;
+    }
+
+    const matchingServers = args.availableMcpTools.filter((entry) => entry.tools.some((tool) => tool.name === resolvedToolName));
+    if (matchingServers.length === 1) {
+      return matchingServers[0].server.id;
+    }
+    return decision.serverId;
+  };
+  const resolvedServerId = resolveMcpServerId();
+  const matchingBuiltIn = args.availableBuiltinTools.find((tool) => tool.name === resolvedToolName) ?? null;
   if (!matchingBuiltIn) {
-    return decision;
+    return {
+      ...decision,
+      tool: resolvedToolName,
+      serverId: resolvedServerId
+    };
   }
 
-  const matchingServer = decision.serverId
-    ? args.availableMcpServers.find((server) => server.id === decision.serverId) ?? null
+  const matchingServer = resolvedServerId
+    ? args.availableMcpServers.find((server) => server.id === resolvedServerId) ?? null
     : null;
-  const matchingMcpTool = decision.serverId
+  const matchingMcpTool = resolvedServerId
     ? args.availableMcpTools
-        .find((entry) => entry.server.id === decision.serverId)
-        ?.tools.find((tool) => tool.name === decision.tool) ?? null
+        .find((entry) => entry.server.id === resolvedServerId)
+        ?.tools.find((tool) => tool.name === resolvedToolName) ?? null
     : null;
 
   if (matchingServer && matchingMcpTool) {
-    return decision;
+    return {
+      ...decision,
+      tool: resolvedToolName,
+      serverId: resolvedServerId
+    };
   }
 
   return {
     type: "builtin_tool_call" as const,
-    tool: decision.tool,
+    tool: resolvedToolName,
     input: decision.input
   };
+}
+
+function inferExplicitToolDecision(args: {
+  input: string;
+  availableBuiltinTools: BuiltInToolConfig[];
+  availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
+}) {
+  const normalizedInput = String(args.input ?? "").toLowerCase();
+  if (!/(明確使用|使用|呼叫|call|use)/i.test(normalizedInput)) {
+    return null;
+  }
+
+  const findMcpTool = (toolName: string) =>
+    args.availableMcpTools.find((entry) => entry.tools.some((tool) => tool.name === toolName)) ?? null;
+
+  if (normalizedInput.includes("browser_open")) {
+    const match = findMcpTool("browser_open");
+    const url = extractFirstUrl(args.input);
+    if (match && url) {
+      return { type: "mcp_call" as const, serverId: match.server.id, tool: "browser_open", input: { url } };
+    }
+  }
+
+  if (normalizedInput.includes("browser_snapshot")) {
+    const match = findMcpTool("browser_snapshot");
+    if (match) {
+      return { type: "mcp_call" as const, serverId: match.server.id, tool: "browser_snapshot", input: {} };
+    }
+  }
+
+  if (normalizedInput.includes("get_user_profile")) {
+    const builtIn = args.availableBuiltinTools.find((tool) => tool.name === "get_user_profile") ?? null;
+    if (builtIn) {
+      return { type: "builtin_tool_call" as const, tool: "get_user_profile", input: {} };
+    }
+  }
+
+  return null;
 }
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
@@ -308,6 +437,51 @@ function normalizeToolDecision(obj: any): ToolDecision | null {
   const action = normalizeMcpAction(obj);
   if (!action?.serverId) return null;
   return action;
+}
+
+function extractPlainTextToolDecision(text: string): ToolDecision | null {
+  const raw = String(text ?? "").trim();
+  if (!raw) return null;
+  if (/^no_tool$/i.test(raw)) return { type: "no_tool" };
+
+  const matchToolCall = (toolName: string) => {
+    const regex = new RegExp(`\\b${toolName}\\s*\\(([^)]*)\\)`, "i");
+    return raw.match(regex);
+  };
+  const extractFirstArgument = (value: string) => {
+    const cleaned = String(value ?? "")
+      .trim()
+      .replace(/^["'`]/, "")
+      .replace(/["'`]$/, "");
+    return cleaned.split(/\s*,\s*/, 1)[0]?.trim() ?? "";
+  };
+
+  const browserOpenCall = matchToolCall("browser_open") ?? matchToolCall("visit");
+  if (browserOpenCall) {
+    const url = extractFirstArgument(browserOpenCall[1]);
+    return {
+      type: "mcp_call",
+      serverId: "",
+      tool: /visit/i.test(browserOpenCall[0]) ? "visit" : "browser_open",
+      input: url ? { url } : {}
+    };
+  }
+
+  const browserSnapshotCall = matchToolCall("browser_snapshot") ?? matchToolCall("snapshot") ?? matchToolCall("read");
+  if (browserSnapshotCall) {
+    return {
+      type: "mcp_call",
+      serverId: "",
+      tool: /browser_snapshot/i.test(browserSnapshotCall[0]) ? "browser_snapshot" : "snapshot",
+      input: {}
+    };
+  }
+
+  return null;
+}
+
+function parseToolDecision(raw: string) {
+  return normalizeToolDecision(extractJsonObject(raw)) ?? extractPlainTextToolDecision(raw);
 }
 
 function normalizeSkillDecision(obj: any): SkillDecision | null {
@@ -369,6 +543,7 @@ const MAGI_MODE_LABELS: Record<MagiMode, string> = {
   magi_vote: "S.C. Magi System (基本版: 三賢人同時表決)",
   magi_consensus: "S.C. Magi System (進階版: 三賢人共識)"
 };
+const RADIO_MODE_LABEL = "Radio / Walkie-Talkie";
 
 const MAGI_RESERVED_PREFIX = "[系統保留]";
 const TUTORIAL_LOAD_BALANCER_NAMES = new Set([TUTORIAL_PRIMARY_LOAD_BALANCER_NAME, TUTORIAL_SECONDARY_LOAD_BALANCER_NAME]);
@@ -463,6 +638,21 @@ function stringifyAny(v: any): string {
   } catch {
     return String(v);
   }
+}
+
+function mergeSystemText(...parts: Array<string | undefined>) {
+  return parts
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatRadioAssistantResponse(raw: string): AssistantResponseFormatResult {
+  const trimmed = normalizeRadioAssistantText(raw);
+  return {
+    displayContent: trimmed,
+    spokenContent: trimmed
+  };
 }
 
 function getThinkStreamingState(buffer: string) {
@@ -1007,25 +1197,6 @@ function buildGroundedRepoSummaryAnswer(observation?: BrowserObservationDigest |
   ].join("\n");
 }
 
-function detectTerminalAgentFailure(text: string) {
-  const normalized = String(text ?? "").trim();
-  if (!normalized) return null;
-  if (/^Request failed:/i.test(normalized)) return normalized;
-  if (/^HTTP \d+/i.test(normalized)) return normalized;
-  if (/rate_limit_exceeded|insufficient_quota|quota|api key|invalid api key/i.test(normalized)) return normalized;
-  if (/Chrome Prompt API not available/i.test(normalized)) return normalized;
-  return null;
-}
-
-function buildAgentFailureContent(errorText: string, task?: string) {
-  const lines = ["【執行失敗】", "這一輪請求沒有成功完成，系統已停止重試。"];
-  if (task) {
-    lines.push("", "【原始任務】", task);
-  }
-  lines.push("", "【錯誤訊息】", String(errorText ?? "").trim());
-  return lines.join("\n");
-}
-
 function isSequentialThinkingSkill(skill?: SkillConfig | null) {
   if (!skill) return false;
   const id = String(skill.id ?? "").toLowerCase();
@@ -1292,6 +1463,30 @@ async function testCredentialConnection(slot: ModelCredentialEntry, apiKey: stri
     return { ok: true, message: "Chrome Prompt provider 不需要遠端連線測試。" };
   }
 
+  if (slot.preset === "gemini") {
+    const res = await fetch(`${endpoint}/models`, {
+      headers: apiKey.trim() ? { "x-goog-api-key": apiKey.trim() } : undefined
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (res.status === 401 || res.status === 403) {
+        throw new Error("已連到 Gemini provider，但 API key 無效或沒有權限。");
+      }
+      if (res.status === 404) {
+        throw new Error("已連到 endpoint，但找不到 /models。請確認這是不是 Gemini API endpoint。");
+      }
+      throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
+    }
+
+    const json = await res.json().catch(() => null);
+    const count = Array.isArray(json?.models) ? json.models.length : undefined;
+    return {
+      ok: true,
+      message: count === undefined ? "測試成功：provider 有回應。" : `測試成功：可用模型 ${count} 個。`
+    };
+  }
+
   const res = await fetch(`${endpoint}/models`, {
     headers: apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : undefined
   });
@@ -1322,6 +1517,31 @@ async function fetchCredentialModels(slot: ModelCredentialEntry, apiKey: string)
   const endpoint = normalizeCredentialUrl(slot.endpoint);
   if (!endpoint) {
     throw new Error("請先設定 endpoint。");
+  }
+
+  if (slot.preset === "gemini") {
+    const res = await fetch(`${endpoint}/models`, {
+      headers: apiKey.trim() ? { "x-goog-api-key": apiKey.trim() } : undefined
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
+    }
+
+    const json = await res.json().catch(() => null);
+    const models = Array.isArray(json?.models)
+      ? json.models
+          .map((item: any) => String(item?.name ?? "").trim())
+          .map((name: string) => name.replace(/^models\//, ""))
+          .filter(Boolean)
+      : [];
+
+    if (!models.length) {
+      throw new Error("這個 endpoint 沒有回傳可用模型。");
+    }
+
+    return models;
   }
 
   const res = await fetch(`${endpoint}/models`, {
@@ -1836,7 +2056,7 @@ export default function App() {
   const [mode, setMode] = useState<OrchestratorMode>(() => {
     const storedMode = initialUi.mode;
     if (storedMode === "leader_team") return "magi_vote";
-    if (storedMode === "magi_vote" || storedMode === "magi_consensus" || storedMode === "one_to_one") return storedMode;
+    if (storedMode === "magi_vote" || storedMode === "magi_consensus" || storedMode === "one_to_one" || storedMode === "radio") return storedMode;
     return "one_to_one";
   });
   const [skillExecutionMode, setSkillExecutionMode] = useState<SkillExecutionMode>(() =>
@@ -1854,9 +2074,20 @@ export default function App() {
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
+  const [radioSettings, setRadioSettings] = useState<RadioSettings>(() => normalizeRadioSettings(initialUi.radioSettings));
+  const [radioSessionState, setRadioSessionState] = useState<RadioSessionState>(() => getDefaultRadioSessionState());
+  const [radioProbeState, setRadioProbeState] = useState<{ stt: RadioProbeState; tts: RadioProbeState }>({
+    stt: { running: false },
+    tts: { running: false }
+  });
+  const radioRefineAgentOptions = useMemo(() => agents.filter((agent) => !isManagedMagiAgent(agent)), [agents]);
+  const selectedRadioRefineAgent = useMemo(
+    () => radioRefineAgentOptions.find((agent) => agent.id === radioSettings.refineAgentId) ?? null,
+    [radioRefineAgentOptions, radioSettings.refineAgentId]
+  );
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
-  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | null;
+  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | "radio" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
   const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
@@ -1952,6 +2183,23 @@ export default function App() {
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
   const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
+  const radioSessionIdRef = React.useRef<string | null>(null);
+  const radioMediaStreamRef = React.useRef<MediaStream | null>(null);
+  const radioRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const radioChunkTimerRef = React.useRef<number | null>(null);
+  const radioAudioContextRef = React.useRef<AudioContext | null>(null);
+  const radioAnalyserRef = React.useRef<AnalyserNode | null>(null);
+  const radioSourceNodeRef = React.useRef<MediaStreamAudioSourceNode | null>(null);
+  const radioVadFrameRef = React.useRef<number | null>(null);
+  const radioSpeechStartedAtRef = React.useRef<number | null>(null);
+  const radioLastVoiceAtRef = React.useRef<number | null>(null);
+  const radioAudioRef = React.useRef<HTMLAudioElement | null>(null);
+  const radioChunkTextsRef = React.useRef<Map<number, string>>(new Map());
+  const radioNextChunkIndexRef = React.useRef(0);
+  const radioPendingTranscriptionsRef = React.useRef(0);
+  const radioPendingFinalizeRef = React.useRef(false);
+  const radioRecorderStoppedRef = React.useRef(false);
+  const radioFinalizeInFlightRef = React.useRef(false);
   const tutorialRuntimeState = useMemo(
     () => ({
       scenarioId: tutorialScenario?.id,
@@ -2141,7 +2389,7 @@ export default function App() {
   }, [agents, loadBalancers]);
 
   React.useEffect(() => {
-    if (mode === "one_to_one" || activeTab !== "chat") return;
+    if ((mode !== "magi_vote" && mode !== "magi_consensus") || activeTab !== "chat") return;
     const setup = MAGI_UNIT_LAYOUT.map(({ unitId }) => {
       const matches = agents.filter((agent) => matchesManagedMagiUnit(agent, unitId));
       const primary = matches[0] ?? null;
@@ -2186,9 +2434,10 @@ export default function App() {
       historyMessageLimit,
       userName,
       userAvatarUrl,
-      userDescription
+      userDescription,
+      radioSettings
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, historyMessageLimit, userName, userAvatarUrl, userDescription]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, historyMessageLimit, userName, userAvatarUrl, userDescription, radioSettings]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -2222,6 +2471,21 @@ export default function App() {
   React.useEffect(() => {
     saveLoadBalancers(loadBalancers);
   }, [loadBalancers]);
+
+  React.useEffect(() => {
+    return () => {
+      radioSessionIdRef.current = null;
+      stopRadioAudioPlayback();
+      stopRadioCapture();
+      resetRadioTurnBuffers();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (mode === "radio") return;
+    if (radioSessionState.status === "idle") return;
+    stopRadioSession();
+  }, [mode]);
 
   React.useEffect(() => {
     if (!historyLoaded) return;
@@ -2506,6 +2770,14 @@ export default function App() {
     () => loadBalancerSlots.filter((entry) => entry.instances.length > 0).length,
     [loadBalancerSlots]
   );
+  const radioSttLoadBalancer = useMemo(
+    () => loadBalancerSlots.find((entry) => entry.id === radioSettings.sttLoadBalancerId) ?? null,
+    [loadBalancerSlots, radioSettings.sttLoadBalancerId]
+  );
+  const radioTtsLoadBalancer = useMemo(
+    () => loadBalancerSlots.find((entry) => entry.id === radioSettings.ttsLoadBalancerId) ?? null,
+    [loadBalancerSlots, radioSettings.ttsLoadBalancerId]
+  );
 
   function resolveLoadBalancerPlanForAgent(agent: AgentConfig, now?: number) {
     return resolveLoadBalancerCandidates({
@@ -2560,6 +2832,38 @@ export default function App() {
   }, [agents, loadBalancers, modelCredentials]);
 
   const magiReadyCount = useMemo(() => magiSetup.filter((entry) => entry.ready).length, [magiSetup]);
+
+  React.useEffect(() => {
+    setRadioSettings((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      if (next.sttLoadBalancerId && !loadBalancerSlots.some((entry) => entry.id === next.sttLoadBalancerId)) {
+        next.sttLoadBalancerId = loadBalancerSlots[0]?.id ?? "";
+        changed = true;
+      }
+      if (next.ttsLoadBalancerId && !loadBalancerSlots.some((entry) => entry.id === next.ttsLoadBalancerId)) {
+        next.ttsLoadBalancerId = loadBalancerSlots[0]?.id ?? "";
+        changed = true;
+      }
+      if (!next.sttLoadBalancerId && loadBalancerSlots.length === 1) {
+        next.sttLoadBalancerId = loadBalancerSlots[0].id;
+        changed = true;
+      }
+      if (!next.ttsLoadBalancerId && loadBalancerSlots.length === 1) {
+        next.ttsLoadBalancerId = loadBalancerSlots[0].id;
+        changed = true;
+      }
+      return changed ? normalizeRadioSettings(next) : prev;
+    });
+  }, [loadBalancerSlots]);
+
+  React.useEffect(() => {
+    setRadioSettings((prev) => {
+      if (!prev.refineAgentId) return prev;
+      if (radioRefineAgentOptions.some((agent) => agent.id === prev.refineAgentId)) return prev;
+      return normalizeRadioSettings({ ...prev, refineAgentId: "" });
+    });
+  }, [radioRefineAgentOptions]);
 
   function buildMagiUnitSystem(unitId: MagiUnitId, agent: AgentConfig, question: string) {
     const bundle = getMagiSkillBundle(unitId);
@@ -2894,102 +3198,131 @@ export default function App() {
     });
   }
 
-  function classifyRetryableAgentFailure(text: string) {
-    const normalized = text.trim();
-    if (!normalized) return null;
-    if (normalized.startsWith("Request failed: HTTP 400") || normalized.startsWith("Request failed: HTTP 422")) {
-      return { retryable: false, markFailure: false };
+  async function runRadioTaskWithLoadBalancer<T>(args: {
+    loadBalancerId?: string;
+    requestId?: string;
+    stage: string;
+    radioModel: string;
+    execute: (candidate: ResolvedLoadBalancerInstance) => Promise<T>;
+    describeSuccess?: (result: T) => string;
+  }) {
+    const agentName = activeAgent?.name ?? "Radio";
+    const logicalAgent: AgentConfig = {
+      id: `radio-${args.stage}`,
+      name: agentName,
+      type: "openai_compat",
+      loadBalancerId: args.loadBalancerId
+    };
+    const candidates = resolveLoadBalancerPlanForAgent(logicalAgent);
+    if (!candidates.length) {
+      logNow({
+        category: "load_balancer",
+        agent: agentName,
+        ok: false,
+        requestId: args.requestId,
+        stage: args.stage,
+        message: `LB no available instance [${args.stage}]`,
+        details: describeLoadBalancerAvailability({
+          agent: logicalAgent,
+          loadBalancers,
+          credentials: modelCredentials
+        })
+      });
+      throw new Error(`No available load balancer instance for ${args.stage}.`);
     }
-    if (normalized.startsWith("Request failed: HTTP ")) {
-      const status = Number(normalized.slice("Request failed: HTTP ".length).split(/\D/, 1)[0] || 0);
-      if (status === 400 || status === 422) return { retryable: false, markFailure: false };
-      return { retryable: true, markFailure: true };
-    }
-    if (normalized.startsWith("Request failed:")) {
-      return { retryable: true, markFailure: true };
-    }
-    if (normalized.startsWith("HTTP 400") || normalized.startsWith("HTTP 422")) {
-      return { retryable: false, markFailure: false };
-    }
-    if (normalized.startsWith("HTTP ")) {
-      return { retryable: true, markFailure: true };
-    }
-    if (normalized.includes("Chrome Prompt API not available")) {
-      return { retryable: true, markFailure: true };
-    }
-    return null;
-  }
 
-  function formatLoadBalancerDateTime(ts?: number | null) {
-    if (typeof ts !== "number" || !Number.isFinite(ts)) return "-";
-    return new Date(ts).toLocaleString();
-  }
+    let lastError: unknown = new Error(`No available load balancer instance for ${args.stage}.`);
+    let lastFailureDetails = String((lastError as Error).message);
+    for (const [candidateIndex, candidate] of candidates.entries()) {
+      logNow({
+        category: "load_balancer",
+        agent: agentName,
+        requestId: args.requestId,
+        stage: args.stage,
+        message: `LB selected [${args.stage}]`,
+        details: [describeResolvedLoadBalancerCandidate(candidate), `radio_model=${args.radioModel}`].join("\n\n")
+      });
+      try {
+        const result = await args.execute(candidate);
+        setLoadBalancers((prev) =>
+          applyInstanceSuccess({
+            loadBalancers: prev,
+            loadBalancerId: candidate.loadBalancer.id,
+            instanceId: candidate.instance.id
+          })
+        );
+        logNow({
+          category: "load_balancer",
+          agent: agentName,
+          ok: true,
+          requestId: args.requestId,
+          stage: args.stage,
+          message: `LB success [${args.stage}]`,
+          details: [
+            describeResolvedLoadBalancerCandidate(candidate),
+            `radio_model=${args.radioModel}`,
+            args.describeSuccess ? args.describeSuccess(result) : ""
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+        });
+        return result;
+      } catch (error: any) {
+        lastError = error;
+        const errorText = String(error?.message ?? error ?? "");
+        lastFailureDetails = errorText;
+        const failure = classifyRetryableAgentFailure(errorText);
+        if (failure?.retryable) {
+          const nextCandidate = candidates[candidateIndex + 1] ?? null;
+          if (failure.markFailure) {
+            setLoadBalancers((prev) =>
+              applyInstanceFailure({
+                loadBalancers: prev,
+                loadBalancerId: candidate.loadBalancer.id,
+                instanceId: candidate.instance.id
+              })
+            );
+          }
+          logNow({
+            category: "load_balancer",
+            agent: agentName,
+            ok: false,
+            requestId: args.requestId,
+            stage: args.stage,
+            message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${args.stage}]`,
+            details: [
+              describeResolvedLoadBalancerCandidate(candidate),
+              `radio_model=${args.radioModel}`,
+              `error=${errorText}`,
+              `marked_failure=${failure.markFailure}`,
+              nextCandidate ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}` : "next_candidate: none"
+            ].join("\n\n")
+          });
+          continue;
+        }
+        logNow({
+          category: "load_balancer",
+          agent: agentName,
+          ok: false,
+          requestId: args.requestId,
+          stage: args.stage,
+          message: `LB terminal error [${args.stage}]`,
+          details: [describeResolvedLoadBalancerCandidate(candidate), `radio_model=${args.radioModel}`, `error=${errorText}`].join("\n\n")
+        });
+        throw error;
+      }
+    }
 
-  function formatCredentialKeyLabel(credential: ModelCredentialEntry, key?: ModelCredentialEntry["keys"][number]) {
-    if (credential.preset === "chrome_prompt") return "not_required";
-    if (!key) return "missing";
-    const slot = credential.keys.findIndex((entry) => entry.id === key.id);
-    const suffix = key.apiKey.trim() ? `…${key.apiKey.trim().slice(-4)}` : "empty";
-    const keyIdShort = key.id.slice(0, 8);
-    return `slot=${slot >= 0 ? slot + 1 : "?"}/${credential.keys.length || "?"}, suffix=${suffix}, id=${keyIdShort}`;
-  }
-
-  function describeResolvedLoadBalancerCandidate(candidate: ResolvedLoadBalancerInstance) {
-    const instanceIndex = Math.max(
-      0,
-      candidate.loadBalancer.instances.findIndex((entry) => entry.id === candidate.instance.id)
-    );
-    const provider = describeCredentialPreset(candidate.credential.preset, candidate.credential.endpoint);
-    return [
-      `load_balancer=${candidate.loadBalancer.name}`,
-      `instance=${instanceIndex + 1}/${candidate.loadBalancer.instances.length}`,
-      `provider=${provider}`,
-      `credential=${candidate.credential.label}`,
-      `endpoint=${candidate.credential.endpoint || "-"}`,
-      `model=${candidate.instance.model || "-"}`,
-      `description=${candidate.instance.description.trim() || "-"}`,
-      `key=${formatCredentialKeyLabel(candidate.credential, candidate.key)}`,
-      `max_retries=${candidate.instance.maxRetries}`,
-      `delay_second=${candidate.instance.delaySecond}`,
-      `resume_minute=${candidate.instance.resumeMinute}`,
-      `failure=${candidate.instance.failure}`,
-      `failure_count=${candidate.instance.failureCount}`,
-      `next_check_time=${formatLoadBalancerDateTime(candidate.instance.nextCheckTime)}`
-    ].join("\n");
-  }
-
-  function describeLoadBalancerAvailability(agent: AgentConfig) {
-    if (!agent.loadBalancerId) return "agent has no load balancer";
-    const loadBalancer = loadBalancers.find((entry) => entry.id === agent.loadBalancerId) ?? null;
-    if (!loadBalancer) return `load balancer not found: ${agent.loadBalancerId}`;
-    if (!loadBalancer.instances.length) return `load_balancer=${loadBalancer.name}\ninstances=0`;
-    const now = Date.now();
-    return [
-      `load_balancer=${loadBalancer.name}`,
-      ...loadBalancer.instances.map((instance, index) => {
-        const credential = modelCredentials.find((entry) => entry.id === instance.credentialId) ?? null;
-        const key = credential?.keys.find((entry) => entry.id === instance.credentialKeyId) ?? credential?.keys[0];
-        const provider = credential ? describeCredentialPreset(credential.preset, credential.endpoint) : "missing_credential";
-        const coolingDown =
-          instance.failure === true &&
-          typeof instance.nextCheckTime === "number" &&
-          Number.isFinite(instance.nextCheckTime) &&
-          now < instance.nextCheckTime;
-        return [
-          `instance=${index + 1}/${loadBalancer.instances.length}`,
-          `status=${coolingDown ? "cooldown_skip" : "eligible"}`,
-          `provider=${provider}`,
-          `credential=${credential?.label ?? "(missing)"}`,
-          `endpoint=${credential?.endpoint ?? "-"}`,
-          `model=${instance.model || "-"}`,
-          `description=${instance.description.trim() || "-"}`,
-          `key=${credential ? formatCredentialKeyLabel(credential, key) : "missing"}`,
-          `failure=${instance.failure}`,
-          `failure_count=${instance.failureCount}`,
-          `next_check_time=${formatLoadBalancerDateTime(instance.nextCheckTime)}`
-        ].join("\n");
-      })
-    ].join("\n\n");
+    logNow({
+      category: "load_balancer",
+      agent: agentName,
+      ok: false,
+      requestId: args.requestId,
+      stage: args.stage,
+      message: `LB final failure [${args.stage}]`,
+      details: lastFailureDetails
+    });
+    throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unknown radio load balancer failure."));
   }
 
   async function runOneToOneWithLoadBalancer(args: {
@@ -3012,7 +3345,11 @@ export default function App() {
         requestId: args.requestId,
         stage: requestLabel,
         message: `LB no available instance [${requestLabel}]`,
-        details: describeLoadBalancerAvailability(args.logicalAgent)
+        details: describeLoadBalancerAvailability({
+          agent: args.logicalAgent,
+          loadBalancers,
+          credentials: modelCredentials
+        })
       });
       const fallbackAgent = hydrateAgentCredentials(args.logicalAgent);
       return runOneToOne({
@@ -3178,7 +3515,11 @@ export default function App() {
         agent: agent.name,
         ok: false,
         message: "LB no available instance [detect]",
-        details: describeLoadBalancerAvailability(agent)
+        details: describeLoadBalancerAvailability({
+          agent,
+          loadBalancers,
+          credentials: modelCredentials
+        })
       });
       const fallbackAgent = hydrateAgentCredentials(agent);
       const adapter = pickAdapter(fallbackAgent);
@@ -3322,10 +3663,11 @@ export default function App() {
       .filter((entry) => entry.tools.length > 0);
   }
 
-  function addCredential(preset: "openai" | "groq" | "custom" | "chrome_prompt") {
+  function addCredential(preset: "openai" | "groq" | "gemini" | "custom" | "chrome_prompt") {
     setModelCredentials((prev) => {
       if (preset === "openai" && prev.some((entry) => entry.preset === "openai")) return prev;
       if (preset === "groq" && prev.some((entry) => entry.preset === "groq")) return prev;
+      if (preset === "gemini" && prev.some((entry) => entry.preset === "gemini")) return prev;
       if (preset === "chrome_prompt" && prev.some((entry) => entry.preset === "chrome_prompt")) return prev;
       const customCount = prev.filter((entry) => entry.preset === "custom").length;
       return [...prev, createCredentialEntry(preset, customCount + 1)];
@@ -3750,7 +4092,7 @@ export default function App() {
         return null;
       }
 
-      const decision = normalizeToolDecision(extractJsonObject(raw));
+      const decision = parseToolDecision(raw);
       if (decision) {
         logNow({
           category: "mcp",
@@ -4234,6 +4576,34 @@ export default function App() {
         logNow({ category: "mcp", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision skipped: no MCP tools loaded yet" });
       }
       return { input: args.input, status: "no_entries", detail: "目前沒有可用的工具項目。" };
+    }
+
+    const explicitDecision = inferExplicitToolDecision({
+      input: args.input,
+      availableBuiltinTools: args.availableBuiltinTools,
+      availableMcpTools: args.availableMcpTools
+    });
+    if (explicitDecision) {
+      logNow({
+        category: explicitDecision.type === "mcp_call" ? "mcp" : "tool",
+        agent: args.agent.name,
+        requestId: args.requestId,
+        stage: "tool decision",
+        outcome: "success",
+        message: `Tool decision bypassed by explicit request: ${explicitDecision.tool}`,
+        details: JSON.stringify(explicitDecision, null, 2)
+      });
+      return executeResolvedToolSelection({
+        selection: explicitDecision,
+        input: args.input,
+        agent: args.agent,
+        availableBuiltinTools: args.availableBuiltinTools,
+        availableMcpServers: args.availableMcpServers,
+        availableMcpTools: args.availableMcpTools,
+        onStatus: args.onStatus,
+        promptDetail: args.promptDetail ?? "default",
+        requestId: args.requestId
+      });
     }
 
     args.onStatus?.("正在判斷是否需要呼叫工具中…");
@@ -5374,381 +5744,1408 @@ export default function App() {
     return messages.filter((message) => message.role !== "tool").slice(-limit);
   }
 
-  async function onSend(input: string) {
-    if (mode === "one_to_one" && !activeAgent) {
-      logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: input });
-      return;
+  async function sendOneToOneTurn(args: {
+    displayInput: string;
+    modelInput?: string;
+    requestId?: string;
+    startedAt?: number;
+    extraSystem?: string;
+    modeForLog?: "one_to_one" | "radio";
+    responseFormatter?: (raw: string) => AssistantResponseFormatResult;
+    statusText?: {
+      preparing?: string;
+      responding?: string;
+    };
+  }): Promise<OneToOneTurnResult> {
+    const oneToOneAgent = activeAgent;
+    if (!oneToOneAgent) {
+      throw new Error("No active agent selected.");
     }
 
-    const startedAt = Date.now();
-    const requestId = createLogRequestId(mode === "one_to_one" ? "chat" : "magi");
-    const logAgentLabel = mode === "one_to_one" ? activeAgent?.name ?? "Unknown agent" : "S.C. MAGI";
+    const startedAt = args.startedAt ?? Date.now();
+    const requestId = args.requestId ?? createLogRequestId(args.modeForLog === "radio" ? "radio" : "chat");
+    const input = args.displayInput;
+    const modelInput = args.modelInput ?? args.displayInput;
+    const logMode = args.modeForLog ?? "one_to_one";
+    const docBlocks = docsForAgent.map((d) => `[DOC:${d.title}]\n${d.content}`).join("\n\n");
+    const userSystem = docBlocks ? `You may use these documents as context:\n\n${docBlocks}` : undefined;
+    const baseSystem = mergeSystemText(userSystem, args.extraSystem);
+
     logNow({
       category: "chat",
-      agent: logAgentLabel,
+      agent: oneToOneAgent.name,
       requestId,
       stage: "request_start",
-      message: `Send (${mode})`,
-      details: input
+      message: `Send (${logMode})`,
+      details: modelInput
     });
-
-    const docBlocks = mode === "one_to_one" ? docsForAgent.map((d) => `[DOC:${d.title}]\n${d.content}`).join("\n\n") : "";
-    const userSystem = docBlocks ? `You may use these documents as context:\n\n${docBlocks}` : undefined;
     logNow({
       category: "chat",
-      agent: logAgentLabel,
+      agent: oneToOneAgent.name,
       requestId,
       stage: "context_prepare",
       message: "Context prepared",
-      details: `docs=${mode === "one_to_one" ? docsForAgent.length : 0} history=${history.length}`
+      details: `docs=${docsForAgent.length} history=${history.length}`
     });
 
-    // User message
     const userMsg = msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl });
     append(userMsg);
-    const baseHistory = [...history, userMsg];
-    const modelHistory = limitHistory(baseHistory);
-    let streamingAssistantId: string | null = null;
+    const assistantId = generateId();
+    append({
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      ts: Date.now(),
+      name: oneToOneAgent.name,
+      displayName: oneToOneAgent.name,
+      avatarUrl: oneToOneAgent.avatarUrl,
+      statusText: args.statusText?.preparing ?? "準備回覆中…",
+      isStreaming: true
+    });
 
-    try {
-      if (mode === "one_to_one") {
-        const oneToOneAgent = activeAgent;
-        if (!oneToOneAgent) {
-          throw new Error("No active agent selected.");
-        }
-        logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "request_start", message: "normal talking started" });
-        const assistantId = generateId();
-        streamingAssistantId = assistantId;
-        append({
-          id: assistantId,
-          role: "assistant",
-          content: "",
-          ts: Date.now(),
-          name: oneToOneAgent.name,
-          displayName: oneToOneAgent.name,
-          avatarUrl: oneToOneAgent.avatarUrl,
-          statusText: "準備回覆中…",
-          isStreaming: true
+    const setAssistantStatus = (statusText: string, patch: Partial<ChatMessage> = {}) => {
+      patchMessage(assistantId, { statusText, isStreaming: true, ...patch });
+    };
+    const finalizeAssistant = (patch: Partial<ChatMessage>) => {
+      patchMessage(assistantId, {
+        statusText: undefined,
+        isStreaming: false,
+        hideWhileStreaming: false,
+        ...patch
+      });
+    };
+
+    logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "request_start", message: "normal talking started" });
+
+    const resolvedActiveAgent = hydrateAgentCredentials(oneToOneAgent);
+    const adapter = pickAdapter(resolvedActiveAgent);
+    const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
+      onStatus: setAssistantStatus,
+      requestId
+    });
+    const resolvedToolEntries: ToolEntry[] = [
+      ...resolvedMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
+      ...availableBuiltinToolsForAgent.map((tool) => ({ kind: "builtin" as const, tool }))
+    ];
+    let finalInput = modelInput;
+    let finalSystem = baseSystem;
+    const skillTrace: ChatTraceEntry[] = [];
+    let preparedSkillExecution: PreparedSkillExecution | null = null;
+    let selectedSkillForExecution: SkillConfig | null = null;
+    let latestToolAugmentation: ToolAugmentationResult | null = null;
+
+    const resolveToolAugmentedInputForSend = async (toolArgs: {
+      input: string;
+      decisionContext?: string;
+      onStatus?: (text: string) => void;
+    }) => {
+      const result = await resolveToolAugmentedInputDetailed({
+        input: toolArgs.input,
+        agent: resolvedActiveAgent,
+        adapter,
+        availableBuiltinTools: availableBuiltinToolsForAgent,
+        availableMcpServers: availableMcpServersForAgent,
+        availableMcpTools: resolvedMcpToolsForAgent,
+        toolEntries: resolvedToolEntries,
+        decisionContext: toolArgs.decisionContext,
+        onStatus: toolArgs.onStatus,
+        requestId
+      });
+      latestToolAugmentation = result.status === "tool_called" ? result : null;
+      return result.input;
+    };
+
+    if (skillSessionSnapshot && activeAgent.enableSkills === true) {
+      const allowedSkills = skillSessionSnapshot.availableSkills.filter((item) => item.allowed);
+      const blockedSkills = skillSessionSnapshot.availableSkills.filter((item) => !item.allowed && item.reason);
+      pushSkillTrace(
+        skillTrace,
+        "Skill snapshot",
+        [
+          `可用 skills：${allowedSkills.length} 個`,
+          allowedSkills.length ? allowedSkills.map((item) => `- ${item.name}`).join("\n") : "沒有可用的 skill。",
+          blockedSkills.length ? `不可用：\n${blockedSkills.map((item) => `- ${item.name}: ${item.reason}`).join("\n")}` : ""
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      );
+    }
+
+    if (availableSkillsForAgent.length > 0) {
+      setAssistantStatus("正在分析是否需要使用 skill 中…");
+      const skillDecision = await runSkillDecision({
+        agent: resolvedActiveAgent,
+        adapter,
+        userInput: modelInput,
+        retry: getRetryPolicyForAgent(resolvedActiveAgent),
+        skills: availableSkillsForAgent,
+        language: mcpPromptTemplates.activeId,
+        promptTemplate: promptTemplateRuntime.resolve("skill-decision", mcpPromptTemplates.activeId).template,
+        requestId
+      });
+
+      if (!skillDecision) {
+        pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：skill decision 重試後仍失敗，改走一般 tool decision。`);
+        logNow({ category: "skills", agent: oneToOneAgent.name, ok: false, requestId, stage: "skill decision", message: "Skill decision failed after retries; continue without skills" });
+        finalInput = await resolveToolAugmentedInputForSend({
+          input: modelInput,
+          onStatus: setAssistantStatus
         });
-        const setAssistantStatus = (statusText: string, patch: Partial<ChatMessage> = {}) => {
-          patchMessage(assistantId, { statusText, isStreaming: true, ...patch });
-        };
-        const finalizeAssistant = (patch: Partial<ChatMessage>) => {
-          patchMessage(assistantId, {
-            statusText: undefined,
-            isStreaming: false,
-            hideWhileStreaming: false,
-            ...patch
+      } else if (skillDecision.type === "no_skill") {
+        pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：這一回合不使用 skill。`);
+        logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision resolved: no_skill" });
+        finalInput = await resolveToolAugmentedInputForSend({
+          input: modelInput,
+          onStatus: setAssistantStatus
+        });
+      } else {
+        const selectedSkill = availableSkillsForAgent.find((skill) => skill.id === skillDecision.skillId) ?? null;
+        if (!selectedSkill) {
+          pushSkillTrace(
+            skillTrace,
+            "Skill decision",
+            `模型選擇了不存在或不可用的 skill：${skillDecision.skillId}\n系統已回退到一般 tool decision。`
+          );
+          logNow({
+            category: "skills",
+            agent: oneToOneAgent.name,
+            ok: false,
+            requestId,
+            stage: "skill decision",
+            message: `Skill decision selected unavailable skill: ${skillDecision.skillId}`,
+            details: JSON.stringify(skillDecision)
           });
-        };
-        const resolvedActiveAgent = hydrateAgentCredentials(oneToOneAgent);
-        const adapter = pickAdapter(resolvedActiveAgent);
-        const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
-          onStatus: setAssistantStatus,
-          requestId
-        });
-        const resolvedToolEntries: ToolEntry[] = [
-          ...resolvedMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
-          ...availableBuiltinToolsForAgent.map((tool) => ({ kind: "builtin" as const, tool }))
-        ];
-        let finalInput = input;
-        let finalSystem = userSystem;
-        const skillTrace: ChatTraceEntry[] = [];
-        let preparedSkillExecution: PreparedSkillExecution | null = null;
-        let selectedSkillForExecution: SkillConfig | null = null;
-        let latestToolAugmentation: ToolAugmentationResult | null = null;
-        const resolveToolAugmentedInputForSend = async (toolArgs: {
-          input: string;
-          decisionContext?: string;
-          onStatus?: (text: string) => void;
-        }) => {
-          const result = await resolveToolAugmentedInputDetailed({
-            input: toolArgs.input,
+          finalInput = await resolveToolAugmentedInputForSend({
+            input: modelInput,
+            onStatus: setAssistantStatus
+          });
+        } else {
+          setAssistantStatus(`正在載入 skill「${selectedSkill.name}」中…`);
+          pushSkillTrace(
+            skillTrace,
+            "Skill decision",
+            [`選中 skill：${selectedSkill.name} (${selectedSkill.id})`, `輸入：${stringifyAny(skillDecision.input ?? {})}`].join("\n")
+          );
+          const prepared = await prepareSkillExecution({
+            skill: selectedSkill,
+            skillInput: skillDecision.input,
+            userInput: modelInput,
             agent: resolvedActiveAgent,
             adapter,
             availableBuiltinTools: availableBuiltinToolsForAgent,
             availableMcpServers: availableMcpServersForAgent,
             availableMcpTools: resolvedMcpToolsForAgent,
-            toolEntries: resolvedToolEntries,
-            decisionContext: toolArgs.decisionContext,
-            onStatus: toolArgs.onStatus,
+            deferToolDecision: skillExecutionMode === "multi_turn",
+            onStatus: setAssistantStatus,
             requestId
           });
-          latestToolAugmentation = result.status === "tool_called" ? result : null;
-          return result.input;
-        };
-        if (skillSessionSnapshot && activeAgent.enableSkills === true) {
-          const allowedSkills = skillSessionSnapshot.availableSkills.filter((item) => item.allowed);
-          const blockedSkills = skillSessionSnapshot.availableSkills.filter((item) => !item.allowed && item.reason);
-          pushSkillTrace(
-            skillTrace,
-            "Skill snapshot",
-            [
-              `可用 skills：${allowedSkills.length} 個`,
-              allowedSkills.length ? allowedSkills.map((item) => `- ${item.name}`).join("\n") : "沒有可用的 skill。",
-              blockedSkills.length ? `不可用：\n${blockedSkills.map((item) => `- ${item.name}: ${item.reason}`).join("\n")}` : ""
-            ]
-              .filter(Boolean)
-              .join("\n\n")
-          );
-        }
-
-        if (availableSkillsForAgent.length > 0) {
-          setAssistantStatus("正在分析是否需要使用 skill 中…");
-          const skillDecision = await runSkillDecision({
-            agent: resolvedActiveAgent,
-            adapter,
-            userInput: input,
-            retry: getRetryPolicyForAgent(resolvedActiveAgent),
-            skills: availableSkillsForAgent,
-            language: mcpPromptTemplates.activeId,
-            promptTemplate: promptTemplateRuntime.resolve("skill-decision", mcpPromptTemplates.activeId).template,
-            requestId
-          });
-
-          if (!skillDecision) {
-            pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：skill decision 重試後仍失敗，改走一般 tool decision。`);
-            logNow({ category: "skills", agent: oneToOneAgent.name, ok: false, requestId, stage: "skill decision", message: "Skill decision failed after retries; continue without skills" });
-            finalInput = await resolveToolAugmentedInputForSend({
-              input,
-              onStatus: setAssistantStatus
-            });
-          } else if (skillDecision.type === "no_skill") {
-            pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：這一回合不使用 skill。`);
-            logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision resolved: no_skill" });
-            finalInput = await resolveToolAugmentedInputForSend({
-              input,
-              onStatus: setAssistantStatus
-            });
-          } else {
-            const selectedSkill = availableSkillsForAgent.find((skill) => skill.id === skillDecision.skillId) ?? null;
-            if (!selectedSkill) {
-              pushSkillTrace(
-                skillTrace,
-                "Skill decision",
-                `模型選擇了不存在或不可用的 skill：${skillDecision.skillId}\n系統已回退到一般 tool decision。`
-              );
-              logNow({
-                category: "skills",
-                agent: oneToOneAgent.name,
-                ok: false,
-                requestId,
-                stage: "skill decision",
-                message: `Skill decision selected unavailable skill: ${skillDecision.skillId}`,
-                details: JSON.stringify(skillDecision)
-              });
-              finalInput = await resolveToolAugmentedInputForSend({
-                input,
-                onStatus: setAssistantStatus
-              });
-            } else {
-              setAssistantStatus(`正在載入 skill「${selectedSkill.name}」中…`);
-              pushSkillTrace(
-                skillTrace,
-                "Skill decision",
-                [`選中 skill：${selectedSkill.name} (${selectedSkill.id})`, `輸入：${stringifyAny(skillDecision.input ?? {})}`].join("\n")
-              );
-              const prepared = await prepareSkillExecution({
-                skill: selectedSkill,
-                skillInput: skillDecision.input,
-                userInput: input,
-                agent: resolvedActiveAgent,
-                adapter,
-                availableBuiltinTools: availableBuiltinToolsForAgent,
-                availableMcpServers: availableMcpServersForAgent,
-                availableMcpTools: resolvedMcpToolsForAgent,
-                deferToolDecision: skillExecutionMode === "multi_turn",
-                onStatus: setAssistantStatus,
-                requestId
-              });
-              preparedSkillExecution = prepared;
-              selectedSkillForExecution = selectedSkill;
-              finalInput = prepared.finalInput;
-              finalSystem = prepared.system;
-              if (prepared.toolAugmentation?.status === "tool_called") {
-                latestToolAugmentation = prepared.toolAugmentation;
-              }
-              skillTrace.push(...prepared.trace);
-              logNow({
-                category: "skills",
-                agent: oneToOneAgent.name,
-                ok: true,
-                requestId,
-                stage: "skill decision",
-                message: `Skill selected: ${selectedSkill.name}`,
-                details: JSON.stringify(skillDecision.input ?? {})
-              });
-            }
+          preparedSkillExecution = prepared;
+          selectedSkillForExecution = selectedSkill;
+          finalInput = prepared.finalInput;
+          finalSystem = mergeSystemText(prepared.system, args.extraSystem);
+          if (prepared.toolAugmentation?.status === "tool_called") {
+            latestToolAugmentation = prepared.toolAugmentation;
           }
-        } else {
-          if (activeAgent.enableSkills === true) {
-            pushSkillTrace(skillTrace, "Skill decision", "沒有可用的 skill，已略過 skill decision。");
-          }
-          logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision skipped: no available skills" });
-          finalInput = await resolveToolAugmentedInputForSend({
-            input,
-            onStatus: setAssistantStatus
+          skillTrace.push(...prepared.trace);
+          logNow({
+            category: "skills",
+            agent: oneToOneAgent.name,
+            ok: true,
+            requestId,
+            stage: "skill decision",
+            message: `Skill selected: ${selectedSkill.name}`,
+            details: JSON.stringify(skillDecision.input ?? {})
           });
         }
+      }
+    } else {
+      if (activeAgent.enableSkills === true) {
+        pushSkillTrace(skillTrace, "Skill decision", "沒有可用的 skill，已略過 skill decision。");
+      }
+      logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision skipped: no available skills" });
+      finalInput = await resolveToolAugmentedInputForSend({
+        input: modelInput,
+        onStatus: setAssistantStatus
+      });
+    }
 
-        if (selectedSkillForExecution && preparedSkillExecution) {
-          if (skillExecutionMode === "multi_turn") {
-            const executed = await executeMultiTurnSkill({
-              initialTrace: skillTrace,
-              prepared: preparedSkillExecution,
-              skill: selectedSkillForExecution,
-              agent: resolvedActiveAgent,
-              adapter,
-              userInput: input,
-              assistantMessageId: assistantId,
-              onStatus: setAssistantStatus,
-              requestId
-            });
-            finalInput = executed.finalInput;
-            finalSystem = preparedSkillExecution.system;
-            patchMessage(assistantId, {
-              skillTrace: executed.trace.length ? executed.trace : undefined,
-              skillGoal: input,
-              skillTodo: executed.todo.length ? executed.todo : undefined,
-              skillPhase: executed.phase,
-              statusText: "正在生成最終回覆中…",
-              isStreaming: true,
-              hideWhileStreaming: false
-            });
-            skillTrace.length = 0;
-            skillTrace.push(...executed.trace);
-            if (executed.finalAnswerOverride) {
-              const runtimeOverrideFailed = executed.finalAnswerOverride.startsWith("【執行失敗】");
-              finalizeAssistant({
-                content: executed.finalAnswerOverride,
-                skillTrace: executed.trace.length ? executed.trace : undefined,
-                skillGoal: input,
-                skillTodo: executed.todo.length ? executed.todo : undefined,
-                skillPhase: executed.phase
-              });
-              logNow({
-                category: "chat",
-                agent: oneToOneAgent.name,
-                ok: !runtimeOverrideFailed,
-                requestId,
-                stage: "final",
-                outcome: runtimeOverrideFailed ? "failure" : "success",
-                message: runtimeOverrideFailed ? "normal talking failed via multi-turn runtime override" : "normal talking completed via multi-turn runtime override",
-                details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
-              });
-              return;
-            }
-          }
-
-          if (skillExecutionMode !== "multi_turn") {
-            pushSkillExecutionModeTrace(skillTrace, {
-              mode: "single_turn",
-              verifyMax: 0
-            });
-          }
-        }
-
+    if (selectedSkillForExecution && preparedSkillExecution) {
+      if (skillExecutionMode === "multi_turn") {
+        const executed = await executeMultiTurnSkill({
+          initialTrace: skillTrace,
+          prepared: preparedSkillExecution,
+          skill: selectedSkillForExecution,
+          agent: resolvedActiveAgent,
+          adapter,
+          userInput: modelInput,
+          assistantMessageId: assistantId,
+          onStatus: setAssistantStatus,
+          requestId
+        });
+        finalInput = executed.finalInput;
+        finalSystem = mergeSystemText(preparedSkillExecution.system, args.extraSystem);
         patchMessage(assistantId, {
-          skillTrace: skillTrace.length ? skillTrace : undefined,
-          skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined,
-          statusText: "正在生成回覆中…",
-          isStreaming: true
+          skillTrace: executed.trace.length ? executed.trace : undefined,
+          skillGoal: modelInput,
+          skillTodo: executed.todo.length ? executed.todo : undefined,
+          skillPhase: executed.phase,
+          statusText: "正在生成最終回覆中…",
+          isStreaming: true,
+          hideWhileStreaming: false
         });
-
-        let sawDelta = false;
-        let buffered = "";
-        const onDelta = (t: string) => {
-          buffered += t;
-          const thinkState = getThinkStreamingState(buffered);
-          patchMessage(assistantId, {
-            content: buffered,
-            hideWhileStreaming: thinkState.hideWhileStreaming,
-            statusText: thinkState.statusText,
-            isStreaming: true
-          });
-          if (!sawDelta && t) {
-            sawDelta = true;
-            logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "stream", message: "normal talking streaming started" });
-          }
-        };
-
-        const full = await runOneToOneWithLoadBalancer({
-          logicalAgent: oneToOneAgent,
-          input: finalInput,
-          history: limitHistory(history),
-          system: finalSystem,
-          requestId,
-          requestLabel: "chat response",
-          onDelta,
-          onLog: (t) => pushLog({ category: "retry", agent: oneToOneAgent.name, requestId, stage: "chat response", message: t })
-        });
-        const terminalFailure = detectTerminalAgentFailure(full);
-        if (terminalFailure) {
-          const failureContent = buildAgentFailureContent(terminalFailure, input);
+        skillTrace.length = 0;
+        skillTrace.push(...executed.trace);
+        if (executed.finalAnswerOverride) {
+          const runtimeOverrideFailed = executed.finalAnswerOverride.startsWith("【執行失敗】");
           finalizeAssistant({
-            content: failureContent,
-            skillTrace: skillTrace.length ? skillTrace : undefined,
-            skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined
+            content: executed.finalAnswerOverride,
+            skillTrace: executed.trace.length ? executed.trace : undefined,
+            skillGoal: modelInput,
+            skillTodo: executed.todo.length ? executed.todo : undefined,
+            skillPhase: executed.phase
           });
           logNow({
             category: "chat",
             agent: oneToOneAgent.name,
-            ok: false,
+            ok: !runtimeOverrideFailed,
             requestId,
             stage: "final",
-            outcome: "failure",
-            message: "normal talking failed",
-            details: terminalFailure
+            outcome: runtimeOverrideFailed ? "failure" : "success",
+            message: runtimeOverrideFailed ? "normal talking failed via multi-turn runtime override" : "normal talking completed via multi-turn runtime override",
+            details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
           });
-          return;
-        }
-        if (!String(full ?? "").trim()) {
-          const latestToolResult = latestToolAugmentation as ToolAugmentationResult | null;
-          const fallbackContent = buildEmptyResponseFallbackContent(input, latestToolResult, selectedSkillForExecution);
-          const emptyResponseDetails = [`elapsed_ms=${Date.now() - startedAt}`];
-          if (latestToolResult?.toolLabel) {
-            emptyResponseDetails.push(`last_tool=${latestToolResult.toolLabel}`);
-          }
-          if (selectedSkillForExecution) {
-            emptyResponseDetails.push(`selected_skill=${selectedSkillForExecution.name} (${selectedSkillForExecution.id})`);
-          }
-          if (latestToolResult?.toolOutput !== undefined) {
-            emptyResponseDetails.push(`last_tool_output=\n${stringifyAny(latestToolResult.toolOutput)}`);
-          }
-          finalizeAssistant({
-            content: fallbackContent,
-            skillTrace: skillTrace.length ? skillTrace : undefined,
-            skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined
-          });
-          logNow({
-            category: "chat",
-            agent: oneToOneAgent.name,
-            ok: false,
+          return {
             requestId,
-            stage: "final",
-            outcome: "degraded",
-            message: "normal talking returned empty response",
-            details: emptyResponseDetails.join("\n\n")
-          });
-          return;
+            status: runtimeOverrideFailed ? "failure" : "success",
+            displayContent: executed.finalAnswerOverride
+          };
         }
-        finalizeAssistant({
-          content: full,
-          skillTrace: skillTrace.length ? skillTrace : undefined,
-          skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? input : undefined
+      }
+
+      if (skillExecutionMode !== "multi_turn") {
+        pushSkillExecutionModeTrace(skillTrace, {
+          mode: "single_turn",
+          verifyMax: 0
         });
-        logNow({
-          category: "chat",
-          agent: oneToOneAgent.name,
-          ok: true,
-          requestId,
-          stage: "final",
-          outcome: "success",
-          message: "normal talking completed",
-          details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${full.length}\n\n${full}`
-        });
+      }
+    }
+
+    patchMessage(assistantId, {
+      skillTrace: skillTrace.length ? skillTrace : undefined,
+      skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined,
+      statusText: args.statusText?.responding ?? "正在生成回覆中…",
+      isStreaming: true
+    });
+
+    let sawDelta = false;
+    let buffered = "";
+    const onDelta = (text: string) => {
+      buffered += text;
+      const thinkState = getThinkStreamingState(buffered);
+      patchMessage(assistantId, {
+        content: buffered,
+        hideWhileStreaming: thinkState.hideWhileStreaming,
+        statusText: thinkState.statusText ?? (sawDelta ? args.statusText?.responding : undefined),
+        isStreaming: true
+      });
+      if (!sawDelta && text) {
+        sawDelta = true;
+        logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "stream", message: "normal talking streaming started" });
+      }
+    };
+
+    const full = await runOneToOneWithLoadBalancer({
+      logicalAgent: oneToOneAgent,
+      input: finalInput,
+      history: limitHistory(history),
+      system: finalSystem,
+      requestId,
+      requestLabel: "chat response",
+      onDelta,
+      onLog: (text) => pushLog({ category: "retry", agent: oneToOneAgent.name, requestId, stage: "chat response", message: text })
+    });
+    const terminalFailure = detectTerminalAgentFailure(full);
+    if (terminalFailure) {
+      const failureContent = buildAgentFailureContent(terminalFailure, modelInput);
+      finalizeAssistant({
+        content: failureContent,
+        skillTrace: skillTrace.length ? skillTrace : undefined,
+        skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined
+      });
+      logNow({
+        category: "chat",
+        agent: oneToOneAgent.name,
+        ok: false,
+        requestId,
+        stage: "final",
+        outcome: "failure",
+        message: "normal talking failed",
+        details: terminalFailure
+      });
+      return {
+        requestId,
+        status: "failure",
+        displayContent: failureContent
+      };
+    }
+    if (!String(full ?? "").trim()) {
+      const latestToolResult = latestToolAugmentation as ToolAugmentationResult | null;
+      const fallbackContent = buildEmptyResponseFallbackContent(modelInput, latestToolResult, selectedSkillForExecution);
+      const emptyResponseDetails = [`elapsed_ms=${Date.now() - startedAt}`];
+      if (latestToolResult?.toolLabel) {
+        emptyResponseDetails.push(`last_tool=${latestToolResult.toolLabel}`);
+      }
+      if (selectedSkillForExecution) {
+        emptyResponseDetails.push(`selected_skill=${selectedSkillForExecution.name} (${selectedSkillForExecution.id})`);
+      }
+      if (latestToolResult?.toolOutput !== undefined) {
+        emptyResponseDetails.push(`last_tool_output=\n${stringifyAny(latestToolResult.toolOutput)}`);
+      }
+      finalizeAssistant({
+        content: fallbackContent,
+        skillTrace: skillTrace.length ? skillTrace : undefined,
+        skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined
+      });
+      logNow({
+        category: "chat",
+        agent: oneToOneAgent.name,
+        ok: false,
+        requestId,
+        stage: "final",
+        outcome: "degraded",
+        message: "normal talking returned empty response",
+        details: emptyResponseDetails.join("\n\n")
+      });
+      return {
+        requestId,
+        status: fallbackContent.startsWith("【執行失敗】") ? "failure" : "degraded",
+        displayContent: fallbackContent
+      };
+    }
+
+    const formatted = args.responseFormatter ? args.responseFormatter(full) : { displayContent: full };
+    finalizeAssistant({
+      content: formatted.displayContent,
+      skillTrace: skillTrace.length ? skillTrace : undefined,
+      skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined
+    });
+    logNow({
+      category: "chat",
+      agent: oneToOneAgent.name,
+      ok: true,
+      requestId,
+      stage: "final",
+      outcome: "success",
+      message: "normal talking completed",
+      details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${formatted.displayContent.length}\n\n${formatted.displayContent}`
+    });
+    return {
+      requestId,
+      status: "success",
+      displayContent: formatted.displayContent,
+      spokenContent: formatted.spokenContent
+    };
+  }
+
+  function getCredentialApiKey(
+    credential: ModelCredentialEntry | null,
+    key?: ModelCredentialEntry["keys"][number]
+  ) {
+    if (!credential) return "";
+    const target = key && key.apiKey.trim() ? key : credential.keys.find((entry) => entry.apiKey.trim());
+    return target?.apiKey.trim() ?? "";
+  }
+
+  function resetRadioTurnBuffers() {
+    radioChunkTextsRef.current = new Map();
+    radioNextChunkIndexRef.current = 0;
+    radioPendingTranscriptionsRef.current = 0;
+    radioPendingFinalizeRef.current = false;
+    radioRecorderStoppedRef.current = false;
+    radioFinalizeInFlightRef.current = false;
+    radioSpeechStartedAtRef.current = null;
+    radioLastVoiceAtRef.current = null;
+  }
+
+  function computeRadioContiguousChunkIndex() {
+    const orderedIndexes = Array.from(radioChunkTextsRef.current.keys()).sort((left, right) => left - right);
+    let expected = 0;
+    for (const index of orderedIndexes) {
+      if (index !== expected) break;
+      expected += 1;
+    }
+    return expected - 1;
+  }
+
+  function syncRadioDraftState(patch?: Partial<RadioSessionState>) {
+    const raw = joinOrderedTranscriptChunks(radioChunkTextsRef.current);
+    setRadioSessionState((prev) => ({
+      ...prev,
+      draftTranscriptRaw: raw,
+      currentChunkIndex: radioNextChunkIndexRef.current,
+      lastProcessedChunkIndex: computeRadioContiguousChunkIndex(),
+      ...patch
+    }));
+  }
+
+  function stopRadioAudioPlayback() {
+    const audio = radioAudioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.src = "";
+    radioAudioRef.current = null;
+  }
+
+  function clearRadioChunkTimer() {
+    if (radioChunkTimerRef.current !== null) {
+      window.clearTimeout(radioChunkTimerRef.current);
+      radioChunkTimerRef.current = null;
+    }
+  }
+
+  function stopRadioSpeechMonitor() {
+    if (radioVadFrameRef.current !== null) {
+      window.cancelAnimationFrame(radioVadFrameRef.current);
+      radioVadFrameRef.current = null;
+    }
+    try {
+      radioSourceNodeRef.current?.disconnect();
+    } catch {
+      // Ignore audio node cleanup failures.
+    }
+    try {
+      radioAnalyserRef.current?.disconnect();
+    } catch {
+      // Ignore analyser cleanup failures.
+    }
+    radioSourceNodeRef.current = null;
+    radioAnalyserRef.current = null;
+    const context = radioAudioContextRef.current;
+    radioAudioContextRef.current = null;
+    if (context) {
+      void context.close().catch(() => undefined);
+    }
+  }
+
+  function stopRadioCapture() {
+    stopRadioSpeechMonitor();
+    clearRadioChunkTimer();
+    const recorder = radioRecorderRef.current;
+    radioRecorderRef.current = null;
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        // Ignore recorder stop races.
+      }
+    }
+
+    const stream = radioMediaStreamRef.current;
+    radioMediaStreamRef.current = null;
+    if (stream) {
+      for (const track of stream.getTracks()) {
+        track.stop();
+      }
+    }
+  }
+
+  function stopRadioSession(options?: { status?: RadioSessionState["status"]; lastError?: string }) {
+    radioSessionIdRef.current = null;
+    stopRadioAudioPlayback();
+    stopRadioCapture();
+    resetRadioTurnBuffers();
+    setRadioSessionState({
+      ...getDefaultRadioSessionState(),
+      status: options?.status ?? "idle",
+      lastError: options?.lastError
+    });
+  }
+
+  function handleRadioSessionFailure(message: string, requestId?: string, stage?: string) {
+    radioSessionIdRef.current = null;
+    if (requestId || stage) {
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        ok: false,
+        requestId,
+        stage,
+        outcome: "failure",
+        message: "Radio session failed",
+        details: message
+      });
+    }
+    stopRadioAudioPlayback();
+    stopRadioCapture();
+    resetRadioTurnBuffers();
+    setRadioSessionState((prev) => ({
+      ...prev,
+      status: "error",
+      lastError: message
+    }));
+  }
+
+  async function restartRadioAfterRefineIssue(sessionId: string, requestId: string, details: string) {
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId,
+      stage: "refine_user_turn",
+      outcome: "degraded",
+      message: "Radio refine failed; returning to human turn",
+      details
+    });
+    if (radioSessionIdRef.current !== sessionId) return;
+    await beginRadioHumanTurn(sessionId, { notice: "整理逐字稿失敗，請再說一次。" });
+  }
+
+  async function maybeFinalizeRadioTurn(sessionId: string) {
+    if (radioSessionIdRef.current !== sessionId) return;
+    if (!radioPendingFinalizeRef.current || !radioRecorderStoppedRef.current || radioPendingTranscriptionsRef.current > 0) return;
+    if (radioFinalizeInFlightRef.current) return;
+    radioFinalizeInFlightRef.current = true;
+    radioPendingFinalizeRef.current = false;
+
+    const activeRadioAgent = activeAgent;
+    if (!activeRadioAgent) {
+      handleRadioSessionFailure("Radio mode 需要先選擇一個 Main Agent。");
+      return;
+    }
+
+    const rawDraft = joinOrderedTranscriptChunks(radioChunkTextsRef.current);
+    const trimmedDraft = rawDraft;
+    if (!trimmedDraft) {
+      radioFinalizeInFlightRef.current = false;
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "paused",
+        lastError: "沒有可送出的語音內容。"
+      }));
+      return;
+    }
+
+    const refineRequestId = createLogRequestId("radio");
+    const refineAgent = selectedRadioRefineAgent ?? activeRadioAgent;
+    setRadioSessionState((prev) => ({
+      ...prev,
+      status: "refining_user_turn",
+      turn: "human",
+      draftTranscriptRefinedPreview: undefined,
+      lastError: undefined
+    }));
+    logNow({
+      category: "radio",
+      agent: refineAgent.name,
+      requestId: refineRequestId,
+      stage: "refine_user_turn",
+      message: "Radio user turn refining",
+      details: trimmedDraft
+    });
+
+    try {
+      const refined = await runOneToOneWithLoadBalancer({
+        logicalAgent: refineAgent,
+        input: trimmedDraft,
+        history: [],
+        system: String(radioSettings.refinePrompt ?? "").trim() || DEFAULT_RADIO_REFINE_PROMPT,
+        requestId: refineRequestId,
+        requestLabel: "radio refine",
+        onDelta: () => {},
+        onLog: (text) => pushLog({ category: "retry", agent: refineAgent.name, requestId: refineRequestId, stage: "radio refine", message: text })
+      });
+      const terminalFailure = detectTerminalAgentFailure(refined);
+      if (terminalFailure) {
+        await restartRadioAfterRefineIssue(sessionId, refineRequestId, terminalFailure);
         return;
       }
+      const refinedText = String(refined ?? "").trim();
+      if (!refinedText) {
+        await restartRadioAfterRefineIssue(sessionId, refineRequestId, "整理語音逐字稿時模型沒有回傳任何內容。");
+        return;
+      }
+      const fallbackRefinedText = buildLocalRadioRefineFallback(trimmedDraft);
+      const finalRefinedText = shouldRejectRadioRefine(trimmedDraft, refinedText) ? fallbackRefinedText : refinedText;
+      if (finalRefinedText !== refinedText) {
+        logNow({
+          category: "radio",
+          agent: refineAgent.name,
+          requestId: refineRequestId,
+          stage: "refine_user_turn",
+          outcome: "degraded",
+          message: "Radio refine rejected; using local cleanup fallback",
+          details: `raw=${trimmedDraft}\n\nrefined=${refinedText}\n\nfallback=${finalRefinedText}`
+        });
+      }
+
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "sending_to_agent",
+        turn: "agent",
+        draftTranscriptRefinedPreview: finalRefinedText,
+        lastError: undefined
+      }));
+
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "agent_thinking",
+        turn: "agent",
+        draftTranscriptRefinedPreview: finalRefinedText,
+        lastError: undefined
+      }));
+
+      const agentResult = await sendOneToOneTurn({
+        displayInput: finalRefinedText,
+        modelInput: finalRefinedText,
+        startedAt: Date.now(),
+        modeForLog: "radio",
+        extraSystem: buildRadioAgentSystemPrompt(),
+        responseFormatter: formatRadioAssistantResponse,
+        statusText: {
+          preparing: "Agent 準備回話中…",
+          responding: "Agent 正在回話中…"
+        }
+      });
+
+      if (agentResult.status === "failure" || !agentResult.spokenContent?.trim()) {
+        handleRadioSessionFailure(agentResult.displayContent || "Agent 回覆失敗。", agentResult.requestId, "agent_turn");
+        return;
+      }
+
+      if (radioSessionIdRef.current !== sessionId) return;
+
+      if (!radioTtsLoadBalancer?.id) {
+        handleRadioSessionFailure("請先設定可用的 TTS load balancer。", agentResult.requestId, "tts");
+        return;
+      }
+
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "agent_synthesizing",
+        turn: "agent",
+        lastError: undefined
+      }));
+      logNow({
+        category: "radio",
+        agent: activeRadioAgent.name,
+        requestId: agentResult.requestId,
+        stage: "tts",
+        message: "Radio TTS requested",
+        details: agentResult.spokenContent
+      });
+
+      let ttsText = agentResult.spokenContent;
+      let audioBlob: Blob;
+      try {
+        audioBlob = await runRadioTaskWithLoadBalancer({
+          loadBalancerId: radioTtsLoadBalancer.id,
+          requestId: agentResult.requestId,
+          stage: "radio tts",
+          radioModel: "(from load balancer)",
+          execute: async (candidate) => {
+            const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+            if (!apiKey) {
+              throw new Error("TTS load balancer instance is missing API key.");
+            }
+            return synthesizeGeminiSpeech({
+              credential: candidate.credential,
+              apiKey,
+              settings: radioSettings,
+              text: ttsText,
+              modelOverride: candidate.instance.model
+            });
+          },
+          describeSuccess: (blob) => `audio_bytes=${blob.size}`
+        });
+      } catch (ttsError: any) {
+        if (isRadioTtsQuotaExhaustedError(ttsError)) {
+          logNow({
+            category: "radio",
+            agent: activeRadioAgent.name,
+            requestId: agentResult.requestId,
+            stage: "tts",
+            outcome: "degraded",
+            message: "Radio TTS quota exhausted, skipping playback",
+            details: String(ttsError?.message ?? ttsError)
+          });
+          await playRadioSystemTone();
+          if (radioSessionIdRef.current !== sessionId) return;
+          await beginRadioHumanTurn(sessionId, { notice: "TTS quota exhausted, text only." });
+          return;
+        }
+        if (!isRadioTtsEmptyAudioError(ttsError)) {
+          throw ttsError;
+        }
+        logNow({
+          category: "radio",
+          agent: activeRadioAgent.name,
+          requestId: agentResult.requestId,
+          stage: "tts",
+          outcome: "degraded",
+          message: "Radio TTS empty audio, retrying with English fallback",
+          details: String(ttsError?.message ?? ttsError)
+        });
+
+        const fallbackTtsRequestId = createLogRequestId("radio");
+        const translated = await runOneToOneWithLoadBalancer({
+          logicalAgent: activeRadioAgent,
+          input: ttsText,
+          history: [],
+          system: buildRadioTtsFallbackSystemPrompt(),
+          requestId: fallbackTtsRequestId,
+          requestLabel: "radio tts fallback",
+          onDelta: () => {},
+          onLog: (text) => pushLog({ category: "retry", agent: activeRadioAgent.name, requestId: fallbackTtsRequestId, stage: "radio tts fallback", message: text })
+        });
+        const fallbackFailure = detectTerminalAgentFailure(translated);
+        if (fallbackFailure) {
+          throw new Error(`TTS fallback translation failed.\n${fallbackFailure}`);
+        }
+        const translatedText = String(translated ?? "").trim();
+        if (!translatedText) {
+          throw new Error(`TTS fallback translation returned empty content.\n${String(ttsError?.message ?? ttsError)}`);
+        }
+        ttsText = translatedText;
+        logNow({
+          category: "radio",
+          agent: activeRadioAgent.name,
+          requestId: fallbackTtsRequestId,
+          stage: "tts",
+          outcome: "degraded",
+          message: "Radio TTS fallback translation ready",
+          details: ttsText
+        });
+        try {
+          audioBlob = await runRadioTaskWithLoadBalancer({
+            loadBalancerId: radioTtsLoadBalancer.id,
+            requestId: fallbackTtsRequestId,
+            stage: "radio tts",
+            radioModel: "(from load balancer)",
+            execute: async (candidate) => {
+              const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+              if (!apiKey) {
+                throw new Error("TTS load balancer instance is missing API key.");
+              }
+              return synthesizeGeminiSpeech({
+                credential: candidate.credential,
+                apiKey,
+                settings: radioSettings,
+                text: ttsText,
+                modelOverride: candidate.instance.model
+              });
+            },
+            describeSuccess: (blob) => `audio_bytes=${blob.size}`
+          });
+        } catch (fallbackTtsError: any) {
+          if (isRadioTtsQuotaExhaustedError(fallbackTtsError)) {
+            logNow({
+              category: "radio",
+              agent: activeRadioAgent.name,
+              requestId: fallbackTtsRequestId,
+              stage: "tts",
+              outcome: "degraded",
+              message: "Radio TTS quota exhausted after fallback, skipping playback",
+              details: String(fallbackTtsError?.message ?? fallbackTtsError)
+            });
+            await playRadioSystemTone();
+            if (radioSessionIdRef.current !== sessionId) return;
+            await beginRadioHumanTurn(sessionId, { notice: "TTS quota exhausted, text only." });
+            return;
+          }
+          throw fallbackTtsError;
+        }
+      }
+      if (radioSessionIdRef.current !== sessionId) return;
+      setRadioSessionState((prev) => ({
+        ...prev,
+        lastNotice: undefined
+      }));
+
+      stopRadioAudioPlayback();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      radioAudioRef.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        if (radioAudioRef.current === audio) {
+          radioAudioRef.current = null;
+        }
+        if (radioSessionIdRef.current !== sessionId) return;
+        void (async () => {
+          await playRadioSystemTone();
+          if (radioSessionIdRef.current !== sessionId) return;
+          await beginRadioHumanTurn(sessionId);
+        })();
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        if (radioAudioRef.current === audio) {
+          radioAudioRef.current = null;
+        }
+        handleRadioSessionFailure("語音播放失敗。", agentResult.requestId, "audio_playback");
+      };
+
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "agent_speaking",
+        turn: "agent"
+      }));
+      logNow({
+        category: "radio",
+        agent: activeRadioAgent.name,
+        requestId: agentResult.requestId,
+        stage: "audio_playback",
+        message: "Radio playback started"
+      });
+      await audio.play();
+    } catch (e: any) {
+      handleRadioSessionFailure(String(e?.message ?? e), refineRequestId, "radio_finalize");
+    } finally {
+      radioFinalizeInFlightRef.current = false;
+    }
+  }
+
+  async function beginRadioHumanTurn(sessionId: string, options?: { notice?: string }) {
+    if (radioSessionIdRef.current !== sessionId) return;
+
+    stopRadioAudioPlayback();
+    stopRadioCapture();
+    resetRadioTurnBuffers();
+    setRadioSessionState({
+      status: "requesting_permission",
+      turn: "human",
+      draftTranscriptRaw: "",
+      draftTranscriptRefinedPreview: undefined,
+      lastError: undefined,
+      lastNotice: options?.notice,
+      currentChunkIndex: 0,
+      lastProcessedChunkIndex: -1
+    });
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId: sessionId,
+      stage: "permission",
+      message: "Radio microphone permission requested"
+    });
+
+    const microphoneIssue = getRadioMicrophoneSupportIssue();
+    if (microphoneIssue) {
+      handleRadioSessionFailure(microphoneIssue, sessionId, "permission");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (radioSessionIdRef.current !== sessionId) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
+      radioMediaStreamRef.current = stream;
+      radioRecorderStoppedRef.current = false;
+
+      const AudioContextCtor =
+        typeof window !== "undefined"
+          ? (globalThis.AudioContext ??
+            (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
+          : undefined;
+      if (AudioContextCtor) {
+        try {
+          const context = new AudioContextCtor();
+          const source = context.createMediaStreamSource(stream);
+          const analyser = context.createAnalyser();
+          analyser.fftSize = 2048;
+          analyser.smoothingTimeConstant = 0.2;
+          source.connect(analyser);
+          radioAudioContextRef.current = context;
+          radioSourceNodeRef.current = source;
+          radioAnalyserRef.current = analyser;
+          const samples = new Uint8Array(analyser.fftSize);
+
+          const monitor = () => {
+            if (radioSessionIdRef.current !== sessionId) return;
+            const currentAnalyser = radioAnalyserRef.current;
+            if (!currentAnalyser || radioPendingFinalizeRef.current) return;
+            currentAnalyser.getByteTimeDomainData(samples);
+            let sum = 0;
+            for (let index = 0; index < samples.length; index += 1) {
+              const centered = (samples[index] - 128) / 128;
+              sum += centered * centered;
+            }
+            const rms = Math.sqrt(sum / samples.length);
+            const now = Date.now();
+            if (rms >= RADIO_VAD_RMS_THRESHOLD) {
+              radioLastVoiceAtRef.current = now;
+              if (radioSpeechStartedAtRef.current === null) {
+                radioSpeechStartedAtRef.current = now;
+              }
+            } else if (
+              radioSpeechStartedAtRef.current !== null &&
+              radioLastVoiceAtRef.current !== null &&
+              now - radioSpeechStartedAtRef.current >= RADIO_MIN_SPEECH_MS &&
+              now - radioLastVoiceAtRef.current >= RADIO_SILENCE_FINALIZE_MS
+            ) {
+              radioPendingFinalizeRef.current = true;
+              logNow({
+                category: "radio",
+                agent: activeAgent?.name ?? "Unknown agent",
+                requestId: sessionId,
+                stage: "silence_detect",
+                message: "Radio silence detected; finalizing human turn",
+                details: `rms=${rms.toFixed(4)}\nsilence_ms=${now - radioLastVoiceAtRef.current}`
+              });
+              stopRadioCapture();
+              return;
+            }
+            radioVadFrameRef.current = window.requestAnimationFrame(monitor);
+          };
+
+          radioVadFrameRef.current = window.requestAnimationFrame(monitor);
+        } catch {
+          stopRadioSpeechMonitor();
+        }
+      }
+
+      const recorderOptions = (() => {
+        const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+        for (const candidate of candidates) {
+          if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(candidate)) {
+            return { mimeType: candidate };
+          }
+        }
+        return undefined;
+      })();
+
+      const handleRecordedBlob = (blob: Blob) => {
+        if (radioSessionIdRef.current !== sessionId) return;
+        if (!blob || blob.size <= 0) return;
+        if (blob.size < MIN_RADIO_STT_BLOB_BYTES) {
+          logNow({
+            category: "radio",
+            agent: activeAgent?.name ?? "Unknown agent",
+            requestId: sessionId,
+            stage: "stt",
+            outcome: "info",
+            message: "Radio tiny chunk skipped",
+            details: `blob_size=${blob.size}\nblob_type=${blob.type || "-"}`
+          });
+          return;
+        }
+        const chunkIndex = radioNextChunkIndexRef.current;
+        radioNextChunkIndexRef.current += 1;
+        radioPendingTranscriptionsRef.current += 1;
+        syncRadioDraftState({ status: "human_transcribing" });
+
+        void (async () => {
+          try {
+            if (!radioSttLoadBalancer?.id) {
+              throw new Error("請先設定可用的 STT load balancer。");
+            }
+            const transcript = await runRadioTaskWithLoadBalancer({
+              loadBalancerId: radioSttLoadBalancer.id,
+              requestId: sessionId,
+              stage: "radio stt",
+              radioModel: "(from load balancer)",
+              execute: async (candidate) => {
+                const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+                if (!apiKey) {
+                  throw new Error("STT load balancer instance is missing API key.");
+                }
+                return transcribeAudioChunk({
+                  credential: candidate.credential,
+                  apiKey,
+                  settings: radioSettings,
+                  blob,
+                  chunkIndex,
+                  modelOverride: candidate.instance.model
+                });
+              },
+              describeSuccess: (text) => `response_length=${String(text ?? "").length}`
+            });
+            if (radioSessionIdRef.current !== sessionId) return;
+            radioChunkTextsRef.current.set(chunkIndex, transcript);
+            syncRadioDraftState();
+            logNow({
+              category: "radio",
+              agent: activeAgent?.name ?? "Unknown agent",
+              requestId: sessionId,
+              stage: "stt",
+              message: `Radio chunk transcribed #${chunkIndex + 1}`,
+              details: transcript
+            });
+          } catch (e: any) {
+            if (radioSessionIdRef.current === sessionId) {
+              handleRadioSessionFailure(String(e?.message ?? e), sessionId, "stt");
+            }
+          } finally {
+            radioPendingTranscriptionsRef.current = Math.max(0, radioPendingTranscriptionsRef.current - 1);
+            if (radioSessionIdRef.current === sessionId) {
+              if (!radioPendingFinalizeRef.current) {
+                syncRadioDraftState({ status: "human_listening" });
+              }
+              void maybeFinalizeRadioTurn(sessionId);
+            }
+          }
+        })();
+      };
+
+      const startRecorderCycle = () => {
+        if (radioSessionIdRef.current !== sessionId) return;
+        const currentStream = radioMediaStreamRef.current;
+        if (!currentStream || radioPendingFinalizeRef.current) return;
+        const recorder = recorderOptions ? new MediaRecorder(currentStream, recorderOptions) : new MediaRecorder(currentStream);
+        radioRecorderRef.current = recorder;
+
+        recorder.ondataavailable = (event) => {
+          handleRecordedBlob(event.data);
+        };
+
+        recorder.onstop = () => {
+          clearRadioChunkTimer();
+          if (radioRecorderRef.current === recorder) {
+            radioRecorderRef.current = null;
+          }
+          if (radioSessionIdRef.current !== sessionId) return;
+          if (radioPendingFinalizeRef.current) {
+            radioRecorderStoppedRef.current = true;
+            void maybeFinalizeRadioTurn(sessionId);
+            return;
+          }
+          startRecorderCycle();
+        };
+
+        recorder.start();
+        radioChunkTimerRef.current = window.setTimeout(() => {
+          if (radioRecorderRef.current === recorder && recorder.state !== "inactive") {
+            try {
+              recorder.stop();
+            } catch {
+              // Ignore recorder stop races.
+            }
+          }
+        }, radioSettings.chunkSeconds * 1000);
+      };
+
+      startRecorderCycle();
+      setRadioSessionState({
+        status: "human_listening",
+        turn: "human",
+        draftTranscriptRaw: "",
+        draftTranscriptRefinedPreview: undefined,
+        lastError: undefined,
+        lastNotice: options?.notice,
+        currentChunkIndex: 0,
+        lastProcessedChunkIndex: -1
+      });
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId: sessionId,
+        stage: "permission",
+        outcome: "success",
+        message: "Radio microphone permission granted"
+      });
+    } catch (e: any) {
+      handleRadioSessionFailure(String(e?.message ?? e), sessionId, "permission");
+    }
+  }
+
+  async function startRadioSession() {
+    if (mode !== "radio") {
+      setMode("radio");
+    }
+    if (!activeAgent) {
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "error",
+        lastError: "請先選擇 Main Agent。"
+      }));
+      return;
+    }
+    if (!radioSttLoadBalancer?.id) {
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "error",
+        lastError: "請先在 Chat Config > Radio 設定可用的 STT load balancer。"
+      }));
+      return;
+    }
+    if (!radioTtsLoadBalancer?.id) {
+      setRadioSessionState((prev) => ({
+        ...prev,
+        status: "error",
+        lastError: "請先在 Chat Config > Radio 設定可用的 TTS load balancer。"
+      }));
+      return;
+    }
+
+    stopRadioSession();
+    const sessionId = createLogRequestId("radio");
+    radioSessionIdRef.current = sessionId;
+    logNow({
+      category: "radio",
+      agent: activeAgent.name,
+      requestId: sessionId,
+      stage: "session",
+      message: "Radio session started"
+    });
+    await beginRadioHumanTurn(sessionId);
+  }
+
+  async function testRadioSystemTone() {
+    const requestId = createLogRequestId("radio");
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId,
+      stage: "tone_test",
+      message: "Radio tone test requested"
+    });
+    await playRadioSystemTone();
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId,
+      stage: "tone_test",
+      outcome: "success",
+      message: "Radio tone test played"
+    });
+  }
+
+  async function testRadioSttLoadBalancer() {
+    const requestId = createLogRequestId("radio");
+    if (!radioSttLoadBalancer?.id) {
+      setRadioProbeState((prev) => ({
+        ...prev,
+        stt: { running: false, ok: false, message: "請先選擇 STT load balancer。" }
+      }));
+      return;
+    }
+    setRadioProbeState((prev) => ({ ...prev, stt: { running: true } }));
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId,
+      stage: "stt_probe",
+      message: "Radio STT probe requested"
+    });
+    try {
+      const transcript = await runRadioTaskWithLoadBalancer({
+        loadBalancerId: radioSttLoadBalancer.id,
+        requestId,
+        stage: "radio stt probe",
+        radioModel: "(from load balancer)",
+        execute: async (candidate) => {
+          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+          if (!apiKey) {
+            throw new Error("STT load balancer instance is missing API key.");
+          }
+          return transcribeAudioChunk({
+            credential: candidate.credential,
+            apiKey,
+            settings: radioSettings,
+            blob: createRadioProbeWavBlob(),
+            chunkIndex: 0,
+            modelOverride: candidate.instance.model,
+            allowEmptyTranscript: true
+          });
+        },
+        describeSuccess: (text) => `response_length=${String(text ?? "").length}`
+      });
+      const message = `STT probe OK${transcript ? `，transcript=${transcript}` : "，provider accepted probe audio"}`;
+      setRadioProbeState((prev) => ({
+        ...prev,
+        stt: { running: false, ok: true, message }
+      }));
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId,
+        stage: "stt_probe",
+        outcome: "success",
+        message: "Radio STT probe passed",
+        details: message
+      });
+    } catch (error: any) {
+      const message = String(error?.message ?? error);
+      setRadioProbeState((prev) => ({
+        ...prev,
+        stt: { running: false, ok: false, message }
+      }));
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId,
+        stage: "stt_probe",
+        outcome: "failure",
+        message: "Radio STT probe failed",
+        details: message
+      });
+    }
+  }
+
+  async function testRadioTtsLoadBalancer() {
+    const requestId = createLogRequestId("radio");
+    if (!radioTtsLoadBalancer?.id) {
+      setRadioProbeState((prev) => ({
+        ...prev,
+        tts: { running: false, ok: false, message: "請先選擇 TTS load balancer。" }
+      }));
+      return;
+    }
+    setRadioProbeState((prev) => ({ ...prev, tts: { running: true } }));
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId,
+      stage: "tts_probe",
+      message: "Radio TTS probe requested"
+    });
+    try {
+      const audioBlob = await runRadioTaskWithLoadBalancer({
+        loadBalancerId: radioTtsLoadBalancer.id,
+        requestId,
+        stage: "radio tts probe",
+        radioModel: "(from load balancer)",
+        execute: async (candidate) => {
+          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+          if (!apiKey) {
+            throw new Error("TTS load balancer instance is missing API key.");
+          }
+          return synthesizeGeminiSpeech({
+            credential: candidate.credential,
+            apiKey,
+            settings: radioSettings,
+            text: "Radio TTS test.",
+            modelOverride: candidate.instance.model
+          });
+        },
+        describeSuccess: (blob) => `audio_bytes=${blob.size}`
+      });
+      const message = `TTS probe OK，audio_bytes=${audioBlob.size}`;
+      setRadioProbeState((prev) => ({
+        ...prev,
+        tts: { running: false, ok: true, message }
+      }));
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId,
+        stage: "tts_probe",
+        outcome: "success",
+        message: "Radio TTS probe passed",
+        details: message
+      });
+    } catch (error: any) {
+      const message = String(error?.message ?? error);
+      setRadioProbeState((prev) => ({
+        ...prev,
+        tts: { running: false, ok: false, message }
+      }));
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId,
+        stage: "tts_probe",
+        outcome: "failure",
+        message: "Radio TTS probe failed",
+        details: message
+      });
+    }
+  }
+
+  async function forceRadioTurnSwitch() {
+    const sessionId = radioSessionIdRef.current;
+    if (!sessionId) return;
+
+    if (radioSessionState.turn === "human") {
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId: sessionId,
+        stage: "manual_turn_switch",
+        message: "Manual turn switch: human -> agent"
+      });
+      radioPendingFinalizeRef.current = true;
+      const recorder = radioRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        try {
+          recorder.stop();
+          return;
+        } catch {
+          // Fall back to capture shutdown below.
+        }
+      }
+      stopRadioCapture();
+      radioRecorderStoppedRef.current = true;
+      void maybeFinalizeRadioTurn(sessionId);
+      return;
+    }
+
+    if (radioSessionState.status === "agent_speaking") {
+      logNow({
+        category: "radio",
+        agent: activeAgent?.name ?? "Unknown agent",
+        requestId: sessionId,
+        stage: "manual_turn_switch",
+        message: "Manual turn switch: agent -> human"
+      });
+      stopRadioAudioPlayback();
+      await beginRadioHumanTurn(sessionId);
+      return;
+    }
+
+    logNow({
+      category: "radio",
+      agent: activeAgent?.name ?? "Unknown agent",
+      requestId: sessionId,
+      stage: "manual_turn_switch",
+      outcome: "info",
+      message: "Manual turn switch ignored",
+      details: `turn=${radioSessionState.turn}\nstatus=${radioSessionState.status}`
+    });
+  }
+
+  async function onSend(input: string) {
+    if (mode === "radio") {
+      logNow({ category: "radio", ok: false, message: "Direct text send skipped in radio mode", details: input });
+      return;
+    }
+    if (mode === "one_to_one") {
+      if (!activeAgent) {
+        logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: input });
+        return;
+      }
+      try {
+        await sendOneToOneTurn({
+          displayInput: input,
+          modelInput: input,
+          startedAt: Date.now(),
+          modeForLog: "one_to_one"
+        });
+      } catch (e: any) {
+        const errorText = buildAgentFailureContent(String(e?.message ?? e), input);
+        append(msg("assistant", errorText, "system", { displayName: "System" }));
+        logNow({
+          category: "chat",
+          agent: activeAgent?.name,
+          ok: false,
+          stage: "final",
+          outcome: "failure",
+          message: "Send failed",
+          details: String(e?.message ?? e)
+        });
+      }
+      return;
+    }
+
+    const startedAt = Date.now();
+    const requestId = createLogRequestId("magi");
+    const userMsg = msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl });
+    append(userMsg);
+    const modelHistory = limitHistory([...history, userMsg]);
+    let streamingAssistantId: string | null = null;
+
+    try {
       const magiMode: MagiMode = mode === "magi_consensus" ? "magi_consensus" : "magi_vote";
       const assistantId = generateId();
       streamingAssistantId = assistantId;
@@ -5817,7 +7214,7 @@ export default function App() {
             requestId,
             requestLabel,
             onDelta: () => {},
-            onLog: (t) => pushLog({ category: "retry", agent: unit.agent.name, requestId, stage: requestLabel, message: t })
+            onLog: (text) => pushLog({ category: "retry", agent: unit.agent.name, requestId, stage: requestLabel, message: text })
           });
         },
         onState: (magiState) => {
@@ -5836,11 +7233,7 @@ export default function App() {
             ok: entry.ok,
             requestId,
             stage: entry.round ? `round_${entry.round}` : "magi",
-            message: [
-              entry.unitId ? `unit=${entry.unitId}` : "",
-              entry.round ? `round=${entry.round}` : "",
-              entry.message
-            ]
+            message: [entry.unitId ? `unit=${entry.unitId}` : "", entry.round ? `round=${entry.round}` : "", entry.message]
               .filter(Boolean)
               .join(" "),
             details: entry.details
@@ -5874,8 +7267,8 @@ export default function App() {
         append(msg("assistant", errorText, "system", { displayName: "System" }));
       }
       logNow({
-        category: mode === "one_to_one" ? "chat" : "magi",
-        agent: mode === "one_to_one" ? activeAgent?.name : "S.C. MAGI",
+        category: "magi",
+        agent: "S.C. MAGI",
         ok: false,
         requestId,
         stage: "final",
@@ -6496,7 +7889,8 @@ export default function App() {
                 }}
                 leaderName={null}
                 userName={userProfile.name}
-                modeLabel={mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}
+                mode={mode}
+                modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
                 onExportRaw={exportRawHistory}
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
@@ -6504,6 +7898,10 @@ export default function App() {
                 onOpenFullscreen={() => setIsChatFullscreen(true)}
                 composerSeed={tutorialComposerSeed}
                 onDraftChange={setChatComposerDraft}
+                radioState={radioSessionState}
+                onStartRadioSession={() => void startRadioSession()}
+                onStopRadioSession={() => stopRadioSession()}
+                onForceRadioTurn={() => void forceRadioTurnSwitch()}
                 onOpenToolResult={(assistantMessageId) =>
                   setTutorialOpenedToolResultMessageIds((current) =>
                     current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
@@ -6533,7 +7931,7 @@ export default function App() {
                 <span className="cc-card-label">Main Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">
-                  {mode === "one_to_one"
+                  {mode === "one_to_one" || mode === "radio"
                     ? loadBalancerSlots.find((entry) => entry.id === activeAgent?.loadBalancerId)?.name ?? "No load balancer"
                     : `MAGI mode 固定使用 ${formatManagedMagiAgentName("Melchior")} / ${formatManagedMagiAgentName("Balthasar")} / ${formatManagedMagiAgentName("Casper")}`}
                 </span>
@@ -6550,15 +7948,15 @@ export default function App() {
               </button>
               <button className="cc-card" onClick={() => setConfigModal("mode")} data-tutorial-id="chat-config-mode-card">
                 <span className="cc-card-label">Mode</span>
-                <strong className="cc-card-value">{mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}</strong>
-                <span className="cc-card-hint">{mode === "one_to_one" ? "1:1 對話" : "S.C. MAGI 裁決模式"}</span>
+                <strong className="cc-card-value">{mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}</strong>
+                <span className="cc-card-hint">{mode === "one_to_one" ? "1:1 對話" : mode === "radio" ? "半雙工對講機模式" : "S.C. MAGI 裁決模式"}</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("history")} data-tutorial-id="chat-config-history-card">
                 <span className="cc-card-label">History</span>
                 <strong className="cc-card-value">{historyMessageLimit} msgs</strong>
                 <span className="cc-card-hint">只保留與對話歷史相關設定</span>
               </button>
-              {mode !== "one_to_one" && (
+              {(mode === "magi_vote" || mode === "magi_consensus") && (
                 <button className="cc-card" onClick={() => setConfigModal("team")}>
                   <span className="cc-card-label">S.C. MAGI</span>
                   <strong className="cc-card-value">{magiReadyCount}/3 ready</strong>
@@ -6567,6 +7965,11 @@ export default function App() {
                   </span>
                 </button>
               )}
+              <button className="cc-card" onClick={() => setConfigModal("radio")}>
+                <span className="cc-card-label">Radio</span>
+                <strong className="cc-card-value">{radioSttLoadBalancer?.name ?? "No STT"} / {radioTtsLoadBalancer?.name ?? "No TTS"}</strong>
+                <span className="cc-card-hint">STT LB + TTS LB</span>
+              </button>
               <button className="cc-card" onClick={() => setConfigModal("docs")} data-tutorial-id="chat-config-docs-card">
                 <span className="cc-card-label">Docs</span>
                 <strong className="cc-card-value">{docs.length}</strong>
@@ -6600,6 +8003,7 @@ export default function App() {
                 <div style={{ display: "grid", gap: 8 }}>
                   {([
                     ["one_to_one", "Normal", "一般一對一對話模式，可自由搭配 skills、MCP、built-in tools 與 docs 使用"],
+                    ["radio", RADIO_MODE_LABEL, "半雙工對講機模式：人類用 STT 說話、停頓後自動切換；Agent 用 TTS 回話"],
                     ["magi_vote", MAGI_MODE_LABELS.magi_vote, "三賢人同步表決，一輪完成裁決，適合快速取得多視角結論"],
                     ["magi_consensus", MAGI_MODE_LABELS.magi_consensus, "三賢人最多三輪反覆協商，若仍無法達成共識則輸出 deadlock"]
                   ] as const).map(([value, title, desc]) => (
@@ -6636,6 +8040,9 @@ export default function App() {
                     </button>
                     <button type="button" onClick={() => addCredential("groq")} style={iconActionBtn} data-tutorial-id="credential-add-groq">
                       + Groq
+                    </button>
+                    <button type="button" onClick={() => addCredential("gemini")} style={iconActionBtn}>
+                      + Gemini
                     </button>
                     <button type="button" onClick={() => addCredential("custom")} style={iconActionBtn}>
                       + Custom
@@ -6687,12 +8094,12 @@ export default function App() {
                           <input
                             value={slot.endpoint}
                             onChange={(e) => updateCredential(slot.id, { endpoint: e.target.value })}
-                            disabled={slot.preset === "openai" || slot.preset === "groq"}
+                            disabled={slot.preset === "openai" || slot.preset === "groq" || slot.preset === "gemini"}
                             style={{
                               width: "100%",
                               marginTop: 0,
                               boxSizing: "border-box",
-                              opacity: slot.preset === "openai" || slot.preset === "groq" ? 0.72 : 1,
+                              opacity: slot.preset === "openai" || slot.preset === "groq" || slot.preset === "gemini" ? 0.72 : 1,
                               ...selectStyle
                             }}
                             placeholder="https://api.example.com/v1"
@@ -6900,6 +8307,22 @@ export default function App() {
                     })}
                   </div>
                 </div>
+              </HelpModal>
+            )}
+
+            {configModal === "radio" && (
+              <HelpModal title="Radio" onClose={() => setConfigModal(null)} width="min(620px, 96vw)">
+                <RadioConfigPanel
+                  settings={radioSettings}
+                  setSettings={setRadioSettings}
+                  loadBalancerOptions={loadBalancerSlots}
+                  refineAgentOptions={radioRefineAgentOptions}
+                  sttProbeState={radioProbeState.stt}
+                  ttsProbeState={radioProbeState.tts}
+                  onTestStt={() => void testRadioSttLoadBalancer()}
+                  onTestTts={() => void testRadioTtsLoadBalancer()}
+                  onTestTone={() => void testRadioSystemTone()}
+                />
               </HelpModal>
             )}
 
@@ -7127,13 +8550,18 @@ export default function App() {
               }}
               leaderName={null}
               userName={userProfile.name}
-              modeLabel={mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}
+              mode={mode}
+              modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
               onExportRaw={exportRawHistory}
               onExportSummary={exportSummaryHistory}
               onImportHistory={importHistoryFile}
               isSummaryExporting={isSummaryExporting}
               fullscreen
               onCloseFullscreen={() => setIsChatFullscreen(false)}
+              radioState={radioSessionState}
+              onStartRadioSession={() => void startRadioSession()}
+              onStopRadioSession={() => stopRadioSession()}
+              onForceRadioTurn={() => void forceRadioTurnSwitch()}
               onOpenToolResult={(assistantMessageId) =>
                 setTutorialOpenedToolResultMessageIds((current) =>
                   current.includes(assistantMessageId) ? current : [...current, assistantMessageId]

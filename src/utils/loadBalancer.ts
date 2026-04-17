@@ -19,6 +19,7 @@ export type ResolvedLoadBalancerInstance = {
 export function describeCredentialPreset(preset: ModelCredentialPreset, endpoint?: string) {
   if (preset === "openai") return "OpenAI";
   if (preset === "groq") return "Groq";
+  if (preset === "gemini") return "Gemini";
   if (preset === "chrome_prompt") return "Chrome Prompt";
   const normalized = normalizeCredentialUrl(endpoint);
   if (!normalized) return "Custom";
@@ -58,6 +59,17 @@ export function createCredentialEntry(preset: ModelCredentialPreset, indexHint =
       preset,
       label: "Groq",
       endpoint: "https://api.groq.com/openai/v1",
+      keys: [createCredentialKeyEntry("")],
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+  if (preset === "gemini") {
+    return {
+      id: generateId(),
+      preset,
+      label: "Gemini",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta",
       keys: [createCredentialKeyEntry("")],
       createdAt: now,
       updatedAt: now
@@ -124,6 +136,7 @@ function inferPresetFromEndpoint(endpoint?: string): ModelCredentialPreset {
   const normalized = normalizeCredentialUrl(endpoint);
   if (normalized === "https://api.openai.com/v1") return "openai";
   if (normalized === "https://api.groq.com/openai/v1") return "groq";
+  if (normalized === "https://generativelanguage.googleapis.com/v1beta") return "gemini";
   if (normalized === CHROME_PROMPT_CREDENTIAL_ENDPOINT) return "chrome_prompt";
   return "custom";
 }

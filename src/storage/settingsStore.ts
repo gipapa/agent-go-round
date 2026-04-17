@@ -1,4 +1,4 @@
-import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, SkillExecutionMode } from "../types";
+import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, RadioSettings, SkillExecutionMode } from "../types";
 
 export type UiState = {
   activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
@@ -17,6 +17,7 @@ export type UiState = {
   userName?: string;
   userAvatarUrl?: string;
   userDescription?: string;
+  radioSettings?: RadioSettings;
 };
 
 const UI_KEY = "agr_ui_v1";
@@ -27,7 +28,7 @@ const MODEL_CREDENTIALS_KEY = "agr_model_credentials_v1";
 const LOAD_BALANCERS_KEY = "agr_load_balancers_v1";
 
 export type McpToolAliases = Record<string, Record<string, string>>;
-export type ModelCredentialPreset = "openai" | "groq" | "custom" | "chrome_prompt";
+export type ModelCredentialPreset = "openai" | "groq" | "gemini" | "custom" | "chrome_prompt";
 export type ModelCredentialKeyEntry = {
   id: string;
   apiKey: string;
@@ -198,7 +199,11 @@ export function loadModelCredentials(): ModelCredentials {
           typeof item.label === "string" &&
           typeof item.endpoint === "string" &&
           Array.isArray(item.keys) &&
-          (item.preset === "openai" || item.preset === "groq" || item.preset === "custom" || item.preset === "chrome_prompt")
+          (item.preset === "openai" ||
+            item.preset === "groq" ||
+            item.preset === "gemini" ||
+            item.preset === "custom" ||
+            item.preset === "chrome_prompt")
       );
     }
     if (parsed && typeof parsed === "object") {
@@ -207,11 +212,25 @@ export function loadModelCredentials(): ModelCredentials {
         .filter((entry): entry is [string, string] => typeof entry[1] === "string")
         .map(([key, value], index) => {
           const endpoint = key.includes(":") ? key.slice(key.indexOf(":") + 1) : "";
-          const preset = endpoint === "https://api.openai.com/v1" ? "openai" : endpoint === "https://api.groq.com/openai/v1" ? "groq" : "custom";
+          const preset =
+            endpoint === "https://api.openai.com/v1"
+              ? "openai"
+              : endpoint === "https://api.groq.com/openai/v1"
+              ? "groq"
+              : endpoint === "https://generativelanguage.googleapis.com/v1beta"
+              ? "gemini"
+              : "custom";
           return {
             id: `${preset}-${index}-${now}`,
             preset,
-            label: preset === "openai" ? "OpenAI" : preset === "groq" ? "Groq" : `Custom ${index + 1}`,
+            label:
+              preset === "openai"
+                ? "OpenAI"
+                : preset === "groq"
+                ? "Groq"
+                : preset === "gemini"
+                ? "Gemini"
+                : `Custom ${index + 1}`,
             endpoint,
             keys: [
               {

@@ -120,6 +120,43 @@ export type MagiRenderState = {
   transcript: MagiTranscriptEntry[];
 };
 
+export type RadioTurn = "human" | "agent";
+export type RadioSessionStatus =
+  | "idle"
+  | "requesting_permission"
+  | "human_listening"
+  | "human_transcribing"
+  | "refining_user_turn"
+  | "sending_to_agent"
+  | "agent_thinking"
+  | "agent_synthesizing"
+  | "agent_speaking"
+  | "paused"
+  | "error";
+
+export type RadioSettings = {
+  sttLoadBalancerId?: string;
+  sttLanguage?: string;
+  sttTemperature: number;
+  sttPrompt: string;
+  chunkSeconds: number;
+  refinePrompt: string;
+  refineAgentId?: string;
+  ttsLoadBalancerId?: string;
+  ttsVoice: string;
+};
+
+export type RadioSessionState = {
+  status: RadioSessionStatus;
+  turn: RadioTurn;
+  draftTranscriptRaw: string;
+  draftTranscriptRefinedPreview?: string;
+  lastError?: string;
+  lastNotice?: string;
+  currentChunkIndex: number;
+  lastProcessedChunkIndex: number;
+};
+
 export type ChatThread = {
   id: string;
   title: string;
@@ -200,7 +237,7 @@ export type DetectResult = {
   notes?: string;
 };
 
-export type OrchestratorMode = "one_to_one" | "magi_vote" | "magi_consensus";
+export type OrchestratorMode = "one_to_one" | "magi_vote" | "magi_consensus" | "radio";
 export type SkillExecutionMode = "single_turn" | "multi_turn";
 
 export type DocItem = {
