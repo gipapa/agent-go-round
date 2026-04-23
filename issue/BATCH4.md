@@ -49,6 +49,10 @@
 - 改 `vitest.config.ts`：環境、setup、coverage reporter
 - 加 `npm scripts`：`test:watch` / `test:coverage` / `test:ui`
 - 建 `src/__tests__/setup.ts`（jest-dom matchers）
+- **修復 / 重寫 `src/__tests__/app.test.tsx` 的 4 個既有失敗**（Batch 2 commit `317b54c` 已處理 LandingPage 那層；剩餘失敗是 fixture / UI drift）：
+  - 3 個「`waitForText` timeout」失敗：fixture 用 legacy `agent.endpoint + agent.model` 直接設定，但目前 agent 必須綁 `loadBalancerId` → LB instance → credential。需要新增 LB / credential mock fixture，或在 chat dispatch 前 seed 一個最小可用的 `agr_load_balancers_v1` + `agr_model_credentials_v1`
+  - 1 個「Button not found: Connect & List Tools」失敗：Chat Config tab 已從直接顯示 McpPanel 重構成 card grid（Main Agent / Credentials / Load Balancer / Mode / History 卡片 → click 開 modal）。測試導覽要改成：點 Chat Config → 點對應 card → 進 modal → 才找得到 Connect & List Tools；或從專屬 MCP 入口進
+  - 收尾後把 helper 抽乾淨，作為下一條 high-level integration test 的範本
 - **補 high-level integration test**（重點）：
   - 一對一 chat happy path
   - skill 多輪執行
