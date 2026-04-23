@@ -1,5 +1,6 @@
 import React from "react";
 import { AgentConfig, BuiltInToolConfig, McpServerConfig, McpTool, SkillConfig, SkillDocItem, SkillExecutionMode, SkillFileItem } from "../types";
+import { errorMessage } from "../utils/errors";
 import HelpModal from "./HelpModal";
 
 type EditableSkillFileDraft = {
@@ -92,8 +93,8 @@ export default function SkillsPanel(props: {
     setError(null);
     try {
       await props.onImport(file);
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -107,8 +108,8 @@ export default function SkillsPanel(props: {
     setError(null);
     try {
       await props.onCreateEmpty(name.trim());
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -119,8 +120,8 @@ export default function SkillsPanel(props: {
     setError(null);
     try {
       await props.onDelete(skillId);
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -131,8 +132,8 @@ export default function SkillsPanel(props: {
     setError(null);
     try {
       await props.onExport(skillId);
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -205,8 +206,8 @@ export default function SkillsPanel(props: {
       }
 
       setEditingSkillId(null);
-    } catch (e: any) {
-      setError(String(e?.message ?? e));
+    } catch (e) {
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -305,7 +306,7 @@ export default function SkillsPanel(props: {
             </div>
             <div>
               <label style={labelLike}>Verifier Agent</label>
-              <select value={props.verifierAgentId} onChange={(e) => props.onChangeVerifierAgentId(e.target.value)} style={inputLike as any}>
+              <select value={props.verifierAgentId} onChange={(e) => props.onChangeVerifierAgentId(e.target.value)} style={inputLike}>
                 <option value="">目前對話 Agent</option>
                 {props.agents.map((agent) => (
                   <option key={agent.id} value={agent.id}>

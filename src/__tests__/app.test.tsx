@@ -38,7 +38,8 @@ vi.mock("../mcp/sseClient", () => ({
   McpSseClient: class {
     constructor(_cfg: unknown) {}
     connect() {}
-    async request(method: string, params?: any) {
+    async request(method: string, params?: unknown) {
+      const record = params && typeof params === "object" && !Array.isArray(params) ? (params as Record<string, unknown>) : null;
       if (method === "tools/list") {
         return {
           id: "tools-list",
@@ -53,7 +54,7 @@ vi.mock("../mcp/sseClient", () => ({
       if (method === "tools/call") {
         return {
           id: "tools-call",
-          result: params?.name === "time" ? { now: "2026-01-01 00:00:00" } : { text: "echo" }
+          result: record?.name === "time" ? { now: "2026-01-01 00:00:00" } : { text: "echo" }
         };
       }
       return { id: "unknown", error: "unknown" };

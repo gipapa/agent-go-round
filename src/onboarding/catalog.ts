@@ -6,6 +6,7 @@ import builtInToolsChatRaw from "./tutorials/built-in-tools-chat.yaml?raw";
 import sequentialSkillChatRaw from "./tutorials/sequential-skill-chat.yaml?raw";
 import agentBrowserMcpChatRaw from "./tutorials/agent-browser-mcp-chat.yaml?raw";
 import chatgptBrowserSkillRaw from "./tutorials/chatgpt-browser-skill.yaml?raw";
+import { errorMessage } from "../utils/errors";
 
 type TutorialCatalogIssue = {
   scenarioId: string;
@@ -17,10 +18,10 @@ const tutorialCatalogIssues: TutorialCatalogIssue[] = [];
 function safeParseScenario(raw: string, scenarioId: string) {
   try {
     return parseTutorialScenario(raw);
-  } catch (error: any) {
+  } catch (error) {
     tutorialCatalogIssues.push({
       scenarioId,
-      message: String(error?.message ?? error ?? "Unknown tutorial parsing error")
+      message: errorMessage(error) || "Unknown tutorial parsing error"
     });
     return null;
   }

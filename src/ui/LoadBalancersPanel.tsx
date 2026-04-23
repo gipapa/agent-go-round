@@ -3,6 +3,7 @@ import { LoadBalancerConfig, LoadBalancerInstance } from "../types";
 import HelpModal from "./HelpModal";
 import { createLoadBalancer, createLoadBalancerInstance, describeCredentialPreset } from "../utils/loadBalancer";
 import { ModelCredentialEntry } from "../storage/settingsStore";
+import { errorMessage } from "../utils/errors";
 
 export default function LoadBalancersPanel(props: {
   loadBalancers: LoadBalancerConfig[];
@@ -197,8 +198,8 @@ export default function LoadBalancersPanel(props: {
       if (normalized.length > 0 && !normalized.includes(instance.model)) {
         updateInstance(instance.id, { model: normalized[0] });
       }
-    } catch (error: any) {
-      setModelLoadErrors((current) => ({ ...current, [instance.id]: String(error?.message ?? error) }));
+    } catch (error) {
+      setModelLoadErrors((current) => ({ ...current, [instance.id]: errorMessage(error) }));
     } finally {
       setLoadingModelsByInstance((current) => ({ ...current, [instance.id]: false }));
     }

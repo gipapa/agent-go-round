@@ -126,7 +126,7 @@ export function buildSkillDecisionCatalog(skills: SkillConfig[]) {
   }));
 }
 
-export function buildSkillExecutionInput(userInput: string, skillInput: any) {
+export function buildSkillExecutionInput(userInput: string, skillInput: unknown) {
   if (skillInput === undefined || skillInput === null) return userInput;
   if (typeof skillInput === "object" && !Array.isArray(skillInput) && Object.keys(skillInput).length === 0) {
     return userInput;
@@ -143,7 +143,7 @@ export function loadSkillRuntime(args: {
   availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
   availableBuiltinTools: BuiltInToolConfig[];
   userInput: string;
-  skillInput: any;
+  skillInput: unknown;
   systemPromptTemplate?: string;
 }) {
   const trace: ChatTraceEntry[] = [];

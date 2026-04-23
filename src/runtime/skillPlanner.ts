@@ -1,5 +1,6 @@
 import { LoadedSkillRuntime, SkillCompletionDecision, SkillConfig, SkillStepDecision } from "../types";
 import { getDefaultPromptTemplate } from "../promptTemplates/store";
+import { SkillCompletionDecisionSchema, SkillStepDecisionSchema } from "../schemas/decisions";
 
 function compactBlock(text: string | undefined, maxChars: number) {
   const normalized = String(text ?? "").replace(/\r/g, "").trim();
@@ -7,53 +8,14 @@ function compactBlock(text: string | undefined, maxChars: number) {
   return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-export function normalizeSkillStepDecision(obj: any): SkillStepDecision | null {
-  if (!obj || typeof obj !== "object" || typeof obj.type !== "string") return null;
-  const todoIds = Array.isArray(obj.todoIds) ? obj.todoIds.filter((v: unknown) => typeof v === "string" && v.trim()) : undefined;
-  if (obj.type === "observe" && typeof obj.reason === "string" && obj.reason.trim()) {
-    return { type: "observe", reason: obj.reason.trim(), todoIds };
-  }
-  if (
-    obj.type === "act" &&
-    typeof obj.reason === "string" &&
-    obj.reason.trim() &&
-    (obj.toolKind === "mcp" || obj.toolKind === "builtin") &&
-    typeof obj.toolName === "string" &&
-    obj.toolName.trim()
-  ) {
-    return {
-      type: "act",
-      reason: obj.reason.trim(),
-      toolKind: obj.toolKind,
-      toolName: obj.toolName.trim(),
-      input: obj.input,
-      todoIds
-    };
-  }
-  if (obj.type === "ask_user" && typeof obj.reason === "string" && obj.reason.trim() && typeof obj.message === "string" && obj.message.trim()) {
-    return { type: "ask_user", reason: obj.reason.trim(), message: obj.message.trim(), todoIds };
-  }
-  if (obj.type === "finish" && typeof obj.reason === "string" && obj.reason.trim()) {
-    return { type: "finish", reason: obj.reason.trim(), todoIds };
-  }
-  return null;
+export function normalizeSkillStepDecision(obj: unknown): SkillStepDecision | null {
+  const result = SkillStepDecisionSchema.safeParse(obj);
+  return result.success ? result.data : null;
 }
 
-export function normalizeSkillCompletionDecision(obj: any): SkillCompletionDecision | null {
-  if (!obj || typeof obj !== "object" || typeof obj.type !== "string") return null;
-  const todoIds = Array.isArray(obj.todoIds) ? obj.todoIds.filter((v: unknown) => typeof v === "string" && v.trim()) : undefined;
-  if (obj.type === "complete") {
-    return { type: "complete", reason: typeof obj.reason === "string" ? obj.reason.trim() : undefined, todoIds };
-  }
-  if (obj.type === "incomplete" && typeof obj.reason === "string" && obj.reason.trim()) {
-    return {
-      type: "incomplete",
-      reason: obj.reason.trim(),
-      suggestedFocus: typeof obj.suggestedFocus === "string" && obj.suggestedFocus.trim() ? obj.suggestedFocus.trim() : undefined,
-      todoIds
-    };
-  }
-  return null;
+export function normalizeSkillCompletionDecision(obj: unknown): SkillCompletionDecision | null {
+  const result = SkillCompletionDecisionSchema.safeParse(obj);
+  return result.success ? result.data : null;
 }
 
 export function buildBootstrapPlanPrompt(args: {

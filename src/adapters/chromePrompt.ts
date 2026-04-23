@@ -1,9 +1,20 @@
 import { AgentAdapter, ChatEvent, ChatRequest } from "./base";
 import { DEFAULT_FETCH_TIMEOUT_MS, getAbortSignalMessage, getErrorMessage } from "../utils/fetchWithTimeout";
 
+type ChromePromptSession = {
+  promptStreaming: (prompt: string) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+  destroy?: () => void;
+};
+
+type ChromePromptLanguageModel = {
+  create: (options: { temperature: number; topK: number }) => Promise<ChromePromptSession>;
+};
+
 declare global {
   interface Window {
-    ai?: any; // Chrome built-in AI (Prompt API)
+    ai?: {
+      languageModel?: ChromePromptLanguageModel;
+    };
   }
 }
 
@@ -84,7 +95,7 @@ export const ChromePromptAdapter: AgentAdapter = {
     const system = req.system?.trim() ? `SYSTEM:\n${req.system.trim()}\n\n` : "";
     const prompt = `${system}${context ? `HISTORY:\n${context}\n\n` : ""}USER:\n${req.input}`;
     const guard = createPromptAbortGuard(req.signal, req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
-    let session: any;
+    let session: ChromePromptSession | undefined;
 
     try {
       session = await raceWithAbort(
@@ -96,12 +107,12 @@ export const ChromePromptAdapter: AgentAdapter = {
       );
 
       const stream = await raceWithAbort(Promise.resolve(session.promptStreaming(prompt)), guard.signal);
-      const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<unknown>;
+      const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<unknown, undefined, unknown>;
       let full = "";
       while (true) {
-        const { value, done } = await raceWithAbort<IteratorResult<unknown>>(iterator.next(), guard.signal);
-        if (done) break;
-        const chunk = String(value ?? "");
+        const result = await raceWithAbort<IteratorResult<unknown, undefined>>(iterator.next(), guard.signal);
+        if (result.done) break;
+        const chunk = String(result.value ?? "");
         full += chunk;
         if (chunk) yield { type: "delta", text: chunk };
       }

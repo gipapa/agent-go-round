@@ -19,7 +19,7 @@ export function loadSavedAgentsFromStorage() {
   try {
     const raw = localStorage.getItem(AGENTS_STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed) ? (parsed as AgentConfig[]) : [];
   } catch {
     return [];

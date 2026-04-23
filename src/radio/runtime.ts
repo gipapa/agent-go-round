@@ -116,6 +116,16 @@ function resolveRequiredRadioModel(modelOverride: string | undefined, purpose: "
   return model;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function getGeminiParts(candidate: unknown): unknown[] {
+  const content = asRecord(asRecord(candidate)?.content);
+  const parts = content?.parts;
+  return Array.isArray(parts) ? parts : [];
+}
+
 export function normalizeRadioSettings(input?: Partial<RadioSettings> | null): RadioSettings {
   const legacyInput = input as Partial<RadioSettings> & {
     sttCredentialId?: string;
@@ -198,8 +208,8 @@ export async function transcribeAudioChunk(args: {
     throw new Error(text ? `STT HTTP ${response.status}: ${text}` : `STT HTTP ${response.status}`);
   }
 
-  const json = await response.json().catch(() => null);
-  const transcript = normalizeTranscriptSpacing(String(json?.text ?? ""));
+  const json = (await response.json().catch(() => null)) as unknown;
+  const transcript = normalizeTranscriptSpacing(String(asRecord(json)?.text ?? ""));
   if (!transcript && !args.allowEmptyTranscript) {
     throw new Error("STT returned empty transcript.");
   }
@@ -271,28 +281,27 @@ export async function synthesizeGeminiSpeech(args: {
     throw new Error(text ? `TTS HTTP ${response.status}: ${text}` : `TTS HTTP ${response.status}`);
   }
 
-  const json = await response.json().catch(() => null);
-  const audioPart = Array.isArray(json?.candidates)
-    ? json.candidates
-        .flatMap((candidate: any) => (Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []))
-        .find((part: any) => typeof part?.inlineData?.data === "string")
+  const json = (await response.json().catch(() => null)) as unknown;
+  const rawCandidates = asRecord(json)?.candidates;
+  const candidates: unknown[] = Array.isArray(rawCandidates) ? rawCandidates : [];
+  const audioPart = candidates.length
+    ? candidates
+        .flatMap(getGeminiParts)
+        .find((part) => typeof asRecord(asRecord(part)?.inlineData)?.data === "string")
     : null;
-  const audioBase64 = String(audioPart?.inlineData?.data ?? "").trim();
-  const audioMimeType = String(audioPart?.inlineData?.mimeType ?? "").trim();
+  const inlineData = asRecord(asRecord(audioPart)?.inlineData);
+  const audioBase64 = String(inlineData?.data ?? "").trim();
+  const audioMimeType = String(inlineData?.mimeType ?? "").trim();
   if (!audioBase64) {
     const diagnostics = JSON.stringify(
       {
-        candidateCount: Array.isArray(json?.candidates) ? json.candidates.length : 0,
-        finishReasons: Array.isArray(json?.candidates) ? json.candidates.map((candidate: any) => candidate?.finishReason ?? null) : [],
-        textParts: Array.isArray(json?.candidates)
-          ? json.candidates.flatMap((candidate: any) =>
-              Array.isArray(candidate?.content?.parts)
-                ? candidate.content.parts
-                    .filter((part: any) => typeof part?.text === "string" && part.text.trim())
-                    .map((part: any) => String(part.text).trim())
-                : []
-            )
-          : []
+        candidateCount: candidates.length,
+        finishReasons: candidates.map((candidate) => asRecord(candidate)?.finishReason ?? null),
+        textParts: candidates.flatMap((candidate) =>
+          getGeminiParts(candidate)
+            .filter((part) => typeof asRecord(part)?.text === "string" && String(asRecord(part)?.text).trim())
+            .map((part) => String(asRecord(part)?.text).trim())
+        )
       },
       null,
       2

@@ -19,6 +19,8 @@ import {
   SkillPhase,
   SkillRunState,
   SkillTodoItem,
+  SkillTodoSource,
+  SkillTodoStatus,
   DocItem,
   McpServerConfig,
   McpTool,
@@ -216,6 +218,18 @@ import {
   describeResolvedLoadBalancerCandidate,
   formatLoadBalancerDateTime
 } from "../utils/loadBalancerDiagnostics";
+import { extractJsonObject } from "../utils/safeJson";
+import { errorMessage } from "../utils/errors";
+import {
+  normalizeSkillBootstrapPlan,
+  normalizeSkillDecision,
+  normalizeToolDecision,
+  type BuiltInToolAction,
+  type McpAction,
+  type SkillBootstrapPlan,
+  type SkillDecision,
+  type ToolDecision
+} from "../schemas/decisions";
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -232,17 +246,6 @@ function msg(
   return { id: generateId(), role, content, name, displayName: meta?.displayName, avatarUrl: meta?.avatarUrl, ts: Date.now() };
 }
 
-type McpAction = { type: "mcp_call"; tool: string; input?: any; serverId?: string };
-type BuiltInToolAction = { type: "builtin_tool_call"; tool: string; input?: any };
-type ToolDecision = { type: "no_tool" } | McpAction | BuiltInToolAction;
-type SkillAction = { type: "skill_call"; skillId: string; input?: any };
-type SkillDecision = { type: "no_skill" } | SkillAction;
-type SkillBootstrapPlan = {
-  todo: string[];
-  taskSummary?: string;
-  startUrl?: string;
-  notes?: string[];
-};
 type PreparedSkillExecution = {
   baseInput: string;
   finalInput: string;
@@ -402,44 +405,6 @@ type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
   | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
 
-function extractJsonObject(text: string): any | null {
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[0]);
-  } catch {
-    return null;
-  }
-}
-
-function normalizeMcpAction(obj: any): McpAction | null {
-  if (!obj || typeof obj !== "object") return null;
-  const type =
-    typeof obj.type === "string"
-      ? obj.type.toLowerCase()
-      : typeof obj.action === "string"
-      ? obj.action.toLowerCase()
-      : "";
-  if (type === "mcp_call" && typeof obj.tool === "string") {
-    return { type: "mcp_call", tool: obj.tool, input: obj.input, serverId: typeof obj.serverId === "string" ? obj.serverId : undefined };
-  }
-  return null;
-}
-
-function normalizeToolDecision(obj: any): ToolDecision | null {
-  if (!obj || typeof obj !== "object") return null;
-  if (obj.type === "no_tool") return { type: "no_tool" };
-  if (obj.type === "user_profile_call" && obj.tool === "get_user_profile") {
-    return { type: "builtin_tool_call", tool: "get_user_profile", input: {} };
-  }
-  if (obj.type === "builtin_tool_call" && typeof obj.tool === "string") {
-    return { type: "builtin_tool_call", tool: obj.tool, input: obj.input };
-  }
-  const action = normalizeMcpAction(obj);
-  if (!action?.serverId) return null;
-  return action;
-}
-
 function extractPlainTextToolDecision(text: string): ToolDecision | null {
   const raw = String(text ?? "").trim();
   if (!raw) return null;
@@ -483,27 +448,6 @@ function extractPlainTextToolDecision(text: string): ToolDecision | null {
 
 function parseToolDecision(raw: string) {
   return normalizeToolDecision(extractJsonObject(raw)) ?? extractPlainTextToolDecision(raw);
-}
-
-function normalizeSkillDecision(obj: any): SkillDecision | null {
-  if (!obj || typeof obj !== "object") return null;
-  if (obj.type === "no_skill") return { type: "no_skill" };
-  if (obj.type === "skill_call" && typeof obj.skillId === "string" && obj.skillId.trim()) {
-    return { type: "skill_call", skillId: obj.skillId.trim(), input: obj.input };
-  }
-  return null;
-}
-
-function normalizeSkillBootstrapPlan(obj: any): SkillBootstrapPlan | null {
-  if (!obj || typeof obj !== "object" || !Array.isArray(obj.todo)) return null;
-  const todo = obj.todo.filter((item: unknown) => typeof item === "string" && item.trim()).map((item: string) => item.trim()).slice(0, 7);
-  if (!todo.length) return null;
-  const taskSummary = typeof obj.taskSummary === "string" && obj.taskSummary.trim() ? obj.taskSummary.trim() : undefined;
-  const startUrl = typeof obj.startUrl === "string" && obj.startUrl.trim() ? obj.startUrl.trim() : undefined;
-  const notes = Array.isArray(obj.notes)
-    ? obj.notes.filter((item: unknown) => typeof item === "string" && item.trim()).map((item: string) => item.trim()).slice(0, 5)
-    : undefined;
-  return { todo, taskSummary, startUrl, notes };
 }
 
 function extractFirstUrl(text: string) {
@@ -631,7 +575,7 @@ function normalizeManagedMagiAgent(agent: AgentConfig, unitId: MagiUnitId): Agen
   };
 }
 
-function stringifyAny(v: any): string {
+function stringifyAny(v: unknown): string {
   if (v === null || v === undefined) return String(v);
   if (typeof v === "string") return v;
   try {
@@ -639,6 +583,15 @@ function stringifyAny(v: any): string {
   } catch {
     return String(v);
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function confirmedFromToolOutput(value: unknown): boolean | null {
+  const record = asRecord(value);
+  return typeof record?.confirmed === "boolean" ? record.confirmed : null;
 }
 
 function mergeSystemText(...parts: Array<string | undefined>) {
@@ -845,39 +798,47 @@ function ensureManagedMagiAgents(agents: AgentConfig[]) {
   return changed ? next : agents;
 }
 
-function normalizeImportedMessage(input: any): ChatMessage | null {
-  if (!input || typeof input !== "object") return null;
-  if (typeof input.role !== "string" || typeof input.content !== "string") return null;
-  if (!["system", "user", "assistant", "tool"].includes(input.role)) return null;
-  const skillTrace = Array.isArray(input.skillTrace)
-    ? input.skillTrace
-        .filter((entry: any) => entry && typeof entry.label === "string" && typeof entry.content === "string")
-        .map((entry: any) => ({ label: entry.label, content: entry.content } satisfies ChatTraceEntry))
+function normalizeImportedMessage(input: unknown): ChatMessage | null {
+  const record = asRecord(input);
+  if (!record) return null;
+  if (typeof record.role !== "string" || typeof record.content !== "string") return null;
+  if (!["system", "user", "assistant", "tool"].includes(record.role)) return null;
+  const isTraceEntry = (entry: unknown): entry is Record<string, unknown> => {
+    const item = asRecord(entry);
+    return !!item && typeof item.label === "string" && typeof item.content === "string";
+  };
+  const isTodoItem = (entry: unknown): entry is Record<string, unknown> => {
+    const item = asRecord(entry);
+    return (
+      !!item &&
+      typeof item.id === "string" &&
+      typeof item.label === "string" &&
+      ["pending", "in_progress", "completed", "blocked"].includes(String(item.status)) &&
+      ["skill", "planner", "system"].includes(String(item.source))
+    );
+  };
+  const skillTrace = Array.isArray(record.skillTrace)
+    ? record.skillTrace
+        .filter(isTraceEntry)
+        .map((entry) => ({ label: String(entry.label), content: String(entry.content) } satisfies ChatTraceEntry))
     : undefined;
-  const skillTodo = Array.isArray(input.skillTodo)
-    ? input.skillTodo
-        .filter(
-          (item: any) =>
-            item &&
-            typeof item.id === "string" &&
-            typeof item.label === "string" &&
-            ["pending", "in_progress", "completed", "blocked"].includes(item.status) &&
-            ["skill", "planner", "system"].includes(item.source)
-        )
+  const skillTodo = Array.isArray(record.skillTodo)
+    ? record.skillTodo
+        .filter(isTodoItem)
         .map(
-          (item: any) =>
+          (item) =>
             ({
-              id: item.id,
-              label: item.label,
-              status: item.status,
-              source: item.source,
+              id: String(item.id),
+              label: String(item.label),
+              status: item.status as SkillTodoStatus,
+              source: item.source as SkillTodoSource,
               reason: typeof item.reason === "string" ? item.reason : undefined,
               updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now()
             }) satisfies SkillTodoItem
         )
     : undefined;
   const skillPhase =
-    typeof input.skillPhase === "string" &&
+    typeof record.skillPhase === "string" &&
     [
       "skill_load",
       "bootstrap_plan",
@@ -889,24 +850,24 @@ function normalizeImportedMessage(input: any): ChatMessage | null {
       "manual_gate",
       "final_answer",
       "verify_refine"
-    ].includes(input.skillPhase)
-      ? (input.skillPhase as SkillPhase)
+    ].includes(record.skillPhase)
+      ? (record.skillPhase as SkillPhase)
       : undefined;
   return {
-    id: typeof input.id === "string" ? input.id : generateId(),
-    role: input.role,
-    content: input.content,
-    name: typeof input.name === "string" ? input.name : undefined,
-    displayName: typeof input.displayName === "string" ? input.displayName : undefined,
-    avatarUrl: typeof input.avatarUrl === "string" ? input.avatarUrl : undefined,
-    statusText: typeof input.statusText === "string" ? input.statusText : undefined,
-    isStreaming: input.isStreaming === true,
-    hideWhileStreaming: input.hideWhileStreaming === true,
+    id: typeof record.id === "string" ? record.id : generateId(),
+    role: record.role as ChatMessage["role"],
+    content: record.content,
+    name: typeof record.name === "string" ? record.name : undefined,
+    displayName: typeof record.displayName === "string" ? record.displayName : undefined,
+    avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl : undefined,
+    statusText: typeof record.statusText === "string" ? record.statusText : undefined,
+    isStreaming: record.isStreaming === true,
+    hideWhileStreaming: record.hideWhileStreaming === true,
     skillTrace: skillTrace?.length ? skillTrace : undefined,
-    skillGoal: typeof input.skillGoal === "string" && input.skillGoal.trim() ? input.skillGoal : undefined,
+    skillGoal: typeof record.skillGoal === "string" && record.skillGoal.trim() ? record.skillGoal : undefined,
     skillTodo: skillTodo?.length ? skillTodo : undefined,
     skillPhase,
-    ts: typeof input.ts === "number" ? input.ts : Date.now()
+    ts: typeof record.ts === "number" ? record.ts : Date.now()
   };
 }
 
@@ -1063,7 +1024,7 @@ type ToolAugmentationResult = {
   toolIntent?: ToolIntent;
   observationSignature?: string;
   decisionSummary?: string;
-  toolOutput?: any;
+  toolOutput?: unknown;
   browserObservation?: BrowserObservationDigest | null;
   serverId?: string;
 };
@@ -1417,8 +1378,10 @@ function enrichActionBrowserObservation(args: {
   const observation = args.browserObservation ? { ...args.browserObservation } : null;
   if (!observation) return observation;
 
-  if (args.decision.toolName === "browser_click" && typeof args.decision.input?.selector === "string") {
-    const selector = String(args.decision.input.selector).trim();
+  const decisionInput =
+    args.decision.input && typeof args.decision.input === "object" ? (args.decision.input as Record<string, unknown>) : {};
+  if (args.decision.toolName === "browser_click" && typeof decisionInput.selector === "string") {
+    const selector = decisionInput.selector.trim();
     const clickedTarget = args.state.lastBrowserObservation?.rankedTargets.find((target) => target.ref === selector) ?? null;
     if (clickedTarget && !observation.repoName) {
       observation.repoName = normalizeRepoLabel(clickedTarget.label);
@@ -1485,7 +1448,7 @@ async function testCredentialConnection(slot: ModelCredentialEntry, apiKey: stri
       throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
     }
 
-    const json = await res.json().catch(() => null);
+    const json = asRecord(await res.json().catch(() => null));
     const count = Array.isArray(json?.models) ? json.models.length : undefined;
     return {
       ok: true,
@@ -1508,8 +1471,9 @@ async function testCredentialConnection(slot: ModelCredentialEntry, apiKey: stri
     throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
   }
 
-  const json = await res.json().catch(() => null);
-  const count = Array.isArray(json?.data) ? json.data.filter((item: any) => item?.active !== false).length : undefined;
+  const json = asRecord(await res.json().catch(() => null));
+  const data = Array.isArray(json?.data) ? json.data : null;
+  const count = data ? data.filter((item) => asRecord(item)?.active !== false).length : undefined;
   return {
     ok: true,
     message: count === undefined ? "測試成功：provider 有回應。" : `測試成功：可用模型 ${count} 個。`
@@ -1535,10 +1499,10 @@ async function fetchCredentialModels(slot: ModelCredentialEntry, apiKey: string)
       throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
     }
 
-    const json = await res.json().catch(() => null);
+    const json = asRecord(await res.json().catch(() => null));
     const models = Array.isArray(json?.models)
       ? json.models
-          .map((item: any) => String(item?.name ?? "").trim())
+          .map((item) => String(asRecord(item)?.name ?? "").trim())
           .map((name: string) => name.replace(/^models\//, ""))
           .filter(Boolean)
       : [];
@@ -1559,10 +1523,10 @@ async function fetchCredentialModels(slot: ModelCredentialEntry, apiKey: string)
     throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
   }
 
-  const json = await res.json().catch(() => null);
+  const json = asRecord(await res.json().catch(() => null));
   const models = Array.isArray(json?.data)
     ? json.data
-        .map((item: any) => String(item?.id ?? "").trim())
+        .map((item) => String(asRecord(item)?.id ?? "").trim())
         .filter(Boolean)
     : [];
 
@@ -2306,8 +2270,8 @@ export default function App() {
         setDocs(list);
         setDocsLoaded(true);
         logNow({ category: "docs", ok: true, message: `Docs loaded: ${list.length}` });
-      } catch (e: any) {
-        logNow({ category: "docs", ok: false, message: "Docs load failed", details: String(e?.message ?? e) });
+      } catch (e) {
+        logNow({ category: "docs", ok: false, message: "Docs load failed", details: errorMessage(e) });
       }
     })();
   }, []);
@@ -2320,8 +2284,8 @@ export default function App() {
         setSkillsLoaded(true);
         setSkillPanelSelectedId((current) => current ?? list[0]?.id ?? null);
         logNow({ category: "skills", ok: true, message: `Skills loaded: ${list.length}` });
-      } catch (e: any) {
-        logNow({ category: "skills", ok: false, message: "Skills load failed", details: String(e?.message ?? e) });
+      } catch (e) {
+        logNow({ category: "skills", ok: false, message: "Skills load failed", details: errorMessage(e) });
       }
     })();
   }, []);
@@ -2340,11 +2304,11 @@ export default function App() {
           setSkillPanelDocs(docs);
           setSkillPanelFiles(files);
         }
-      } catch (e: any) {
+      } catch (e) {
         if (!cancelled) {
           setSkillPanelDocs([]);
           setSkillPanelFiles([]);
-          logNow({ category: "skills", ok: false, message: "Skill docs load failed", details: String(e?.message ?? e) });
+          logNow({ category: "skills", ok: false, message: "Skill docs load failed", details: errorMessage(e) });
         }
       }
     })();
@@ -2361,9 +2325,9 @@ export default function App() {
         if (cancelled) return;
         setHistory((current) => (current.length === 0 ? restored : current));
         logNow({ category: "chat", ok: true, message: `History restored (${restored.length})` });
-      } catch (e: any) {
+      } catch (e) {
         if (cancelled) return;
-        logNow({ category: "chat", ok: false, message: "History restore failed", details: String(e?.message ?? e) });
+        logNow({ category: "chat", ok: false, message: "History restore failed", details: errorMessage(e) });
       } finally {
         if (!cancelled) setHistoryLoaded(true);
       }
@@ -2499,9 +2463,9 @@ export default function App() {
     (async () => {
       try {
         await saveChatHistory(history);
-      } catch (e: any) {
+      } catch (e) {
         if (cancelled) return;
-        logNow({ category: "chat", ok: false, message: "History persist failed", details: String(e?.message ?? e) });
+        logNow({ category: "chat", ok: false, message: "History persist failed", details: errorMessage(e) });
       }
     })();
     return () => {
@@ -3273,9 +3237,9 @@ export default function App() {
             .join("\n\n")
         });
         return result;
-      } catch (error: any) {
+      } catch (error) {
         lastError = error;
-        const errorText = String(error?.message ?? error ?? "");
+        const errorText = errorMessage(error);
         lastFailureDetails = errorText;
         const failure = classifyRetryableAgentFailure(errorText);
         if (failure?.retryable) {
@@ -3640,7 +3604,7 @@ export default function App() {
             details: tools.map((tool) => tool.name).join("\n") || "(no tools)"
           });
           return { serverId: server.id, tools };
-        } catch (error: any) {
+        } catch (error) {
           logNow({
             category: "mcp",
             agent: server.name,
@@ -3648,7 +3612,7 @@ export default function App() {
             requestId: options?.requestId,
             stage: "mcp_tools_load",
             message: "Auto-load MCP tools failed",
-            details: String(error?.message ?? error)
+            details: errorMessage(error)
           });
           return null;
         } finally {
@@ -3815,8 +3779,8 @@ export default function App() {
         message: "Credential test passed",
         details: `${slot.endpoint}\nKey ${slot.keys.findIndex((entry) => entry.id === keyId) + 1}\n${result.message}`
       });
-    } catch (e: any) {
-      const message = String(e?.message ?? e);
+    } catch (e) {
+      const message = errorMessage(e);
       setCredentialTestResults((prev) => ({
         ...prev,
         [key.id]: { ok: false, message }
@@ -4033,8 +3997,8 @@ export default function App() {
       setActiveAgentId(normalizedAgent.id);
       setSelectedAgentId(normalizedAgent.id);
       logNow({ category: "agents", agent: normalizedAgent.name, ok: true, message: "Agent saved", details: JSON.stringify(normalizedAgent, null, 2) });
-    } catch (e: any) {
-      logNow({ category: "agents", agent: a.name, ok: false, message: "Agent save failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "agents", agent: a.name, ok: false, message: "Agent save failed", details: errorMessage(e) });
     }
   }
 
@@ -4047,8 +4011,8 @@ export default function App() {
       setActiveAgentId(next[0]?.id ?? "");
       setSelectedAgentId((current) => (current === id ? next[0]?.id ?? "" : current));
       logNow({ category: "agents", agent: target?.name, ok: true, message: "Agent deleted" });
-    } catch (e: any) {
-      logNow({ category: "agents", agent: target?.name, ok: false, message: "Agent delete failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "agents", agent: target?.name, ok: false, message: "Agent delete failed", details: errorMessage(e) });
     }
   }
 
@@ -4807,8 +4771,8 @@ export default function App() {
           toolOutput,
           browserObservation
         };
-      } catch (e: any) {
-        const briefError = String(e?.message ?? e);
+      } catch (e) {
+        const briefError = errorMessage(e);
         const toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 執行失敗（${briefError}）。`;
         append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
         logNow({
@@ -4917,8 +4881,8 @@ export default function App() {
           browserObservation,
           serverId: targetServer.id
         };
-      } catch (e: any) {
-        const briefError = String(e?.message ?? e);
+      } catch (e) {
+        const briefError = errorMessage(e);
         toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 呼叫失敗（${briefError}）。`;
         append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
         logNow({
@@ -4949,7 +4913,7 @@ export default function App() {
 
   async function prepareSkillExecution(args: {
     skill: SkillConfig;
-    skillInput: any;
+    skillInput: unknown;
     userInput: string;
     agent: AgentConfig;
     adapter: ReturnType<typeof pickAdapter>;
@@ -5143,7 +5107,8 @@ export default function App() {
           SYSTEM_BUILT_IN_TOOLS.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
           null;
         if (requestConfirmationTool && selection.tool === requestConfirmationTool.name) {
-          const message = String(selection.input?.message ?? reason).trim() || reason;
+          const input = selection.input && typeof selection.input === "object" ? (selection.input as Record<string, unknown>) : {};
+          const message = String(input.message ?? reason).trim() || reason;
           return {
             type: "ask_user",
             reason,
@@ -5427,7 +5392,7 @@ export default function App() {
               toolLabel: result.toolLabel,
               actionSignature: result.actionSignature,
               observationSignature: result.observationSignature,
-              confirmed: typeof result.toolOutput?.confirmed === "boolean" ? result.toolOutput.confirmed : null,
+              confirmed: confirmedFromToolOutput(result.toolOutput),
               browserObservation: enrichedBrowserObservation,
               preferredMcpServerId: result.serverId
             };
@@ -5468,7 +5433,7 @@ export default function App() {
               detail: manualResult.detail ?? decision.message,
               toolLabel: manualResult.toolLabel,
               actionSignature: manualResult.actionSignature,
-              confirmed: typeof manualResult.toolOutput?.confirmed === "boolean" ? manualResult.toolOutput.confirmed : null,
+              confirmed: confirmedFromToolOutput(manualResult.toolOutput),
               browserObservation: manualResult.browserObservation,
               preferredMcpServerId: manualResult.serverId
             };
@@ -6468,7 +6433,7 @@ export default function App() {
           },
           describeSuccess: (blob) => `audio_bytes=${blob.size}`
         });
-      } catch (ttsError: any) {
+      } catch (ttsError) {
         if (isRadioTtsQuotaExhaustedError(ttsError)) {
           logNow({
             category: "radio",
@@ -6477,7 +6442,7 @@ export default function App() {
             stage: "tts",
             outcome: "degraded",
             message: "Radio TTS quota exhausted, skipping playback",
-            details: String(ttsError?.message ?? ttsError)
+            details: errorMessage(ttsError)
           });
           await playRadioSystemTone();
           if (radioSessionIdRef.current !== sessionId) return;
@@ -6494,7 +6459,7 @@ export default function App() {
           stage: "tts",
           outcome: "degraded",
           message: "Radio TTS empty audio, retrying with English fallback",
-          details: String(ttsError?.message ?? ttsError)
+          details: errorMessage(ttsError)
         });
 
         const fallbackTtsRequestId = createLogRequestId("radio");
@@ -6514,7 +6479,7 @@ export default function App() {
         }
         const translatedText = String(translated ?? "").trim();
         if (!translatedText) {
-          throw new Error(`TTS fallback translation returned empty content.\n${String(ttsError?.message ?? ttsError)}`);
+          throw new Error(`TTS fallback translation returned empty content.\n${errorMessage(ttsError)}`);
         }
         ttsText = translatedText;
         logNow({
@@ -6547,7 +6512,7 @@ export default function App() {
             },
             describeSuccess: (blob) => `audio_bytes=${blob.size}`
           });
-        } catch (fallbackTtsError: any) {
+        } catch (fallbackTtsError) {
           if (isRadioTtsQuotaExhaustedError(fallbackTtsError)) {
             logNow({
               category: "radio",
@@ -6556,7 +6521,7 @@ export default function App() {
               stage: "tts",
               outcome: "degraded",
               message: "Radio TTS quota exhausted after fallback, skipping playback",
-              details: String(fallbackTtsError?.message ?? fallbackTtsError)
+              details: errorMessage(fallbackTtsError)
             });
             await playRadioSystemTone();
             if (radioSessionIdRef.current !== sessionId) return;
@@ -6609,8 +6574,8 @@ export default function App() {
         message: "Radio playback started"
       });
       await audio.play();
-    } catch (e: any) {
-      handleRadioSessionFailure(String(e?.message ?? e), refineRequestId, "radio_finalize");
+    } catch (e) {
+      handleRadioSessionFailure(errorMessage(e), refineRequestId, "radio_finalize");
     } finally {
       radioFinalizeInFlightRef.current = false;
     }
@@ -6784,9 +6749,9 @@ export default function App() {
               message: `Radio chunk transcribed #${chunkIndex + 1}`,
               details: transcript
             });
-          } catch (e: any) {
+          } catch (e) {
             if (radioSessionIdRef.current === sessionId) {
-              handleRadioSessionFailure(String(e?.message ?? e), sessionId, "stt");
+              handleRadioSessionFailure(errorMessage(e), sessionId, "stt");
             }
           } finally {
             radioPendingTranscriptionsRef.current = Math.max(0, radioPendingTranscriptionsRef.current - 1);
@@ -6856,8 +6821,8 @@ export default function App() {
         outcome: "success",
         message: "Radio microphone permission granted"
       });
-    } catch (e: any) {
-      handleRadioSessionFailure(String(e?.message ?? e), sessionId, "permission");
+    } catch (e) {
+      handleRadioSessionFailure(errorMessage(e), sessionId, "permission");
     }
   }
 
@@ -6977,8 +6942,8 @@ export default function App() {
         message: "Radio STT probe passed",
         details: message
       });
-    } catch (error: any) {
-      const message = String(error?.message ?? error);
+    } catch (error) {
+      const message = errorMessage(error);
       setRadioProbeState((prev) => ({
         ...prev,
         stt: { running: false, ok: false, message }
@@ -7047,8 +7012,8 @@ export default function App() {
         message: "Radio TTS probe passed",
         details: message
       });
-    } catch (error: any) {
-      const message = String(error?.message ?? error);
+    } catch (error) {
+      const message = errorMessage(error);
       setRadioProbeState((prev) => ({
         ...prev,
         tts: { running: false, ok: false, message }
@@ -7134,8 +7099,9 @@ export default function App() {
           startedAt: Date.now(),
           modeForLog: "one_to_one"
         });
-      } catch (e: any) {
-        const errorText = buildAgentFailureContent(String(e?.message ?? e), input);
+      } catch (e) {
+        const message = errorMessage(e);
+        const errorText = buildAgentFailureContent(message, input);
         append(msg("assistant", errorText, "system", { displayName: "System" }));
         logNow({
           category: "chat",
@@ -7144,7 +7110,7 @@ export default function App() {
           stage: "final",
           outcome: "failure",
           message: "Send failed",
-          details: String(e?.message ?? e)
+          details: message
         });
       }
       return;
@@ -7266,8 +7232,9 @@ export default function App() {
         message: "MAGI finished",
         details: `elapsed_ms=${Date.now() - startedAt}\nfinal_verdict=${result.state.finalVerdict ?? "DEADLOCK"}`
       });
-    } catch (e: any) {
-      const errorText = buildAgentFailureContent(String(e?.message ?? e), input);
+    } catch (e) {
+      const message = errorMessage(e);
+      const errorText = buildAgentFailureContent(message, input);
       if (streamingAssistantId) {
         patchMessage(streamingAssistantId, {
           content: errorText,
@@ -7286,7 +7253,7 @@ export default function App() {
         stage: "final",
         outcome: "failure",
         message: "Send failed",
-        details: String(e?.message ?? e)
+        details: message
       });
     }
   }
@@ -7299,8 +7266,8 @@ export default function App() {
       setDocEditorId(d.id);
       logNow({ category: "docs", ok: true, message: "Doc created", details: JSON.stringify(d, null, 2) });
       return d;
-    } catch (e: any) {
-      logNow({ category: "docs", ok: false, message: "Doc create failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "docs", ok: false, message: "Doc create failed", details: errorMessage(e) });
       return null;
     }
   }
@@ -7344,8 +7311,8 @@ export default function App() {
       await upsertDoc({ ...d, updatedAt: Date.now() });
       setDocs(await listDocs());
       logNow({ category: "docs", ok: true, message: "Doc saved", details: JSON.stringify(d, null, 2) });
-    } catch (e: any) {
-      logNow({ category: "docs", ok: false, message: "Doc save failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "docs", ok: false, message: "Doc save failed", details: errorMessage(e) });
     }
   }
 
@@ -7355,8 +7322,8 @@ export default function App() {
       setDocs(await listDocs());
       if (docEditorId === id) setDocEditorId(null);
       logNow({ category: "docs", ok: true, message: "Doc deleted", details: id });
-    } catch (e: any) {
-      logNow({ category: "docs", ok: false, message: "Doc delete failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "docs", ok: false, message: "Doc delete failed", details: errorMessage(e) });
     }
   }
 
@@ -7695,8 +7662,8 @@ export default function App() {
           .filter(Boolean)
           .join("\n\n")
       });
-    } catch (error: any) {
-      const message = String(error?.message ?? error ?? "Unknown error");
+    } catch (error) {
+      const message = errorMessage(error);
       setPromptTemplateTestStates((prev) => ({
         ...prev,
         [fileId]: {
@@ -7791,8 +7758,8 @@ export default function App() {
       };
       downloadBlob(`agent-go-round-summary-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
       logNow({ category: "chat", agent: activeAgent.name, ok: true, requestId, stage: "summary export", outcome: "success", message: "Summary history exported", details: summary });
-    } catch (e: any) {
-      logNow({ category: "chat", agent: activeAgent.name, ok: false, requestId, stage: "summary export", outcome: "failure", message: "Summary export failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "chat", agent: activeAgent.name, ok: false, requestId, stage: "summary export", outcome: "failure", message: "Summary export failed", details: errorMessage(e) });
     } finally {
       setIsSummaryExporting(false);
     }
@@ -7801,30 +7768,31 @@ export default function App() {
   async function importHistoryFile(file: File) {
     try {
       const text = await file.text();
-      let imported: any = null;
+      let imported: unknown = null;
       try {
         imported = JSON.parse(text);
       } catch {
         imported = null;
       }
 
-      if (imported?.kind === "raw_history" && Array.isArray(imported.history)) {
-        const nextHistory = imported.history.map(normalizeImportedMessage).filter(Boolean) as ChatMessage[];
+      const importedRecord = asRecord(imported);
+      if (importedRecord?.kind === "raw_history" && Array.isArray(importedRecord.history)) {
+        const nextHistory = importedRecord.history.map(normalizeImportedMessage).filter(Boolean) as ChatMessage[];
         setHistory(nextHistory);
         logNow({ category: "chat", ok: true, message: `Raw history imported (${nextHistory.length})` });
         return;
       }
 
       const summaryText =
-        imported?.kind === "summary_history" && typeof imported.summary === "string"
-          ? imported.summary
+        importedRecord?.kind === "summary_history" && typeof importedRecord.summary === "string"
+          ? importedRecord.summary
           : text.trim();
 
       const summaryMessage = msg("user", summaryText, "summary_import", { displayName: "上次對話總結" });
       setHistory([summaryMessage]);
       logNow({ category: "chat", ok: true, message: "Summary history imported", details: summaryText });
-    } catch (e: any) {
-      logNow({ category: "chat", ok: false, message: "Import history failed", details: String(e?.message ?? e) });
+    } catch (e) {
+      logNow({ category: "chat", ok: false, message: "Import history failed", details: errorMessage(e) });
     }
   }
 

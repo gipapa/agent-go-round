@@ -1,10 +1,12 @@
 import React, { useMemo, useState } from "react";
+import type { JSONSchema7 } from "json-schema";
 import { BuiltInToolConfig } from "../types";
 import { loadUiState } from "../storage/settingsStore";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestSavedAgentForQuestion } from "../utils/agentDirectoryTool";
 import { createToolDashboardHelpers } from "../utils/toolDashboard";
+import { errorMessage } from "../utils/errors";
 import { TUTORIAL_CLOCK_TOOL_CODE } from "../onboarding/tutorialBuiltInToolTemplate";
 import HelpModal from "./HelpModal";
 
@@ -21,7 +23,7 @@ function emptyTool(index: number): BuiltInToolConfig {
   };
 }
 
-function stringifyAny(value: any) {
+function stringifyAny(value: unknown) {
   if (typeof value === "string") return value;
   try {
     return JSON.stringify(value, null, 2);
@@ -112,7 +114,7 @@ export default function BuiltInToolsPanel(props: {
           throw new Error("User blocked tool execution.");
         }
       }
-      const input = JSON.parse(testInputDraft || "{}");
+      const input = JSON.parse(testInputDraft || "{}") as unknown;
       const output = await runBuiltInScriptTool(toolDraft, input, {
         system: {
           get_user_profile: () => {
@@ -134,9 +136,9 @@ export default function BuiltInToolsPanel(props: {
         }
       });
       setTestResult(stringifyAny(output));
-    } catch (error: any) {
+    } catch (error) {
       setTestResult("");
-      setTestError(String(error?.message ?? error));
+      setTestError(errorMessage(error));
     } finally {
       setIsRunningTest(false);
     }
@@ -146,11 +148,11 @@ export default function BuiltInToolsPanel(props: {
     setSchemaDraft(next);
     if (!toolDraft || toolDraft.source === "system") return;
     try {
-      const parsed = JSON.parse(next || "{}");
-      setToolDraft({ ...toolDraft, inputSchema: parsed });
+      const parsed = JSON.parse(next || "{}") as unknown;
+      setToolDraft({ ...toolDraft, inputSchema: parsed as JSONSchema7 });
       setSchemaError(null);
-    } catch (error: any) {
-      setSchemaError(error?.message ?? "Invalid JSON");
+    } catch (error) {
+      setSchemaError(errorMessage(error) || "Invalid JSON");
     }
   }
 

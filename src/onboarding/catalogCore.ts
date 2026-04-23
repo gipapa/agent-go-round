@@ -1,24 +1,41 @@
 import { parse } from "yaml";
-import { TutorialScenarioDefinition, TutorialStepAutomation, TutorialStepBehaviorId, TutorialStepDefinition } from "./types";
+import {
+  TutorialScenarioDefinition,
+  TutorialStepAutomation,
+  TutorialStepBehaviorId,
+  TutorialStepDefinition,
+  TutorialTab
+} from "./types";
+
+const TUTORIAL_TABS: TutorialTab[] = ["chat", "chat_config", "agents", "profile"];
 
 function normalizeStringArray(input: unknown) {
   return Array.isArray(input) ? input.map((item) => String(item ?? "").trim()).filter(Boolean) : undefined;
 }
 
-function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
+function asRecord(input: unknown): Record<string, unknown> | null {
+  return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : null;
+}
+
+function normalizeTutorialTab(input: unknown): TutorialTab | undefined {
+  return typeof input === "string" && TUTORIAL_TABS.includes(input as TutorialTab) ? (input as TutorialTab) : undefined;
+}
+
+function normalizeAutomation(input: unknown): TutorialStepAutomation | undefined {
   if (!input || typeof input !== "object") return undefined;
-  const expectInput = input.expect && typeof input.expect === "object" ? input.expect : undefined;
+  const record = input as Record<string, unknown>;
+  const expectInput = asRecord(record.expect);
   const automation: TutorialStepAutomation = {
-    composerSeed: typeof input.composerSeed === "string" ? input.composerSeed.trim() : undefined,
-    clearChatOnEnter: input.clearChatOnEnter === true,
-    skillExecutionMode: input.skillExecutionMode === "multi_turn" ? "multi_turn" : input.skillExecutionMode === "single_turn" ? "single_turn" : undefined,
-    skillVerifyMax: typeof input.skillVerifyMax === "number" ? input.skillVerifyMax : undefined,
-    skillToolLoopMax: typeof input.skillToolLoopMax === "number" ? input.skillToolLoopMax : undefined,
-    loadBalancerDelaySecond: typeof input.loadBalancerDelaySecond === "number" ? input.loadBalancerDelaySecond : undefined,
-    loadBalancerMaxRetries: typeof input.loadBalancerMaxRetries === "number" ? input.loadBalancerMaxRetries : undefined,
+    composerSeed: typeof record.composerSeed === "string" ? record.composerSeed.trim() : undefined,
+    clearChatOnEnter: record.clearChatOnEnter === true,
+    skillExecutionMode: record.skillExecutionMode === "multi_turn" ? "multi_turn" : record.skillExecutionMode === "single_turn" ? "single_turn" : undefined,
+    skillVerifyMax: typeof record.skillVerifyMax === "number" ? record.skillVerifyMax : undefined,
+    skillToolLoopMax: typeof record.skillToolLoopMax === "number" ? record.skillToolLoopMax : undefined,
+    loadBalancerDelaySecond: typeof record.loadBalancerDelaySecond === "number" ? record.loadBalancerDelaySecond : undefined,
+    loadBalancerMaxRetries: typeof record.loadBalancerMaxRetries === "number" ? record.loadBalancerMaxRetries : undefined,
     activeAgentPreset:
-      input.activeAgentPreset === "tutorial_agent" || input.activeAgentPreset === "tutorial_agent_base"
-        ? input.activeAgentPreset
+      record.activeAgentPreset === "tutorial_agent" || record.activeAgentPreset === "tutorial_agent_base"
+        ? record.activeAgentPreset
         : undefined,
     expect: expectInput
       ? {
@@ -58,45 +75,47 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
   return automation;
 }
 
-function normalizeStep(input: any): TutorialStepDefinition {
-  if (!input || typeof input !== "object") {
+function normalizeStep(input: unknown): TutorialStepDefinition {
+  const record = asRecord(input);
+  if (!record) {
     throw new Error("Tutorial step must be an object.");
   }
-  const behavior = String(input.behavior ?? "").trim() as TutorialStepBehaviorId;
+  const behavior = String(record.behavior ?? "").trim() as TutorialStepBehaviorId;
   if (!behavior) {
-    throw new Error(`Tutorial step "${String(input.id ?? "")}" is missing behavior.`);
+    throw new Error(`Tutorial step "${String(record.id ?? "")}" is missing behavior.`);
   }
 
   return {
-    id: String(input.id ?? "").trim(),
-    title: String(input.title ?? "").trim(),
-    checklistLabel: String(input.checklistLabel ?? input.title ?? "").trim(),
-    instructionTitle: String(input.instructionTitle ?? input.title ?? "").trim(),
-    instructionBody: String(input.instructionBody ?? "").trim(),
-    actionLabel: typeof input.actionLabel === "string" ? input.actionLabel : undefined,
-    completionLabel: typeof input.completionLabel === "string" ? input.completionLabel : undefined,
-    tab: typeof input.tab === "string" ? input.tab : undefined,
-    targetId: typeof input.targetId === "string" ? input.targetId : undefined,
+    id: String(record.id ?? "").trim(),
+    title: String(record.title ?? "").trim(),
+    checklistLabel: String(record.checklistLabel ?? record.title ?? "").trim(),
+    instructionTitle: String(record.instructionTitle ?? record.title ?? "").trim(),
+    instructionBody: String(record.instructionBody ?? "").trim(),
+    actionLabel: typeof record.actionLabel === "string" ? record.actionLabel : undefined,
+    completionLabel: typeof record.completionLabel === "string" ? record.completionLabel : undefined,
+    tab: normalizeTutorialTab(record.tab),
+    targetId: typeof record.targetId === "string" ? record.targetId : undefined,
     behavior,
-    automation: normalizeAutomation(input.automation)
+    automation: normalizeAutomation(record.automation)
   };
 }
 
-function normalizeScenario(input: any): TutorialScenarioDefinition {
-  if (!input || typeof input !== "object") {
+function normalizeScenario(input: unknown): TutorialScenarioDefinition {
+  const record = asRecord(input);
+  if (!record) {
     throw new Error("Tutorial scenario must be an object.");
   }
-  const steps = Array.isArray(input.steps) ? input.steps.map(normalizeStep) : [];
+  const steps = Array.isArray(record.steps) ? record.steps.map(normalizeStep) : [];
   if (!steps.length) {
-    throw new Error(`Tutorial scenario "${String(input.id ?? "")}" must include steps.`);
+    throw new Error(`Tutorial scenario "${String(record.id ?? "")}" must include steps.`);
   }
 
   return {
-    id: String(input.id ?? "").trim(),
-    title: String(input.title ?? "").trim(),
-    description: String(input.description ?? "").trim(),
-    exitTitle: String(input.exitTitle ?? "離開案例教學").trim(),
-    exitBody: String(input.exitBody ?? "").trim(),
+    id: String(record.id ?? "").trim(),
+    title: String(record.title ?? "").trim(),
+    description: String(record.description ?? "").trim(),
+    exitTitle: String(record.exitTitle ?? "離開案例教學").trim(),
+    exitBody: String(record.exitBody ?? "").trim(),
     steps
   };
 }

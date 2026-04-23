@@ -2,21 +2,12 @@ import { AgentConfig, ChatMessage } from "../types";
 import { AgentAdapter } from "../adapters/base";
 import { runOneToOne } from "./oneToOne";
 import { RetryConfig } from "../adapters/base";
-
-type Action =
-  | { type: "ask_member"; memberId: string; message: string }
-  | { type: "finish"; answer: string };
-
-type VerifyDecision = {
-  ok: boolean;
-  reason?: string;
-  react?: { memberId: string; message: string };
-};
-
-type PlanDecision = {
-  assignments: Array<{ memberId: string; message: string }>;
-  notes?: string;
-};
+import { extractJsonObject } from "../utils/safeJson";
+import {
+  normalizeLeaderAction,
+  normalizeLeaderPlan,
+  normalizeLeaderVerify
+} from "../schemas/decisions";
 
 type RunState = {
   round: number;
@@ -37,71 +28,6 @@ export type LeaderTeamEvent =
   | { type: "leader_react"; memberId: string; memberName: string; message: string; reason?: string }
   | { type: "leader_finish"; answer: string }
   | { type: "leader_invalid_json"; text: string };
-
-function sanitizeJsonText(text: string): string {
-  return text
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, '"')
-    .replace(/,\s*([}\]])/g, "$1");
-}
-
-function extractJsonObject(text: string): any | null {
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[0]);
-  } catch {
-    try {
-      return JSON.parse(sanitizeJsonText(m[0]));
-    } catch {
-      return null;
-    }
-  }
-}
-
-function normalizeAction(obj: any): Action | null {
-  if (!obj || typeof obj !== "object") return null;
-
-  const type =
-    typeof obj.type === "string"
-      ? obj.type.toLowerCase().trim()
-      : typeof obj.action === "string"
-      ? obj.action.toLowerCase().trim()
-      : "";
-
-  if (type === "finish" && typeof obj.answer === "string") {
-    return { type: "finish", answer: obj.answer };
-  }
-
-  if (type === "ask_member" && typeof obj.memberId === "string" && typeof obj.message === "string") {
-    return { type: "ask_member", memberId: obj.memberId, message: obj.message };
-  }
-
-  return null;
-}
-
-function normalizeVerify(obj: any): VerifyDecision | null {
-  if (!obj || typeof obj !== "object") return null;
-  const ok = typeof obj.ok === "boolean" ? obj.ok : null;
-  if (ok === null) return null;
-  const reason = typeof obj.reason === "string" ? obj.reason : undefined;
-  if (!obj.react) return { ok, reason };
-  if (typeof obj.react === "object" && typeof obj.react.memberId === "string" && typeof obj.react.message === "string") {
-    return { ok, reason, react: { memberId: obj.react.memberId, message: obj.react.message } };
-  }
-  return { ok, reason };
-}
-
-function normalizePlan(obj: any): PlanDecision | null {
-  if (!obj || typeof obj !== "object") return null;
-  if (!Array.isArray(obj.assignments)) return null;
-  const assignments = obj.assignments.filter(
-    (a: any) => a && typeof a.memberId === "string" && typeof a.message === "string"
-  );
-  if (assignments.length === 0) return null;
-  const notes = typeof obj.notes === "string" ? obj.notes : undefined;
-  return { assignments, notes };
-}
 
 function buildLeaderPrompt(args: {
   goal: string;
@@ -297,7 +223,7 @@ export async function runLeaderTeam(args: {
     onLog: args.onLog
   });
   const planObj = extractJsonObject(planText);
-  const plan = normalizePlan(planObj);
+  const plan = normalizeLeaderPlan(planObj);
   if (plan) {
     const allowed = new Set(membersMeta.map((m) => m.id));
     const seen = new Set<string>();
@@ -344,7 +270,7 @@ export async function runLeaderTeam(args: {
     state.steps.push({ kind: "leader_action", text: leaderText });
 
     const actObj = extractJsonObject(leaderText);
-    const action = normalizeAction(actObj);
+    const action = normalizeLeaderAction(actObj);
 
     if (!action) {
       if (invalidActionRetries < retryMax) {
@@ -388,7 +314,7 @@ export async function runLeaderTeam(args: {
         onLog: args.onLog
       });
       const verifyObj = extractJsonObject(verifyText);
-      const verify = normalizeVerify(verifyObj);
+      const verify = normalizeLeaderVerify(verifyObj);
       if (verify) {
         args.onEvent?.({ type: "leader_verify", ok: verify.ok, notes: verify.reason, raw: verifyText });
       } else {
@@ -471,7 +397,7 @@ export async function runLeaderTeam(args: {
       });
 
       const verifyObj = extractJsonObject(verifyText);
-      const verify = normalizeVerify(verifyObj);
+      const verify = normalizeLeaderVerify(verifyObj);
       if (!verify) {
         args.onLog("Leader verification output invalid. Continuing.");
         args.onEvent?.({ type: "leader_verify", ok: false, notes: "Invalid verification JSON", raw: verifyText });
@@ -579,7 +505,7 @@ export async function runLeaderTeam(args: {
   });
 
   const finalObj = extractJsonObject(finalText);
-  const finalAction = normalizeAction(finalObj);
+  const finalAction = normalizeLeaderAction(finalObj);
   const answer = finalAction?.type === "finish" ? finalAction.answer : finalText;
 
   args.onEvent?.({ type: "leader_finish", answer });

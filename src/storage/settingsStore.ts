@@ -52,6 +52,10 @@ export type McpPromptTemplates = {
   en: string;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 export function getDefaultMcpPromptTemplates(): McpPromptTemplates {
   return {
     activeId: "en",
@@ -122,12 +126,12 @@ export function loadMcpServers(): McpServerConfig[] {
   try {
     const raw = localStorage.getItem(MCP_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
         (item): item is Partial<McpServerConfig> & { id: string; name: string; sseUrl: string } =>
-          !!item && typeof item.id === "string" && typeof item.name === "string" && typeof item.sseUrl === "string"
+          isRecord(item) && typeof item.id === "string" && typeof item.name === "string" && typeof item.sseUrl === "string"
       )
       .map((item) => ({
         id: item.id,
@@ -190,11 +194,11 @@ export function loadModelCredentials(): ModelCredentials {
   try {
     const raw = localStorage.getItem(MODEL_CREDENTIALS_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) {
       return parsed.filter(
         (item): item is ModelCredentialEntry =>
-          item &&
+          isRecord(item) &&
           typeof item.id === "string" &&
           typeof item.label === "string" &&
           typeof item.endpoint === "string" &&
@@ -206,7 +210,7 @@ export function loadModelCredentials(): ModelCredentials {
             item.preset === "chrome_prompt")
       );
     }
-    if (parsed && typeof parsed === "object") {
+    if (isRecord(parsed)) {
       const now = Date.now();
       return Object.entries(parsed as Record<string, unknown>)
         .filter((entry): entry is [string, string] => typeof entry[1] === "string")
@@ -259,19 +263,19 @@ export function loadLoadBalancers(): LoadBalancerConfig[] {
   try {
     const raw = localStorage.getItem(LOAD_BALANCERS_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
         (item): item is LoadBalancerConfig =>
-          item &&
+          isRecord(item) &&
           typeof item.id === "string" &&
           typeof item.name === "string" &&
           Array.isArray(item.instances)
       )
       .map((item) => ({
         ...item,
-        instances: item.instances.map((instance: any) => ({
+        instances: item.instances.map((instance: LoadBalancerConfig["instances"][number]) => ({
           ...instance,
           resumeMinute:
             typeof instance?.resumeMinute === "number" && Number.isFinite(instance.resumeMinute)

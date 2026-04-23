@@ -1,8 +1,9 @@
 import { McpServerConfig } from "../types";
+import { errorMessage } from "../utils/errors";
 import { generateId } from "../utils/id";
 
-type RpcReq = { id: string; method: string; params?: any };
-type RpcRes = { id: string; result?: any; error?: any };
+type RpcReq<P = unknown> = { id: string; method: string; params?: P };
+type RpcRes<R = unknown> = { id: string; result?: R; error?: unknown };
 type PendingRpc = { settle: (res: RpcRes) => void };
 type RpcPostDispatch = { kind: "reply"; response: RpcRes } | { kind: "deferred" };
 
@@ -202,8 +203,8 @@ export class McpSseClient {
           }
         };
       }
-    } catch (error: any) {
-      if (error?.name === "AbortError") {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
         return {
           kind: "reply",
           response: { id: req.id, error: `MCP RPC timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s` }
@@ -211,7 +212,7 @@ export class McpSseClient {
       }
       return {
         kind: "reply",
-        response: { id: req.id, error: String(error?.message ?? error) }
+        response: { id: req.id, error: errorMessage(error) }
       };
     } finally {
       window.clearTimeout(timeoutId);
@@ -240,7 +241,7 @@ export class McpSseClient {
     return this.healthCheckPromise;
   }
 
-  async request(method: string, params?: any): Promise<RpcRes> {
+  async request(method: string, params?: unknown): Promise<RpcRes> {
     if (!this.es) {
       this.connect(this.onLog);
     }
@@ -250,8 +251,8 @@ export class McpSseClient {
     if (method !== "tools/list") {
       try {
         await this.ensureHealthy();
-      } catch (error: any) {
-        return { id, error: `MCP heartbeat failed: ${String(error?.message ?? error)}` };
+      } catch (error) {
+        return { id, error: `MCP heartbeat failed: ${errorMessage(error)}` };
       }
     }
 

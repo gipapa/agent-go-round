@@ -6,6 +6,7 @@ import {
   synthesizeGeminiSpeech,
   transcribeAudioChunk
 } from "../radio/runtime";
+import type { ModelCredentialEntry } from "../storage/settingsStore";
 
 describe("radio runtime helpers", () => {
   it("normalizes radio settings with defaults and clamps chunk length", () => {
@@ -45,10 +46,19 @@ describe("radio runtime helpers", () => {
   it("requires explicit STT/TTS models from load balancer instances instead of silently falling back", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    const credential: ModelCredentialEntry = {
+      id: "test-credential",
+      preset: "gemini",
+      label: "Gemini",
+      endpoint: "https://example.com",
+      keys: [],
+      createdAt: 0,
+      updatedAt: 0
+    };
 
     await expect(
       transcribeAudioChunk({
-        credential: { endpoint: "https://example.com" } as any,
+        credential,
         apiKey: "test-key",
         settings: DEFAULT_RADIO_SETTINGS,
         blob: new Blob(["demo"], { type: "audio/webm" }),
@@ -59,7 +69,7 @@ describe("radio runtime helpers", () => {
 
     await expect(
       synthesizeGeminiSpeech({
-        credential: { endpoint: "https://example.com" } as any,
+        credential,
         apiKey: "test-key",
         settings: DEFAULT_RADIO_SETTINGS,
         text: "hello",

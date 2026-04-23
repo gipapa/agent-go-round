@@ -1,3 +1,5 @@
+import type { JSONSchema7 } from "json-schema";
+
 export type AgentType = "openai_compat" | "chrome_prompt" | "custom" | "a2a";
 
 export type Role = "system" | "user" | "assistant" | "tool";
@@ -259,7 +261,7 @@ export type McpServerConfig = {
 export type McpTool = {
   name: string;
   description?: string;
-  inputSchema?: any;
+  inputSchema?: JSONSchema7;
 };
 
 export type BuiltInToolConfig = {
@@ -268,7 +270,7 @@ export type BuiltInToolConfig = {
   displayLabel?: string;
   description: string;
   code: string;
-  inputSchema?: any;
+  inputSchema?: JSONSchema7;
   requireConfirmation?: boolean;
   updatedAt: number;
   source?: "system" | "custom";
@@ -287,7 +289,7 @@ export type SkillWorkflowPolicy = {
   bootstrapAction?: {
     toolKind: "mcp" | "builtin";
     toolName: string;
-    input?: any;
+    input?: unknown;
     reason?: string;
   };
 };
@@ -298,7 +300,7 @@ export type SkillConfig = {
   version: string;
   description: string;
   decisionHint?: string;
-  inputSchema?: any;
+  inputSchema?: JSONSchema7;
   workflow: SkillWorkflowPolicy;
   skillMarkdown: string;
   rootPath: string;
@@ -336,7 +338,7 @@ export type SkillStepDecision =
       reason: string;
       toolKind: "mcp" | "builtin";
       toolName: string;
-      input?: any;
+      input?: unknown;
       todoIds?: string[];
     }
   | {

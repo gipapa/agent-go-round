@@ -3,16 +3,16 @@ import type { ToolDashboardHelpers } from "./toolDashboard";
 
 export type BuiltInToolHelpers = {
   system?: {
-    get_user_profile?: () => Promise<any> | any;
+    get_user_profile?: () => Promise<unknown> | unknown;
     pick_best_agent_for_question?: (question: string) => Promise<string> | string;
-    request_user_confirmation?: (message: string) => Promise<any> | any;
+    request_user_confirmation?: (message: string) => Promise<unknown> | unknown;
   };
   ui?: {
     dashboard?: ToolDashboardHelpers;
   };
 };
 
-export async function runBuiltInScriptTool(tool: Pick<BuiltInToolConfig, "code">, input: any, helpers: BuiltInToolHelpers = {}) {
+export async function runBuiltInScriptTool(tool: Pick<BuiltInToolConfig, "code">, input: unknown, helpers: BuiltInToolHelpers = {}) {
   const runner = new Function(
     "input",
     "helpers",
@@ -28,7 +28,7 @@ export async function runBuiltInScriptTool(tool: Pick<BuiltInToolConfig, "code">
         ${tool.code}
       })();
     `
-  ) as (input: any, helpers: BuiltInToolHelpers) => Promise<any>;
+  ) as (input: unknown, helpers: BuiltInToolHelpers) => Promise<unknown>;
 
   return await runner(input, helpers);
 }

@@ -1,4 +1,5 @@
 import type { RadioSessionState } from "../types";
+import { errorMessage } from "../utils/errors";
 
 export const MIN_RADIO_STT_BLOB_BYTES = 512;
 export const RADIO_VAD_RMS_THRESHOLD = 0.02;
@@ -133,11 +134,11 @@ export function getRadioMicrophoneSupportIssue() {
 }
 
 export function isRadioTtsEmptyAudioError(error: unknown) {
-  return /TTS returned empty audio/i.test(String((error as any)?.message ?? error ?? ""));
+  return /TTS returned empty audio/i.test(errorMessage(error));
 }
 
 export function isRadioTtsQuotaExhaustedError(error: unknown) {
-  const text = String((error as any)?.message ?? error ?? "");
+  const text = errorMessage(error);
   return /(TTS HTTP 429|RESOURCE_EXHAUSTED|Quota exceeded|exceeded your current quota|quotaMetric)/i.test(text);
 }
 

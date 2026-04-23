@@ -1,5 +1,7 @@
 import JSZip from "jszip";
+import type { JSONSchema7 } from "json-schema";
 import { SkillConfig, SkillDocItem, SkillFileItem, SkillWorkflowPolicy } from "../types";
+import { errorMessage } from "../utils/errors";
 
 export type SkillSnapshot = {
   meta: SkillConfig;
@@ -17,7 +19,7 @@ type SkillConfigBlock = {
   version?: string;
   description?: string;
   decisionHint?: string;
-  inputSchema?: any;
+  inputSchema?: JSONSchema7;
   workflow?: Partial<SkillWorkflowPolicy>;
 };
 
@@ -153,9 +155,10 @@ function parseSkillMarkdown(markdown: string, rootPath: string) {
   let config: SkillConfigBlock = {};
   if (configMatch?.[1]) {
     try {
-      config = JSON.parse(configMatch[1]);
-    } catch (error: any) {
-      throw new Error(`SKILL.md skill-config JSON invalid: ${String(error?.message ?? error)}`);
+      const parsed = JSON.parse(configMatch[1]) as unknown;
+      config = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as SkillConfigBlock) : {};
+    } catch (error) {
+      throw new Error(`SKILL.md skill-config JSON invalid: ${errorMessage(error)}`);
     }
   }
 

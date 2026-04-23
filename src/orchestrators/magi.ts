@@ -9,6 +9,8 @@ import {
   MagiVerdict
 } from "../types";
 import { generateId } from "../utils/id";
+import { extractJsonObject } from "../utils/safeJson";
+import { errorMessage } from "../utils/errors";
 
 export const MAGI_META = {
   code: "473",
@@ -159,13 +161,13 @@ export async function runMagi(args: {
               ballot: parsed.ballot
             } as MagiUnitResult
           };
-        } catch (error: any) {
+        } catch (error) {
           return {
             unit,
             result: {
               ok: false,
               raw: "",
-              error: String(error?.message ?? error)
+              error: errorMessage(error)
             } as MagiUnitResult
           };
         }
@@ -467,27 +469,6 @@ function buildConsensusPrompt(args: {
   ].join("\n");
 }
 
-function sanitizeJsonText(text: string) {
-  return text
-    .replace(/[“”]/g, "\"")
-    .replace(/[‘’]/g, "\"")
-    .replace(/,\s*([}\]])/g, "$1");
-}
-
-function extractJsonObject(text: string): Record<string, unknown> | null {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[0]) as Record<string, unknown>;
-  } catch {
-    try {
-      return JSON.parse(sanitizeJsonText(match[0])) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-}
-
 function normalizeUnitVerdict(value: unknown): MagiUnitVerdict | null {
   const normalized = String(value ?? "").trim().toUpperCase();
   if (normalized === "APPROVE" || normalized === "REJECT" || normalized === "ABSTAIN") {
@@ -508,10 +489,11 @@ function normalizeConcerns(value: unknown) {
 }
 
 function parseBallot(text: string): { ok: true; ballot: ParsedBallot } | { ok: false; error: string } {
-  const object = extractJsonObject(text);
-  if (!object) {
+  const parsed = extractJsonObject(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { ok: false, error: "Invalid JSON ballot." };
   }
+  const object = parsed as Record<string, unknown>;
 
   const verdict = normalizeUnitVerdict(object.verdict);
   if (!verdict) {

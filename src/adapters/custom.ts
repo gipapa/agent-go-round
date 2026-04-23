@@ -9,22 +9,28 @@ import {
 } from "../utils/fetchWithTimeout";
 
 function mustache(tpl: string, vars: Record<string, string>) {
-  return tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => vars[k] ?? "");
+  return tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => vars[key] ?? "");
 }
 
 // Minimal JSONPath-like getter: supports $.a.b[0].c
-function getByPath(obj: any, path: string) {
+function getByPath(obj: unknown, path: string) {
   const p = path.replace(/^\$\./, "");
-  const parts = p.split(".").flatMap((seg) => {
+  const parts: Array<string | number> = p.split(".").flatMap((seg): Array<string | number> => {
     const m = seg.match(/^(\w+)\[(\d+)\]$/);
-    if (m) return [m[1], Number(m[2]) as any];
+    if (m) return [m[1], Number(m[2])];
     return [seg];
   });
 
-  let cur: any = obj;
+  let cur: unknown = obj;
   for (const part of parts) {
     if (cur == null) return undefined;
-    cur = cur[part as any];
+    if (typeof part === "number") {
+      if (!Array.isArray(cur)) return undefined;
+      cur = cur[part];
+      continue;
+    }
+    if (typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
   }
   return cur;
 }
@@ -113,7 +119,7 @@ export const CustomAdapter: AgentAdapter = {
 
     let out = text;
     try {
-      const j = JSON.parse(text);
+      const j = JSON.parse(text) as unknown;
       const v = getByPath(j, c.responseJsonPath);
       if (typeof v === "string") out = v;
       else out = JSON.stringify(v, null, 2);

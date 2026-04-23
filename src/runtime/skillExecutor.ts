@@ -1,6 +1,7 @@
 import { ChatTraceEntry, LoadedSkillRuntime, SkillConfig, SkillExecutionMode } from "../types";
 import { pushSkillTrace } from "./skillRuntime";
 import { getDefaultPromptTemplate } from "../promptTemplates/store";
+import { SkillVerifyDecisionSchema } from "../schemas/decisions";
 
 export type SkillVerifyDecision =
   | { type: "pass"; reason?: string }
@@ -88,19 +89,9 @@ export function buildSkillVerifyPrompt(args: {
   return prompt;
 }
 
-export function normalizeSkillVerifyDecision(obj: any): SkillVerifyDecision | null {
-  if (!obj || typeof obj !== "object") return null;
-  if (obj.type === "pass") {
-    return { type: "pass", reason: typeof obj.reason === "string" ? obj.reason.trim() : undefined };
-  }
-  if (obj.type === "refine" && typeof obj.reason === "string" && obj.reason.trim()) {
-    return {
-      type: "refine",
-      reason: obj.reason.trim(),
-      revisionPrompt: typeof obj.revisionPrompt === "string" && obj.revisionPrompt.trim() ? obj.revisionPrompt.trim() : undefined
-    };
-  }
-  return null;
+export function normalizeSkillVerifyDecision(obj: unknown): SkillVerifyDecision | null {
+  const result = SkillVerifyDecisionSchema.safeParse(obj);
+  return result.success ? result.data : null;
 }
 
 export function buildSkillRefinementInput(args: {

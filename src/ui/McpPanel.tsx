@@ -3,6 +3,7 @@ import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { McpSseClient } from "../mcp/sseClient";
 import { listTools, callTool } from "../mcp/toolRegistry";
 import { generateId } from "../utils/id";
+import { errorMessage } from "../utils/errors";
 import HelpModal from "./HelpModal";
 
 export default function McpPanel(props: {
@@ -147,16 +148,17 @@ export default function McpPanel(props: {
         message: `tools/list -> ${tools.length} tools`,
         details: tools.map((tool) => tool.name).join("\n") || "(no tools)"
       });
-    } catch (error: any) {
+    } catch (error) {
+      const message = errorMessage(error);
       setDraftValidated(false);
       setDraftTools([]);
-      setDraftError(String(error?.message ?? error));
+      setDraftError(message);
       props.pushLog({
         category: "mcp",
         agent: serverDraft.name,
         ok: false,
         message: "tools/list error",
-        details: String(error?.message ?? error)
+        details: message
       });
     } finally {
       client.close();
@@ -171,19 +173,20 @@ export default function McpPanel(props: {
     const client = new McpSseClient(serverDraft);
     client.connect((text) => props.pushLog({ category: "mcp", agent: serverDraft.name, message: text }));
     try {
-      const input = JSON.parse(toolInput || "{}");
+      const input = JSON.parse(toolInput || "{}") as unknown;
       const resolved = resolveToolName(toolName);
       const res = await callTool(client, resolved, input);
       setToolOutput(JSON.stringify(res, null, 2));
       props.pushLog({ category: "mcp", agent: serverDraft.name, ok: true, message: `tools/call ${resolved} OK` });
-    } catch (error: any) {
-      setToolOutput(String(error?.message ?? error));
+    } catch (error) {
+      const message = errorMessage(error);
+      setToolOutput(message);
       props.pushLog({
         category: "mcp",
         agent: serverDraft.name,
         ok: false,
         message: "tools/call error",
-        details: String(error?.message ?? error)
+        details: message
       });
     } finally {
       client.close();

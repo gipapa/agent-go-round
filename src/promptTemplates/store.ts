@@ -1,5 +1,6 @@
 import YAML from "yaml";
 import { McpPromptTemplateKey, getDefaultMcpPromptTemplates, loadMcpPromptTemplates } from "../storage/settingsStore";
+import { errorMessage } from "../utils/errors";
 import toolDecisionZhRaw from "./defaults/tool-decision.zh.yaml?raw";
 import toolDecisionEnRaw from "./defaults/tool-decision.en.yaml?raw";
 import skillDecisionZhRaw from "./defaults/skill-decision.zh.yaml?raw";
@@ -69,6 +70,10 @@ export type PromptTemplateFileState = {
   createdAt: number;
   updatedAt: number;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 
 export type ParsedPromptTemplate = {
   id: PromptTemplateFileId;
@@ -350,13 +355,13 @@ export function loadPromptTemplateFiles(): PromptTemplateFileState[] {
   try {
     const raw = localStorage.getItem(PROMPT_TEMPLATE_KEY);
     if (!raw) return defaults;
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return defaults;
     const byId = new Map(
       parsed
         .filter(
           (item): item is PromptTemplateFileState =>
-            !!item &&
+            isRecord(item) &&
             typeof item.id === "string" &&
             typeof item.content === "string" &&
             typeof item.createdAt === "number" &&
@@ -400,7 +405,7 @@ export function buildPromptTemplateRuntime(entries: PromptTemplateFileState[]) {
         content,
         template: resolved.template
       } satisfies ParsedPromptTemplate;
-    } catch (error: any) {
+    } catch (error) {
       const fallback = parsePromptYamlContent(definition.defaultContent, definition);
       return {
         id: definition.id,
@@ -413,7 +418,7 @@ export function buildPromptTemplateRuntime(entries: PromptTemplateFileState[]) {
         placeholders: fallback.placeholders,
         content,
         template: fallback.template,
-        parseError: String(error?.message ?? error)
+        parseError: errorMessage(error)
       } satisfies ParsedPromptTemplate;
     }
   });

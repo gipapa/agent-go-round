@@ -8,12 +8,34 @@ import {
   getRetryAfterDelayMs,
   sleepWithAbort
 } from "../utils/fetchWithTimeout";
+import { errorMessage } from "../utils/errors";
+
+type OpenAIMessage = { role: Exclude<ChatMessage["role"], "tool">; content: string };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  return (await response.json()) as unknown;
+}
+
+function firstChoice(value: unknown): Record<string, unknown> | null {
+  const choices = asRecord(value)?.choices;
+  return Array.isArray(choices) ? asRecord(choices[0]) : null;
+}
+
+function choiceMessageContent(choice: Record<string, unknown> | null): string {
+  const message = asRecord(choice?.message);
+  if (typeof message?.content === "string") return message.content;
+  return typeof choice?.text === "string" ? choice.text : "";
+}
 
 function toOpenAIMessage(m: ChatMessage) {
   if (m.role === "tool") {
     return null;
   }
-  return { role: m.role, content: m.content };
+  return { role: m.role, content: m.content } satisfies OpenAIMessage;
 }
 
 export const OpenAICompatAdapter: AgentAdapter = {
@@ -28,11 +50,11 @@ export const OpenAICompatAdapter: AgentAdapter = {
         }
       });
       if (!res.ok) return { ok: false, detectedType: "unknown", notes: `HTTP ${res.status}` };
-      const json = await res.json();
-      if (json?.data && Array.isArray(json.data)) return { ok: true, detectedType: "openai_compat" };
+      const json = await readJson(res);
+      if (Array.isArray(asRecord(json)?.data)) return { ok: true, detectedType: "openai_compat" };
       return { ok: false, detectedType: "unknown", notes: "Unexpected /models response" };
-    } catch (e: any) {
-      return { ok: false, detectedType: "unknown", notes: e?.message ?? "detect failed" };
+    } catch (e) {
+      return { ok: false, detectedType: "unknown", notes: errorMessage(e) || "detect failed" };
     }
   },
 
@@ -43,7 +65,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
     const retryMax = Math.max(0, req.retry?.max ?? 0);
     const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
 
-    const messages: any[] = [];
+    const messages: OpenAIMessage[] = [];
     if (req.system?.trim()) messages.push({ role: "system", content: req.system.trim() });
     for (const m of req.history) {
       const mapped = toOpenAIMessage(m);
@@ -121,8 +143,8 @@ export const OpenAICompatAdapter: AgentAdapter = {
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType.includes("text/event-stream")) {
       try {
-        const json = await res.json();
-        const text = json?.choices?.[0]?.message?.content ?? "";
+        const json = await readJson(res);
+        const text = choiceMessageContent(firstChoice(json));
         yield { type: "done", text };
         return;
       } catch {
@@ -165,9 +187,11 @@ export const OpenAICompatAdapter: AgentAdapter = {
             return;
           }
           try {
-            const j = JSON.parse(data);
-            const delta = j?.choices?.[0]?.delta?.content ?? "";
-            const msgContent = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? "";
+            const j = JSON.parse(data) as unknown;
+            const choice = firstChoice(j);
+            const deltaRecord = asRecord(choice?.delta);
+            const delta = typeof deltaRecord?.content === "string" ? deltaRecord.content : "";
+            const msgContent = choiceMessageContent(choice);
             if (delta) {
               full += delta;
               yield { type: "delta", text: delta };
