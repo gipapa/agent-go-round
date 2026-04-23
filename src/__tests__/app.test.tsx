@@ -14,6 +14,12 @@ const callTool = vi.hoisted(() =>
     return null;
   })
 );
+const listTools = vi.hoisted(() =>
+  vi.fn(async () => [
+    { name: "time", description: "Get current server time" },
+    { name: "echo", description: "Echo input text" }
+  ])
+);
 
 vi.mock("../adapters/openaiCompat", () => ({
   OpenAICompatAdapter: {
@@ -31,13 +37,18 @@ vi.mock("../storage/docStore", () => ({
 }));
 
 vi.mock("../mcp/toolRegistry", () => ({
-  callTool
+  callTool,
+  listTools
 }));
 
 vi.mock("../mcp/sseClient", () => ({
   McpSseClient: class {
     constructor(_cfg: unknown) {}
     connect() {}
+    close() {}
+    isReusable() {
+      return true;
+    }
     async request(method: string, params?: unknown) {
       const record = params && typeof params === "object" && !Array.isArray(params) ? (params as Record<string, unknown>) : null;
       if (method === "tools/list") {
@@ -161,7 +172,7 @@ async function waitForText(text: string, timeoutMs = 2000) {
     if (container?.textContent?.includes(text)) return;
     await flushPromises();
   }
-  throw new Error(`Timed out waiting for text: ${text}`);
+  throw new Error(`Timed out waiting for text: ${text}\nDOM: ${container?.textContent?.slice(0, 1200) ?? ""}`);
 }
 
 beforeEach(() => {

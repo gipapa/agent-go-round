@@ -161,6 +161,10 @@ export class McpSseClient {
     this.invalidateConnection("MCP SSE closed");
   }
 
+  isReusable() {
+    return !!this.es;
+  }
+
   private async postRpc(req: RpcReq): Promise<RpcPostDispatch> {
     const url = new URL(this.cfg.sseUrl);
     url.pathname = url.pathname.replace(/\/sse$/, "/rpc");

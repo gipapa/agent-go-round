@@ -68,8 +68,10 @@ import { CustomAdapter } from "../adapters/custom";
 
 import { runOneToOne } from "../orchestrators/oneToOne";
 import { createInitialState as createMagiRenderState, MAGI_UNIT_LAYOUT, MagiPreparedUnit, runMagi } from "../orchestrators/magi";
-import { McpSseClient } from "../mcp/sseClient";
-import { callTool, listTools } from "../mcp/toolRegistry";
+import { McpClientManager } from "../mcp/clientManager";
+import { formatMcpServerResolutionFailure, resolveMcpServerId } from "../mcp/serverResolver";
+import { McpToolCatalog } from "../mcp/toolCatalog";
+import { callTool, type McpRequester } from "../mcp/toolRegistry";
 import { createToolDashboardHelpers } from "../utils/toolDashboard";
 
 import AgentsPanel from "../ui/AgentsPanel";
@@ -308,29 +310,12 @@ function normalizeToolDecisionAgainstAvailableTools(args: {
     return aliases.get(normalizedToolName) ?? decision.tool;
   };
   const resolvedToolName = resolveMcpToolName();
-  const resolveMcpServerId = () => {
-    const rawServerId = String(decision.serverId ?? "").trim();
-    if (rawServerId) {
-      const exactServer =
-        args.availableMcpServers.find((server) => server.id === rawServerId || server.name === rawServerId) ?? null;
-      if (exactServer) return exactServer.id;
-
-      const normalizedServerId = rawServerId.toLowerCase();
-      const fuzzyServer =
-        args.availableMcpServers.find(
-          (server) =>
-            server.id.trim().toLowerCase() === normalizedServerId || server.name.trim().toLowerCase() === normalizedServerId
-        ) ?? null;
-      if (fuzzyServer) return fuzzyServer.id;
-    }
-
-    const matchingServers = args.availableMcpTools.filter((entry) => entry.tools.some((tool) => tool.name === resolvedToolName));
-    if (matchingServers.length === 1) {
-      return matchingServers[0].server.id;
-    }
-    return decision.serverId;
-  };
-  const resolvedServerId = resolveMcpServerId();
+  const serverResolution = resolveMcpServerId({
+    requestedServerId: decision.serverId,
+    toolName: resolvedToolName,
+    availableMcpTools: args.availableMcpTools
+  });
+  const resolvedServerId = serverResolution.ok ? serverResolution.serverId : undefined;
   const matchingBuiltIn = args.availableBuiltinTools.find((tool) => tool.name === resolvedToolName) ?? null;
   if (!matchingBuiltIn) {
     return {
@@ -1081,7 +1066,7 @@ function getMcpToolTimeoutMs(server: McpServerConfig, toolName: string) {
   return DEFAULT_MCP_TOOL_TIMEOUT_MS;
 }
 
-async function callMcpToolWithTimeout(client: McpSseClient, name: string, input: unknown, timeoutMs: number) {
+async function callMcpToolWithTimeout(client: McpRequester, name: string, input: unknown, timeoutMs: number) {
   let timeoutId: number | null = null;
   try {
     return await Promise.race([
@@ -2086,6 +2071,8 @@ export default function App() {
   const [promptTemplateTestsRunning, setPromptTemplateTestsRunning] = useState(false);
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
+  const mcpClientManager = useMemo(() => new McpClientManager(), []);
+  const mcpToolCatalogCache = useMemo(() => new McpToolCatalog(), []);
   const globalMcpToolCatalog = useMemo(
     () =>
       mcpServers.map((server) => ({
@@ -2412,6 +2399,12 @@ export default function App() {
   React.useEffect(() => {
     saveMcpServers(mcpServers);
   }, [mcpServers]);
+
+  React.useEffect(() => {
+    return () => {
+      mcpClientManager.closeAll();
+    };
+  }, [mcpClientManager]);
 
   React.useEffect(() => {
     saveMcpPromptTemplates(mcpPromptTemplates);
@@ -3590,10 +3583,12 @@ export default function App() {
 
     const loadedEntries = await Promise.all(
       unknownServers.map(async (server) => {
-        const client = new McpSseClient(server);
-        client.connect((text) => pushLog({ category: "mcp", agent: server.name, requestId: options?.requestId, stage: "mcp_connect", message: text }));
         try {
-          const tools = await listTools(client);
+          const tools = await mcpToolCatalogCache.load(
+            server,
+            mcpClientManager,
+            (text) => pushLog({ category: "mcp", agent: server.name, requestId: options?.requestId, stage: "mcp_connect", message: text })
+          );
           logNow({
             category: "mcp",
             agent: server.name,
@@ -3615,8 +3610,6 @@ export default function App() {
             details: errorMessage(error)
           });
           return null;
-        } finally {
-          client.close();
         }
       })
     );
@@ -4795,31 +4788,83 @@ export default function App() {
       }
     }
 
+    const serverResolution = resolveMcpServerId({
+      requestedServerId: normalizedDecision.serverId,
+      toolName: normalizedDecision.tool,
+      availableMcpTools: args.availableMcpTools
+    });
+    const resolvedMcpServerId = serverResolution.ok ? serverResolution.serverId : normalizedDecision.serverId;
     const actionSignature = buildToolActionSignature({
       kind: "mcp",
-      serverId: normalizedDecision.serverId,
+      serverId: resolvedMcpServerId,
       toolName: normalizedDecision.tool,
       input: normalizedDecision.input
     });
-    const targetServer = args.availableMcpServers.find((server) => server.id === normalizedDecision.serverId) ?? null;
+    const targetServer = args.availableMcpServers.find((server) => server.id === resolvedMcpServerId) ?? null;
     const targetTool =
-      args.availableMcpTools.find((entry) => entry.server.id === normalizedDecision.serverId)?.tools.find((tool) => tool.name === normalizedDecision.tool) ?? null;
+      args.availableMcpTools.find((entry) => entry.server.id === resolvedMcpServerId)?.tools.find((tool) => tool.name === normalizedDecision.tool) ?? null;
     let toolSummaryForQuestion = "";
     args.onStatus?.(`正在呼叫 MCP 工具「${normalizedDecision.tool}」中…`);
 
+    if (!serverResolution.ok) {
+      const resolutionDetail = formatMcpServerResolutionFailure(serverResolution);
+      toolSummaryForQuestion = `工具執行失敗：無法解析 MCP server（tool=${normalizedDecision.tool}, serverId=${normalizedDecision.serverId ?? "(none)"}, ${resolutionDetail}）。`;
+      logNow({
+        category: "mcp",
+        agent: args.agent.name,
+        ok: false,
+        requestId: args.requestId,
+        stage: "mcp_routing_fallback",
+        message: `MCP server resolution failed: ${normalizedDecision.tool}`,
+        details: JSON.stringify({ decision: normalizedDecision, resolution: serverResolution }, null, 2)
+      });
+      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+      return {
+        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+        ok: false,
+        status: "tool_called",
+        toolLabel: `MCP ${normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
+        detail: toolSummaryForQuestion,
+        actionSignature
+      };
+    }
+
+    const requestedServerId = String(normalizedDecision.serverId ?? "").trim();
+    if (requestedServerId && requestedServerId !== serverResolution.serverId) {
+      logNow({
+        category: "mcp",
+        agent: args.agent.name,
+        ok: true,
+        requestId: args.requestId,
+        stage: "mcp_routing_fallback",
+        message: `MCP serverId corrected: ${requestedServerId} -> ${serverResolution.serverId}`,
+        details: JSON.stringify({ decision: normalizedDecision, resolution: serverResolution }, null, 2)
+      });
+    }
+
     if (!targetServer) {
-      toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${normalizedDecision.serverId} 的可用 MCP server。`;
+      toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${resolvedMcpServerId} 的可用 MCP server。`;
       logNow({
         category: "mcp",
         agent: args.agent.name,
         ok: false,
         requestId: args.requestId,
         stage: "tool execution",
-        message: `Tool decision selected unavailable server: ${normalizedDecision.serverId}`,
+        message: `Tool decision selected unavailable server: ${resolvedMcpServerId}`,
         details: JSON.stringify(normalizedDecision)
       });
       append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-    } else if (!targetTool) {
+      return {
+        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+        ok: false,
+        status: "tool_called",
+        toolLabel: `MCP ${resolvedMcpServerId ?? "unknown"} -> ${normalizedDecision.tool}`,
+        detail: toolSummaryForQuestion,
+        actionSignature
+      };
+    }
+
+    if (!targetTool) {
       toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${normalizedDecision.tool} 這個工具。`;
       logNow({
         category: "mcp",
@@ -4831,72 +4876,80 @@ export default function App() {
         details: JSON.stringify(normalizedDecision)
       });
       append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-    } else {
-      const client = new McpSseClient(targetServer);
-      client.connect((t) => pushLog({ category: "mcp", agent: targetServer.name, requestId: args.requestId, stage: "tool execution", message: t }));
-      try {
-        const timeoutMs = getMcpToolTimeoutMs(targetServer, normalizedDecision.tool);
-        const toolOutput = await callMcpToolWithTimeout(client, normalizedDecision.tool, normalizedDecision.input ?? {}, timeoutMs);
-        const toolIntent = classifyMcpToolIntent(targetTool);
-        const toolOutputText = stringifyAny(toolOutput);
-        const browserObservation = extractBrowserObservation({
-          toolName: normalizedDecision.tool,
-          output: toolOutput
-        });
-        toolSummaryForQuestion = buildToolResultPromptBlock({
-          kind: "mcp",
-          serverName: targetServer.name,
-          toolName: normalizedDecision.tool,
-          input: normalizedDecision.input ?? {},
-          output: toolOutput
-        }, args.promptDetail ?? "default");
-        logNow({
-          category: "mcp",
-          agent: targetServer.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: "tool execution",
-          message: `MCP tool call OK: ${normalizedDecision.tool}`,
-          details: toolOutputText
-        });
-        append(
-          msg(
-            "tool",
-            `MCP ${targetServer.name} -> ${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}\noutput:\n${toolOutputText}`,
-            "mcp",
-            { displayName: "MCP Tool" }
-          )
-        );
-        return {
-          input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-          ok: true,
-          status: "tool_called",
-          toolLabel: `MCP ${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
-          detail: toolSummaryForQuestion,
-          actionSignature,
-          toolIntent,
-          observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
-          decisionSummary: `mcp:${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"}/${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
-          toolOutput,
-          browserObservation,
-          serverId: targetServer.id
-        };
-      } catch (e) {
-        const briefError = errorMessage(e);
-        toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 呼叫失敗（${briefError}）。`;
-        append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-        logNow({
-          category: "mcp",
-          agent: targetServer.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: "tool execution",
-          message: `Tool call failed: ${normalizedDecision.tool}`,
-          details: briefError
-        });
-      } finally {
-        client.close();
-      }
+      return {
+        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+        ok: false,
+        status: "tool_called",
+        toolLabel: `MCP ${targetServer.name} -> ${normalizedDecision.tool}`,
+        detail: toolSummaryForQuestion,
+        actionSignature
+      };
+    }
+
+    try {
+      const timeoutMs = getMcpToolTimeoutMs(targetServer, normalizedDecision.tool);
+      const toolOutput = await mcpClientManager.run(
+        targetServer,
+        (client) => callMcpToolWithTimeout(client, normalizedDecision.tool, normalizedDecision.input ?? {}, timeoutMs),
+        (t) => pushLog({ category: "mcp", agent: targetServer.name, requestId: args.requestId, stage: "tool execution", message: t })
+      );
+      const toolIntent = classifyMcpToolIntent(targetTool);
+      const toolOutputText = stringifyAny(toolOutput);
+      const browserObservation = extractBrowserObservation({
+        toolName: normalizedDecision.tool,
+        output: toolOutput
+      });
+      toolSummaryForQuestion = buildToolResultPromptBlock({
+        kind: "mcp",
+        serverName: targetServer.name,
+        toolName: normalizedDecision.tool,
+        input: normalizedDecision.input ?? {},
+        output: toolOutput
+      }, args.promptDetail ?? "default");
+      logNow({
+        category: "mcp",
+        agent: targetServer.name,
+        ok: true,
+        requestId: args.requestId,
+        stage: "tool execution",
+        message: `MCP tool call OK: ${normalizedDecision.tool}`,
+        details: toolOutputText
+      });
+      append(
+        msg(
+          "tool",
+          `MCP ${targetServer.name} -> ${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}\noutput:\n${toolOutputText}`,
+          "mcp",
+          { displayName: "MCP Tool" }
+        )
+      );
+      return {
+        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
+        ok: true,
+        status: "tool_called",
+        toolLabel: `MCP ${targetServer.name} -> ${normalizedDecision.tool}`,
+        detail: toolSummaryForQuestion,
+        actionSignature,
+        toolIntent,
+        observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
+        decisionSummary: `mcp:${targetServer.name}/${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
+        toolOutput,
+        browserObservation,
+        serverId: targetServer.id
+      };
+    } catch (e) {
+      const briefError = errorMessage(e);
+      toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 呼叫失敗（${briefError}）。`;
+      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
+      logNow({
+        category: "mcp",
+        agent: targetServer.name,
+        ok: false,
+        requestId: args.requestId,
+        stage: "tool execution",
+        message: `Tool call failed: ${normalizedDecision.tool}`,
+        details: briefError
+      });
     }
 
     return toolSummaryForQuestion
@@ -4904,7 +4957,7 @@ export default function App() {
           input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
           ok: false,
           status: "tool_called",
-          toolLabel: `MCP ${targetServer?.name ?? normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
+          toolLabel: `MCP ${targetServer.name} -> ${normalizedDecision.tool}`,
           detail: toolSummaryForQuestion,
           actionSignature
         }
@@ -5034,16 +5087,13 @@ export default function App() {
 
     let bootstrapPlanMeta: SkillBootstrapPlan | null = null;
 
-    const resolveMcpServerId = (toolName: string, preferredServerId?: string | null) => {
-      const matches = args.prepared.scopedMcpTools
-        .flatMap((entry) => entry.tools.map((tool) => ({ server: entry.server, tool })))
-        .filter((entry) => entry.tool.name === toolName);
-      if (!matches.length) return null;
-      if (preferredServerId) {
-        const preferred = matches.find((entry) => entry.server.id === preferredServerId);
-        if (preferred) return preferred.server.id;
-      }
-      return matches[0]?.server.id ?? null;
+    const resolveScopedMcpServerId = (toolName: string, preferredServerId?: string | null) => {
+      const resolution = resolveMcpServerId({
+        requestedServerId: preferredServerId,
+        toolName,
+        availableMcpTools: args.prepared.scopedMcpTools
+      });
+      return resolution.ok ? resolution.serverId : null;
     };
 
     const chooseObservationSelection = (preferredServerId?: string | null): BuiltInToolAction | McpAction | null => {
@@ -5092,7 +5142,7 @@ export default function App() {
         const tool = args.prepared.scopedBuiltInTools.find((item) => item.name === decision.toolName);
         return tool ? { type: "builtin_tool_call", tool: tool.name, input: decision.input ?? {} } : null;
       }
-      const serverId = resolveMcpServerId(decision.toolName, preferredServerId);
+      const serverId = resolveScopedMcpServerId(decision.toolName, preferredServerId);
       return serverId ? { type: "mcp_call", serverId, tool: decision.toolName, input: decision.input ?? {} } : null;
     };
 
@@ -5199,7 +5249,7 @@ export default function App() {
             const heuristicDecision = buildBrowserHeuristicDecision({
               state,
               userInput: args.userInput,
-              resolveMcpServerId: (toolName) => resolveMcpServerId(toolName, state.preferredMcpServerId)
+              resolveMcpServerId: (toolName) => resolveScopedMcpServerId(toolName, state.preferredMcpServerId)
             });
             if (heuristicDecision) {
               pushSkillTrace(
@@ -5247,7 +5297,7 @@ export default function App() {
             }
 
             if (state.stepIndex === 0 && !mustAct && bootstrapPlanMeta?.startUrl && fastPathScope.toolEntries.length > 0) {
-              const browserOpenServerId = resolveMcpServerId("browser_open", state.preferredMcpServerId);
+              const browserOpenServerId = resolveScopedMcpServerId("browser_open", state.preferredMcpServerId);
               if (browserOpenServerId) {
                 const normalizedStartUrl = normalizeBrowserWorkflowStartUrl(args.userInput, bootstrapPlanMeta.startUrl);
                 return {
@@ -7499,6 +7549,10 @@ export default function App() {
       const prevItem = prev.find((p) => p.id === s.id);
       return prevItem && prevItem.sseUrl !== s.sseUrl;
     });
+    [...removed, ...urlChanged].forEach((server) => {
+      mcpClientManager.invalidate(server.id);
+      mcpToolCatalogCache.invalidate(server.id);
+    });
     if (added.length || removed.length || urlChanged.length) {
       logNow({
         category: "mcp",
@@ -8360,10 +8414,12 @@ export default function App() {
                       }
                     }}
                     onUpdateTools={(id, tools) => {
+                      mcpToolCatalogCache.set(id, tools);
                       setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
                       const server = mcpServers.find((s) => s.id === id);
                       logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
                     }}
+                    clientManager={mcpClientManager}
                     pushLog={pushLog}
                   />
                 </ErrorBoundary>

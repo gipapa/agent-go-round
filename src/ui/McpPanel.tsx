@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { LogEntry, McpServerConfig, McpTool } from "../types";
+import { type McpClientManager } from "../mcp/clientManager";
 import { McpSseClient } from "../mcp/sseClient";
-import { listTools, callTool } from "../mcp/toolRegistry";
+import { listTools, callTool, type McpRequester } from "../mcp/toolRegistry";
 import { generateId } from "../utils/id";
 import { errorMessage } from "../utils/errors";
 import HelpModal from "./HelpModal";
@@ -13,6 +14,7 @@ export default function McpPanel(props: {
   onChangeServers: (s: McpServerConfig[]) => void;
   onSelectActive: (id: string | null) => void;
   onUpdateTools: (id: string, tools: McpTool[]) => void;
+  clientManager?: McpClientManager;
   pushLog: (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => void;
 }) {
   const active = useMemo(() => props.servers.find((s) => s.id === props.activeId) ?? props.servers[0] ?? null, [props.servers, props.activeId]);
@@ -45,6 +47,35 @@ export default function McpPanel(props: {
 
   function resolveToolName(input: string) {
     return input.trim();
+  }
+
+  function hasSameConnectionSettings(saved: McpServerConfig, draft: McpServerConfig) {
+    return (
+      saved.sseUrl === draft.sseUrl &&
+      saved.toolTimeoutSecond === draft.toolTimeoutSecond &&
+      saved.heartbeatSecond === draft.heartbeatSecond
+    );
+  }
+
+  async function runWithDraftClient<T>(task: (client: McpRequester) => Promise<T>) {
+    const draft = serverDraft;
+    if (!draft) throw new Error("Missing MCP server draft.");
+    const savedServer = props.servers.find((server) => server.id === draft.id) ?? null;
+    if (props.clientManager && savedServer && hasSameConnectionSettings(savedServer, draft)) {
+      return await props.clientManager.run(
+        savedServer,
+        task,
+        (text) => props.pushLog({ category: "mcp", agent: draft.name, message: text })
+      );
+    }
+
+    const client = new McpSseClient(draft);
+    client.connect((text) => props.pushLog({ category: "mcp", agent: draft.name, message: text }));
+    try {
+      return await task(client);
+    } finally {
+      client.close();
+    }
   }
 
   function openEditor(server?: McpServerConfig) {
@@ -170,12 +201,10 @@ export default function McpPanel(props: {
     if (!serverDraft) return;
     setIsCallingTool(true);
     setDraftError(null);
-    const client = new McpSseClient(serverDraft);
-    client.connect((text) => props.pushLog({ category: "mcp", agent: serverDraft.name, message: text }));
     try {
       const input = JSON.parse(toolInput || "{}") as unknown;
       const resolved = resolveToolName(toolName);
-      const res = await callTool(client, resolved, input);
+      const res = await runWithDraftClient((client) => callTool(client, resolved, input));
       setToolOutput(JSON.stringify(res, null, 2));
       props.pushLog({ category: "mcp", agent: serverDraft.name, ok: true, message: `tools/call ${resolved} OK` });
     } catch (error) {
@@ -189,7 +218,6 @@ export default function McpPanel(props: {
         details: message
       });
     } finally {
-      client.close();
       setIsCallingTool(false);
     }
   }
