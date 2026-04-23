@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_RADIO_SETTINGS,
   joinOrderedTranscriptChunks,
-  normalizeRadioSettings
+  normalizeRadioSettings,
+  synthesizeGeminiSpeech,
+  transcribeAudioChunk
 } from "../radio/runtime";
 
 describe("radio runtime helpers", () => {
@@ -38,5 +40,33 @@ describe("radio runtime helpers", () => {
     expect(DEFAULT_RADIO_SETTINGS.chunkSeconds).toBe(60);
     expect(DEFAULT_RADIO_SETTINGS.sttPrompt).toBe("");
     expect(DEFAULT_RADIO_SETTINGS.refinePrompt.length).toBeGreaterThan(0);
+  });
+
+  it("requires explicit STT/TTS models from load balancer instances instead of silently falling back", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      transcribeAudioChunk({
+        credential: { endpoint: "https://example.com" } as any,
+        apiKey: "test-key",
+        settings: DEFAULT_RADIO_SETTINGS,
+        blob: new Blob(["demo"], { type: "audio/webm" }),
+        chunkIndex: 0,
+        modelOverride: ""
+      })
+    ).rejects.toThrow("STT load balancer instance has no model configured.");
+
+    await expect(
+      synthesizeGeminiSpeech({
+        credential: { endpoint: "https://example.com" } as any,
+        apiKey: "test-key",
+        settings: DEFAULT_RADIO_SETTINGS,
+        text: "hello",
+        modelOverride: ""
+      })
+    ).rejects.toThrow("TTS load balancer instance has no model configured.");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -1349,7 +1349,12 @@ function buildBrowserHeuristicDecision(args: {
   const observation = args.state.lastBrowserObservation;
   if (!observation) return null;
 
-  if (goalWantsFirstRankedTarget(args.userInput) && observation.pageKind === "ranked_list" && observation.rankedTargets.length) {
+  if (
+    goalWantsFirstRankedTarget(args.userInput) &&
+    observation.pageKind === "ranked_list" &&
+    observation.sourceTool !== "browser_click" &&
+    observation.rankedTargets.length
+  ) {
     const browserClickServerId = args.resolveMcpServerId("browser_click");
     if (browserClickServerId) {
       const topTarget = observation.rankedTargets[0];

@@ -56,8 +56,6 @@ export const RADIO_TTS_VOICE_OPTIONS = [
 ] as const;
 
 export const DEFAULT_RADIO_STT_PROMPT = "";
-export const DEFAULT_RADIO_STT_MODEL = "whisper-large-v3-turbo";
-export const DEFAULT_RADIO_TTS_MODEL = "gemini-2.5-flash-preview-tts";
 
 export const DEFAULT_RADIO_REFINE_PROMPT = [
   "You clean up a speech-to-text draft before it is sent to another assistant.",
@@ -110,6 +108,14 @@ function base64ToBlob(base64: string, mimeType: string) {
   return new Blob([bytes], { type: mimeType });
 }
 
+function resolveRequiredRadioModel(modelOverride: string | undefined, purpose: "STT" | "TTS") {
+  const model = String(modelOverride ?? "").trim();
+  if (!model) {
+    throw new Error(`${purpose} load balancer instance has no model configured.`);
+  }
+  return model;
+}
+
 export function normalizeRadioSettings(input?: Partial<RadioSettings> | null): RadioSettings {
   const legacyInput = input as Partial<RadioSettings> & {
     sttCredentialId?: string;
@@ -160,11 +166,12 @@ export async function transcribeAudioChunk(args: {
   const endpoint = String(args.credential.endpoint || "").replace(/\/+$/, "");
   if (!endpoint) throw new Error("STT credential endpoint is missing.");
   if (!args.apiKey.trim()) throw new Error("STT API key is missing.");
+  const model = resolveRequiredRadioModel(args.modelOverride, "STT");
 
   const form = new FormData();
   const fileName = `radio-${args.chunkIndex}.${args.blob.type.includes("ogg") ? "ogg" : "webm"}`;
   form.append("file", new File([args.blob], fileName, { type: args.blob.type || "audio/webm" }));
-  form.append("model", String(args.modelOverride ?? DEFAULT_RADIO_STT_MODEL).trim() || DEFAULT_RADIO_STT_MODEL);
+  form.append("model", model);
   form.append("response_format", "json");
   const fallbackLanguage =
     typeof navigator !== "undefined" && /^zh(?:[-_].+)?$/i.test(String(navigator.language || "").trim()) ? "zh" : "";
@@ -233,7 +240,7 @@ export async function synthesizeGeminiSpeech(args: {
   if (!endpoint) throw new Error("TTS credential endpoint is missing.");
   if (!args.apiKey.trim()) throw new Error("TTS API key is missing.");
 
-  const model = String(args.modelOverride ?? DEFAULT_RADIO_TTS_MODEL).trim() || DEFAULT_RADIO_TTS_MODEL;
+  const model = resolveRequiredRadioModel(args.modelOverride, "TTS");
   const response = await fetch(`${endpoint}/models/${model}:generateContent`, {
     method: "POST",
     headers: {

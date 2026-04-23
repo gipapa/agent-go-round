@@ -269,6 +269,7 @@ steps:
         requireAssistant: true
         requireSkillTodo: true
         requireSkillTodoProgress: true
+        requireSkillTodoTerminal: true
         successfulToolMessageIncludes:
           - MCP 教學用MCP -> browser_open
           - MCP 教學用MCP -> browser_snapshot

@@ -1,6 +1,13 @@
+export function hasStructuredAgentFailureContent(text: string) {
+  const normalized = String(text ?? "").trim();
+  if (!normalized) return false;
+  return normalized.startsWith("【執行失敗】") || (/這一輪請求沒有成功完成/.test(normalized) && /【錯誤訊息】/.test(normalized));
+}
+
 export function detectTerminalAgentFailure(text: string) {
   const normalized = String(text ?? "").trim();
   if (!normalized) return null;
+  if (hasStructuredAgentFailureContent(normalized)) return normalized;
   if (/^Request failed:/i.test(normalized)) return normalized;
   if (/^HTTP \d+/i.test(normalized)) return normalized;
   if (/rate_limit_exceeded|insufficient_quota|quota|api key|invalid api key/i.test(normalized)) return normalized;

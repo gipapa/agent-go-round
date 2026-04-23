@@ -3,6 +3,8 @@ import { generateId } from "../utils/id";
 
 type RpcReq = { id: string; method: string; params?: any };
 type RpcRes = { id: string; result?: any; error?: any };
+type PendingRpc = { settle: (res: RpcRes) => void };
+type RpcPostDispatch = { kind: "reply"; response: RpcRes } | { kind: "deferred" };
 
 const DEFAULT_MCP_TOOL_TIMEOUT_SECOND = 30;
 const DEFAULT_MCP_HEARTBEAT_SECOND = 30;
@@ -21,7 +23,7 @@ const DEFAULT_MCP_HEARTBEAT_SECOND = 30;
  */
 export class McpSseClient {
   private es?: EventSource;
-  private pending = new Map<string, (res: RpcRes) => void>();
+  private pending = new Map<string, PendingRpc>();
   private connected = false;
   private onLog?: (msg: string) => void;
   private lastHealthyAt = 0;
@@ -39,10 +41,48 @@ export class McpSseClient {
 
   private failPending(error: string) {
     if (this.pending.size === 0) return;
-    for (const [id, resolve] of this.pending.entries()) {
-      resolve({ id, error });
+    for (const [id, entry] of this.pending.entries()) {
+      entry.settle({ id, error });
     }
     this.pending.clear();
+  }
+
+  private normalizeRpcResponse(id: string, response: Partial<RpcRes> | null | undefined): RpcRes {
+    return {
+      id: typeof response?.id === "string" && response.id.trim() ? response.id : id,
+      result: response?.result,
+      error: response?.error
+    };
+  }
+
+  private createPendingRequest(id: string) {
+    let settled = false;
+    let settle = (_res: RpcRes) => {};
+    let timeoutId = 0;
+    const promise = new Promise<RpcRes>((resolve) => {
+      settle = (response) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeoutId);
+        const entry = this.pending.get(id);
+        if (entry?.settle === settle) {
+          this.pending.delete(id);
+        }
+        resolve(this.normalizeRpcResponse(id, response));
+      };
+      timeoutId = window.setTimeout(() => {
+        settle({ id, error: `MCP RPC timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s` });
+      }, this.getToolTimeoutMs());
+    });
+    this.pending.set(id, { settle });
+    return { promise, settle };
+  }
+
+  private settlePending(response: RpcRes) {
+    const entry = this.pending.get(response.id);
+    if (!entry) return false;
+    entry.settle(response);
+    return true;
   }
 
   private invalidateConnection(pendingError?: string) {
@@ -109,11 +149,7 @@ export class McpSseClient {
       try {
         this.markHealthy();
         const msg = JSON.parse(ev.data) as RpcRes;
-        const cb = this.pending.get(msg.id);
-        if (cb) {
-          this.pending.delete(msg.id);
-          cb(msg);
-        }
+        this.settlePending(msg);
       } catch {
         this.onLog?.(`MCP SSE parse failed: ${ev.data}`);
       }
@@ -124,7 +160,7 @@ export class McpSseClient {
     this.invalidateConnection("MCP SSE closed");
   }
 
-  private async postRpc(req: RpcReq): Promise<RpcRes> {
+  private async postRpc(req: RpcReq): Promise<RpcPostDispatch> {
     const url = new URL(this.cfg.sseUrl);
     url.pathname = url.pathname.replace(/\/sse$/, "/rpc");
     const postUrl = url.toString();
@@ -140,16 +176,43 @@ export class McpSseClient {
       });
 
       if (!res.ok) {
-        return { id: req.id, error: `HTTP ${res.status}` };
+        return { kind: "reply", response: { id: req.id, error: `HTTP ${res.status}` } };
       }
-      const parsed = await res.json();
       this.markHealthy();
-      return parsed;
+      const bodyText = await res.text().catch(() => "");
+      const trimmed = bodyText.trim();
+      if (!trimmed) {
+        return { kind: "deferred" };
+      }
+      try {
+        const parsed = JSON.parse(trimmed) as Partial<RpcRes>;
+        if (parsed && typeof parsed === "object" && ("result" in parsed || "error" in parsed)) {
+          return { kind: "reply", response: this.normalizeRpcResponse(req.id, parsed) };
+        }
+        return { kind: "deferred" };
+      } catch {
+        if (res.status === 202 || res.status === 204) {
+          return { kind: "deferred" };
+        }
+        return {
+          kind: "reply",
+          response: {
+            id: req.id,
+            error: `Invalid MCP RPC response: ${trimmed.slice(0, 300)}`
+          }
+        };
+      }
     } catch (error: any) {
       if (error?.name === "AbortError") {
-        return { id: req.id, error: `MCP RPC timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s` };
+        return {
+          kind: "reply",
+          response: { id: req.id, error: `MCP RPC timed out after ${Math.round(this.getToolTimeoutMs() / 1000)}s` }
+        };
       }
-      return { id: req.id, error: String(error?.message ?? error) };
+      return {
+        kind: "reply",
+        response: { id: req.id, error: String(error?.message ?? error) }
+      };
     } finally {
       window.clearTimeout(timeoutId);
     }
@@ -163,7 +226,7 @@ export class McpSseClient {
     if (this.healthCheckPromise) return this.healthCheckPromise;
 
     this.healthCheckPromise = (async () => {
-      const probe = await this.postRpc({ id: generateId(), method: "tools/list" });
+      const probe = await this.request("tools/list");
       if (probe.error) {
         this.onLog?.(`MCP heartbeat failed: ${probe.error}`);
         this.invalidateConnection("MCP heartbeat failed");
@@ -178,6 +241,9 @@ export class McpSseClient {
   }
 
   async request(method: string, params?: any): Promise<RpcRes> {
+    if (!this.es) {
+      this.connect(this.onLog);
+    }
     const id = generateId();
     const req: RpcReq = { id, method, params };
 
@@ -189,17 +255,11 @@ export class McpSseClient {
       }
     }
 
-    const httpRes = await this.postRpc(req);
-    if (httpRes?.result !== undefined || httpRes?.error !== undefined) return httpRes;
-
-    return await new Promise<RpcRes>((resolve) => {
-      this.pending.set(id, resolve);
-      setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id);
-          resolve({ id, error: "timeout" });
-        }
-      }, 15000);
-    });
+    const pendingRequest = this.createPendingRequest(id);
+    const httpDispatch = await this.postRpc(req);
+    if (httpDispatch.kind === "reply") {
+      pendingRequest.settle(httpDispatch.response);
+    }
+    return await pendingRequest.promise;
   }
 }

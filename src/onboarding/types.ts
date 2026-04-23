@@ -65,6 +65,7 @@ export type TutorialChatExpectation = {
   skillLoadContainsAny?: string[];
   requireSkillTodo?: boolean;
   requireSkillTodoProgress?: boolean;
+  requireSkillTodoTerminal?: boolean;
 };
 
 export type TutorialStepAutomation = {

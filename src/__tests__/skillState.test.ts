@@ -49,7 +49,7 @@ describe("applyCompletionDecisionToState", () => {
 });
 
 describe("applyActionToState", () => {
-  it("preserves grounded browser observation fields when action output only returns a transient success marker", () => {
+  it("clears stale interactive browser refs after a transient browser_click result", () => {
     const initial = createSkillRunState({
       skillId: "skill-1",
       goal: "repo summary",
@@ -79,8 +79,48 @@ describe("applyActionToState", () => {
       contentHints: []
     });
 
-    expect(next.lastBrowserObservation?.pageKind).toBe("ranked_list");
+    expect(next.lastBrowserObservation?.pageKind).toBe("unknown");
     expect(next.lastBrowserObservation?.repoName).toBe("mvanhorn/last30days-skill");
-    expect(next.lastBrowserObservation?.contentHints).toContain("last30days workflow automation toolkit");
+    expect(next.lastBrowserObservation?.rankedTargets).toEqual([]);
+    expect(next.lastBrowserObservation?.contentHints).toEqual([]);
+  });
+
+  it("preserves grounded repo-page context without reusing stale action targets", () => {
+    const initial = createSkillRunState({
+      skillId: "skill-1",
+      goal: "repo summary",
+      todo: bootstrapTodoList(["open", "summarize"])
+    });
+
+    const withObservation = {
+      ...initial,
+      lastBrowserObservation: {
+        sourceTool: "browser_snapshot",
+        pageKind: "repo_page" as const,
+        repoName: "demo/repo",
+        url: "https://github.com/demo/repo",
+        title: "GitHub - demo/repo",
+        rankedTargets: [],
+        inputTargets: [],
+        actionTargets: [{ ref: "@cta", role: "button", label: "Star", kind: "button", score: 80 }],
+        contentHints: ["A small browser automation toolkit", "Usage examples and installation guide"]
+      }
+    };
+
+    const next = applyActionToState(withObservation, "mcp:browser_click", {
+      sourceTool: "browser_click",
+      pageKind: "unknown",
+      url: "https://github.com/demo/repo",
+      title: "GitHub - demo/repo",
+      rankedTargets: [],
+      inputTargets: [],
+      actionTargets: [],
+      contentHints: []
+    });
+
+    expect(next.lastBrowserObservation?.pageKind).toBe("repo_page");
+    expect(next.lastBrowserObservation?.repoName).toBe("demo/repo");
+    expect(next.lastBrowserObservation?.contentHints).toContain("A small browser automation toolkit");
+    expect(next.lastBrowserObservation?.actionTargets).toEqual([]);
   });
 });

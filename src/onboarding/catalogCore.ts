@@ -35,7 +35,8 @@ function normalizeAutomation(input: any): TutorialStepAutomation | undefined {
           skillTraceIncludesAny: normalizeStringArray(expectInput.skillTraceIncludesAny),
           skillLoadContainsAny: normalizeStringArray(expectInput.skillLoadContainsAny),
           requireSkillTodo: expectInput.requireSkillTodo === true,
-          requireSkillTodoProgress: expectInput.requireSkillTodoProgress === true
+          requireSkillTodoProgress: expectInput.requireSkillTodoProgress === true,
+          requireSkillTodoTerminal: expectInput.requireSkillTodoTerminal === true
         }
       : undefined
   };

@@ -1,5 +1,6 @@
 import { saveBuiltInTools } from "../storage/builtInToolStore";
 import { listSkillFiles, listSkills, restoreSkillSnapshots } from "../storage/skillStore";
+import { hasStructuredAgentFailureContent } from "../utils/agentFailure";
 import { normalizeCredentialUrl } from "../utils/credential";
 import { SYSTEM_REQUEST_CONFIRMATION_TOOL_ID, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
 import { AgentConfig } from "../types";
@@ -266,6 +267,13 @@ function buildGenericTutorialPendingStatus(step: TutorialStepDefinition, issues:
   return issues.join(" ");
 }
 
+function extractTutorialAssistantFailure(content: string) {
+  const normalized = String(content ?? "").trim();
+  if (!hasStructuredAgentFailureContent(normalized)) return "";
+  const errorBlock = normalized.match(/【錯誤訊息】\s*([\s\S]+)$/)?.[1]?.trim();
+  return errorBlock ? `Agent 這一輪其實執行失敗了：${errorBlock}` : "Agent 這一輪其實執行失敗了。";
+}
+
 function evaluateAutomationChatStep(step: TutorialStepDefinition, state: TutorialRuntimeState): TutorialStepEvaluation {
   const automation = step.automation;
   const expect = automation?.expect as TutorialChatExpectation | undefined;
@@ -286,6 +294,13 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
 
   if ((expect?.requireAssistant ?? true) && !assistant) {
     issues.push(step.completionLabel ?? "請先送出指定訊息並等待 Agent 回覆。");
+  }
+
+  if (assistant) {
+    const assistantFailure = extractTutorialAssistantFailure(assistant.content);
+    if (assistantFailure) {
+      issues.push(assistantFailure);
+    }
   }
 
   if (assistant && expect?.assistantContentIncludes?.length) {
@@ -374,6 +389,14 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     !(assistant.skillTodo && assistant.skillTodo.some((item) => item.status !== "pending"))
   ) {
     issues.push("已收到回覆，但 multi-turn todo 尚未出現進度變化。");
+  }
+
+  if (
+    assistant &&
+    expect?.requireSkillTodoTerminal &&
+    !(assistant.skillTodo && assistant.skillTodo.length > 0 && assistant.skillTodo.every((item) => item.status === "completed" || item.status === "blocked"))
+  ) {
+    issues.push("已收到回覆，但 multi-turn todo 還沒有進入最終狀態。");
   }
 
   return {

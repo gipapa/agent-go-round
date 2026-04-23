@@ -160,6 +160,12 @@ function collectContentHints(text: string, limit = 8) {
     .map((entry) => entry.value);
 }
 
+function hasMeaningfulTransientTitle(title: string | undefined) {
+  const normalized = normalizeText(title ?? "");
+  if (!normalized) return false;
+  return !/^done$/i.test(normalized);
+}
+
 export function mergeBrowserObservationDigest(
   previous: BrowserObservationDigest | undefined,
   next: BrowserObservationDigest | undefined
@@ -167,20 +173,22 @@ export function mergeBrowserObservationDigest(
   if (!previous) return next;
   if (!next) return previous;
 
-  const pageKind = next.pageKind !== "unknown" ? next.pageKind : previous.pageKind;
-  const preservePriorContext = next.pageKind === "unknown";
+  const preserveStableContext = next.pageKind === "unknown";
+  const preserveRepoPageContext =
+    previous.pageKind === "repo_page" && preserveStableContext && (!!next.url || next.contentHints.length > 0 || hasMeaningfulTransientTitle(next.title));
+  const pageKind = next.pageKind !== "unknown" ? next.pageKind : preserveRepoPageContext ? "repo_page" : "unknown";
 
   return {
     sourceTool: next.sourceTool || previous.sourceTool,
     pageKind,
-    blockedReason: next.blockedReason ?? (preservePriorContext ? previous.blockedReason : undefined),
-    repoName: next.repoName ?? (pageKind === "repo_page" || preservePriorContext ? previous.repoName : undefined),
-    url: next.url ?? (preservePriorContext ? previous.url : undefined),
-    title: next.title ?? (preservePriorContext ? previous.title : undefined),
-    rankedTargets: next.rankedTargets.length ? next.rankedTargets : pageKind === "ranked_list" || preservePriorContext ? previous.rankedTargets : [],
-    inputTargets: next.inputTargets.length ? next.inputTargets : preservePriorContext ? previous.inputTargets : [],
-    actionTargets: next.actionTargets.length ? next.actionTargets : preservePriorContext ? previous.actionTargets : [],
-    contentHints: next.contentHints.length ? next.contentHints : pageKind === "repo_page" || preservePriorContext ? previous.contentHints : []
+    blockedReason: next.blockedReason ?? (preserveStableContext ? previous.blockedReason : undefined),
+    repoName: next.repoName ?? (pageKind === "repo_page" || preserveStableContext ? previous.repoName : undefined),
+    url: next.url ?? (preserveStableContext ? previous.url : undefined),
+    title: next.title ?? (preserveStableContext ? previous.title : undefined),
+    rankedTargets: next.rankedTargets,
+    inputTargets: next.inputTargets,
+    actionTargets: next.actionTargets,
+    contentHints: next.contentHints.length ? next.contentHints : pageKind === "repo_page" ? previous.contentHints : []
   };
 }
 

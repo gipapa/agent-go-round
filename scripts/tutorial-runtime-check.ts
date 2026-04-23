@@ -236,6 +236,7 @@ async function assertChatgptBrowserSkillAutomationExists() {
   assert.equal(step.automation?.composerSeed, "幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
   assert.equal(step.automation?.expect?.requireSkillTodo, true);
   assert.equal(step.automation?.expect?.requireSkillTodoProgress, true);
+  assert.equal(step.automation?.expect?.requireSkillTodoTerminal, true);
 }
 
 async function main() {

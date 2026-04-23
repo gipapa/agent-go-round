@@ -365,12 +365,67 @@ describe("tutorial YAML automation linkage", () => {
     expect(step.automation?.composerSeed).toBe("幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
     expect(step.automation?.expect?.requireSkillTodo).toBe(true);
     expect(step.automation?.expect?.requireSkillTodoProgress).toBe(true);
+    expect(step.automation?.expect?.requireSkillTodoTerminal).toBe(true);
   });
 
   it("uses multi-turn todo expectations for the browser workflow skill step", () => {
     const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
     const prompt = step.automation?.expect?.userPrompt ?? "";
     const assistant = makeAssistant("assistant-multi-turn", "已完成 GitHub repo README 摘要。", {
+      skillTrace: [{ label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" }],
+      skillTodo: [
+        { id: "todo-1", label: "打開 GitHub Trending", status: "completed", source: "planner", updatedAt: Date.now() },
+        { id: "todo-2", label: "點擊第一名 repo", status: "completed", source: "planner", updatedAt: Date.now() }
+      ],
+      skillPhase: "act"
+    });
+    const openTool = makeTool("MCP 教學用MCP -> browser_open");
+    const snapshotTool = makeTool("MCP 教學用MCP -> browser_snapshot");
+    const clickTool = makeTool("MCP 教學用MCP -> browser_click");
+    const result = evaluateTutorialStep(
+      step,
+      makeState({ history: [makeUser(prompt), openTool, snapshotTool, clickTool, assistant], openedToolResultMessageIds: [assistant.id] })
+    );
+    expect(result.completed).toBe(true);
+  });
+
+  it("rejects structured assistant failure content even if tokens match the expectation", () => {
+    const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const assistant = makeAssistant(
+      "assistant-failure",
+      [
+        "【執行失敗】",
+        "這一輪請求沒有成功完成，系統已停止重試。",
+        "",
+        "【原始任務】",
+        prompt,
+        "",
+        "【錯誤訊息】",
+        "browser_click 呼叫失敗（✗ Unknown ref: e47）",
+        "",
+        "GitHub repo README"
+      ].join("\n"),
+      {
+        skillTrace: [{ label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" }],
+        skillTodo: [
+          { id: "todo-1", label: "打開 GitHub Trending", status: "completed", source: "planner", updatedAt: Date.now() },
+          { id: "todo-2", label: "點擊第一名 repo", status: "blocked", source: "planner", updatedAt: Date.now() }
+        ]
+      }
+    );
+    const openTool = makeTool("MCP 教學用MCP -> browser_open");
+    const snapshotTool = makeTool("MCP 教學用MCP -> browser_snapshot");
+    const clickTool = makeTool("MCP 教學用MCP -> browser_click");
+    const result = evaluateTutorialStep(step, makeState({ history: [makeUser(prompt), openTool, snapshotTool, clickTool, assistant] }));
+    expect(result.completed).toBe(false);
+    expect(result.statusText).toContain("執行失敗");
+  });
+
+  it("requires browser workflow todo to reach terminal states instead of merely showing progress", () => {
+    const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const assistant = makeAssistant("assistant-in-progress", "已完成 GitHub repo README 摘要。", {
       skillTrace: [{ label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" }],
       skillTodo: [
         { id: "todo-1", label: "打開 GitHub Trending", status: "completed", source: "planner", updatedAt: Date.now() },
@@ -385,6 +440,7 @@ describe("tutorial YAML automation linkage", () => {
       step,
       makeState({ history: [makeUser(prompt), openTool, snapshotTool, clickTool, assistant], openedToolResultMessageIds: [assistant.id] })
     );
-    expect(result.completed).toBe(true);
+    expect(result.completed).toBe(false);
+    expect(result.statusText).toContain("最終狀態");
   });
 });

@@ -1014,6 +1014,9 @@ async function executeScenario(scenario: TutorialScenarioDefinition, isLastScena
     console.log(`[o] ${scenario.title} / ${step.checklistLabel}`);
     if (assistantReply) {
       console.log(`    回覆：\n${indentBlock(assistantReply, "    ")}`);
+      if (assistantReply.trim().startsWith("【執行失敗】")) {
+        throw new Error(`教學案例 ${scenario.id}/${step.id} 收到失敗回覆，不應視為完成。\n${assistantReply}`);
+      }
     }
     if (skillTodoText) {
       console.log(`    Todo：\n${indentBlock(skillTodoText, "    ")}`);
