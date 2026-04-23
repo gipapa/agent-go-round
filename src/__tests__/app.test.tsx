@@ -93,6 +93,16 @@ async function renderApp() {
     root!.render(<App />);
   });
   await flushPromises();
+  // Dismiss the landing page so workspace UI (textarea, tabs) becomes available.
+  const landingStart = container.querySelector<HTMLButtonElement>(
+    'button[data-tutorial-id="landing-start"]'
+  );
+  if (landingStart) {
+    await act(async () => {
+      landingStart.click();
+    });
+    await flushPromises();
+  }
 }
 
 function getTextarea() {
