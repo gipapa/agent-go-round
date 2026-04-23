@@ -25,9 +25,9 @@
 - Issue 10 的 Web Worker 化會比較大改動，可能拆獨立 PR
 
 ## 前置依賴
-- **Batch 1 必做**（Error Boundary）：timeout / abort 觸發的 error 需要被 boundary 接住，否則 UI 會炸
-- **Batch 2 強烈建議**（型別安全）：deadline helper / signal 的型別要明確，否則 callbacks chain 串得很痛苦
-- **Issue 11（fetch 加 signal）必做**：在 BATCH1 已包含；這個 batch 要利用它把 signal 串到底
+- ✅ Batch 1 已完成（ErrorBoundary 已就位，timeout / abort 引發的 error 會被 boundary 接住）
+- ✅ Batch 2 已完成（型別安全 + Zod，callbacks chain 不會再被 `any` 拖累）
+- ✅ Adapter 層已完成 fetch `signal` + `timeoutMs` + `Retry-After`（先前的 Issue 11，已 merge）；本 batch 要做的是把 signal **從 caller 端串到底**
 
 ## 執行順序建議
 
@@ -43,7 +43,7 @@
 ### Step 2：Issue 13 之 multi-turn skill runtime 接 deadline（1 天）
 - `MultiTurnSkillCallbacks` 介面新增 `signal?: AbortSignal`
 - `runMultiTurnSkillRuntime` 主迴圈每輪檢查 `deadline.alive()`
-- callbacks 內呼叫 adapter / model 時把 signal 傳下去（吃 Issue 11 的成果）
+- callbacks 內呼叫 adapter / model 時把 signal 傳下去（吃 adapter 層既有的 `signal` / `timeoutMs` 介面）
 - 中途 timeout / abort 時要寫入 trace 說明原因
 
 ### Step 3：Issue 13 之 orchestrators 接 deadline（半天）
