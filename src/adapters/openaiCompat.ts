@@ -1,5 +1,13 @@
 import { AgentAdapter, ChatEvent, ChatRequest } from "./base";
 import { DetectResult, ChatMessage } from "../types";
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+  getAbortSignalMessage,
+  getErrorMessage,
+  getRetryAfterDelayMs,
+  sleepWithAbort
+} from "../utils/fetchWithTimeout";
 
 function toOpenAIMessage(m: ChatMessage) {
   if (m.role === "tool") {
@@ -13,7 +21,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
     if (!agent.endpoint) return { ok: false, detectedType: "unknown", notes: "No endpoint" };
     try {
       const url = agent.endpoint.replace(/\/$/, "") + "/models";
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         headers: {
           ...(agent.apiKey ? { Authorization: `Bearer ${agent.apiKey}` } : {}),
           ...(agent.headers ?? {})
@@ -33,6 +41,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
     const url = endpoint + "/chat/completions";
     const retryDelaySec = Math.max(0, req.retry?.delaySec ?? 0);
     const retryMax = Math.max(0, req.retry?.max ?? 0);
+    const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
 
     const messages: any[] = [];
     if (req.system?.trim()) messages.push({ role: "system", content: req.system.trim() });
@@ -42,31 +51,47 @@ export const OpenAICompatAdapter: AgentAdapter = {
     }
     messages.push({ role: "user", content: req.input });
 
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     let res: Response | null = null;
+
+    const waitBeforeRetry = async (delayMs: number) => {
+      if (delayMs > 0) await sleepWithAbort(delayMs, req.signal);
+    };
 
     for (let attempt = 0; attempt <= retryMax; attempt++) {
       try {
-        res = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
-            ...(req.agent.headers ?? {})
+        res = await fetchWithTimeout(
+          url,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
+              ...(req.agent.headers ?? {})
+            },
+            body: JSON.stringify({
+              model: req.agent.model ?? "gpt-4o-mini",
+              stream: true,
+              messages
+            })
           },
-          body: JSON.stringify({
-            model: req.agent.model ?? "gpt-4o-mini",
-            stream: true,
-            messages
-          })
-        });
-      } catch (e: any) {
+          { signal: req.signal, timeoutMs }
+        );
+      } catch (e) {
+        if (req.signal?.aborted) {
+          yield { type: "done", text: `Request failed: ${getAbortSignalMessage(req.signal)}` };
+          return;
+        }
         if (attempt < retryMax) {
           req.onLog?.(`[retry] network error, attempt ${attempt + 1}/${retryMax}, waiting ${retryDelaySec}s`);
-          await sleep(retryDelaySec * 1000);
+          try {
+            await waitBeforeRetry(retryDelaySec * 1000);
+          } catch (waitError) {
+            yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+            return;
+          }
           continue;
         }
-        yield { type: "done", text: `Request failed: ${e?.message ?? String(e)}` };
+        yield { type: "done", text: `Request failed: ${getErrorMessage(e)}` };
         return;
       }
 
@@ -74,8 +99,14 @@ export const OpenAICompatAdapter: AgentAdapter = {
 
       const text = await res.text().catch(() => "");
       if (res.status === 429 && attempt < retryMax) {
-        req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${retryDelaySec}s`);
-        await sleep(retryDelaySec * 1000);
+        const delayMs = getRetryAfterDelayMs(res.headers, retryDelaySec * 1000);
+        req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${Math.round(delayMs / 1000)}s`);
+        try {
+          await waitBeforeRetry(delayMs);
+        } catch (waitError) {
+          yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+          return;
+        }
         continue;
       }
       yield { type: "done", text: `Request failed: HTTP ${res.status}\n${text}` };
@@ -111,39 +142,54 @@ export const OpenAICompatAdapter: AgentAdapter = {
     let buf = "";
     let full = "";
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === "[DONE]") {
-          yield { type: "done", text: full };
+    try {
+      while (true) {
+        if (req.signal?.aborted) {
+          await reader.cancel().catch(() => {});
+          yield { type: "done", text: full || `Request failed: ${getAbortSignalMessage(req.signal)}` };
           return;
         }
-        try {
-          const j = JSON.parse(data);
-          const delta = j?.choices?.[0]?.delta?.content ?? "";
-          const msgContent = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? "";
-          if (delta) {
-            full += delta;
-            yield { type: "delta", text: delta };
-            continue;
+
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === "[DONE]") {
+            yield { type: "done", text: full };
+            return;
           }
-          if (msgContent) {
-            const nextText = msgContent.startsWith(full) ? msgContent.slice(full.length) : msgContent;
-            full = msgContent;
-            if (nextText) yield { type: "delta", text: nextText };
+          try {
+            const j = JSON.parse(data);
+            const delta = j?.choices?.[0]?.delta?.content ?? "";
+            const msgContent = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? "";
+            if (delta) {
+              full += delta;
+              yield { type: "delta", text: delta };
+              continue;
+            }
+            if (msgContent) {
+              const nextText = msgContent.startsWith(full) ? msgContent.slice(full.length) : msgContent;
+              full = msgContent;
+              if (nextText) yield { type: "delta", text: nextText };
+            }
+          } catch {
+            // ignore malformed chunks
           }
-        } catch {
-          // ignore malformed chunks
         }
       }
+    } catch (error) {
+      if (req.signal?.aborted) {
+        yield { type: "done", text: full || `Request failed: ${getAbortSignalMessage(req.signal)}` };
+        return;
+      }
+      yield { type: "done", text: `Request failed: ${getErrorMessage(error)}` };
+      return;
     }
 
     yield { type: "done", text: full };

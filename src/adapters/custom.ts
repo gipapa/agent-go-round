@@ -1,4 +1,12 @@
 import { AgentAdapter, ChatEvent, ChatRequest } from "./base";
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+  getAbortSignalMessage,
+  getErrorMessage,
+  getRetryAfterDelayMs,
+  sleepWithAbort
+} from "../utils/fetchWithTimeout";
 
 function mustache(tpl: string, vars: Record<string, string>) {
   return tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => vars[k] ?? "");
@@ -38,20 +46,68 @@ export const CustomAdapter: AgentAdapter = {
       history,
       model: req.agent.model ?? ""
     });
+    const retryDelaySec = Math.max(0, req.retry?.delaySec ?? 0);
+    const retryMax = Math.max(0, req.retry?.max ?? 0);
+    const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
 
-    const res = await fetch(c.url, {
-      method: c.method,
-      headers: {
-        "Content-Type": "application/json",
-        ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
-        ...(req.agent.headers ?? {})
-      },
-      body
-    });
+    let text = "";
+    let res: Response | null = null;
+    for (let attempt = 0; attempt <= retryMax; attempt++) {
+      try {
+        res = await fetchWithTimeout(
+          c.url,
+          {
+            method: c.method,
+            headers: {
+              "Content-Type": "application/json",
+              ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
+              ...(req.agent.headers ?? {})
+            },
+            body
+          },
+          { signal: req.signal, timeoutMs }
+        );
+      } catch (error) {
+        if (req.signal?.aborted) {
+          yield { type: "done", text: `Request failed: ${getAbortSignalMessage(req.signal)}` };
+          return;
+        }
+        if (attempt < retryMax) {
+          req.onLog?.(`[retry] network error, attempt ${attempt + 1}/${retryMax}, waiting ${retryDelaySec}s`);
+          try {
+            await sleepWithAbort(retryDelaySec * 1000, req.signal);
+          } catch (waitError) {
+            yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+            return;
+          }
+          continue;
+        }
+        yield { type: "done", text: `Request failed: ${getErrorMessage(error)}` };
+        return;
+      }
 
-    const text = await res.text();
+      text = await res.text();
+      if (res.status === 429 && attempt < retryMax) {
+        const delayMs = getRetryAfterDelayMs(res.headers, retryDelaySec * 1000);
+        req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${Math.round(delayMs / 1000)}s`);
+        try {
+          await sleepWithAbort(delayMs, req.signal);
+        } catch (waitError) {
+          yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+          return;
+        }
+        continue;
+      }
+      break;
+    }
+
+    if (!res) {
+      yield { type: "done", text: "Request failed: No response" };
+      return;
+    }
+
     if (!res.ok) {
-      yield { type: "done", text: `HTTP ${res.status}\n${text}` };
+      yield { type: "done", text: `Request failed: HTTP ${res.status}\n${text}` };
       return;
     }
 

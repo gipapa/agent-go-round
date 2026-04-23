@@ -7,6 +7,12 @@ const PORT = 3333;
 const HOST = "0.0.0.0";
 app.use(cors());
 app.use(express.json());
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && "body" in err) {
+    return res.status(400).json({ error: "Invalid JSON body" });
+  }
+  return next(err);
+});
 
 /**
  * 存活的 SSE client
@@ -24,6 +30,11 @@ app.get("/mcp/sse", (req, res) => {
 
   clients.add(res);
 
+  req.on("error", (err) => {
+    clients.delete(res);
+    console.error("[mcp-test] SSE request error:", err);
+  });
+
   req.on("close", () => {
     clients.delete(res);
   });
@@ -35,7 +46,12 @@ app.get("/mcp/sse", (req, res) => {
 function pushEvent(obj) {
   const data = `data: ${JSON.stringify(obj)}\n\n`;
   for (const res of clients) {
-    res.write(data);
+    try {
+      res.write(data);
+    } catch (err) {
+      clients.delete(res);
+      console.error("[mcp-test] SSE write failed:", err);
+    }
   }
 }
 
@@ -61,43 +77,73 @@ const tools = [
  * RPC endpoint
  */
 app.post("/mcp/rpc", (req, res) => {
-  const { id, method, params } = req.body;
-
-  // tools/list
-  if (method === "tools/list") {
-    return res.json({
-      id,
-      result: {
-        tools
-      }
-    });
+  const body = req.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return res.status(400).json({ error: "body must be a JSON object" });
   }
 
-  // tools/call
-  if (method === "tools/call") {
-    const { name, input } = params || {};
+  const { id, method, params } = body;
+  if (typeof id !== "string" || !id.trim()) {
+    return res.status(400).json({ error: "id must be a non-empty string" });
+  }
+  if (typeof method !== "string" || !method.trim()) {
+    return res.status(400).json({ id, error: "method must be a non-empty string" });
+  }
 
-    let result;
-    if (name === "echo") {
-      result = { text: input?.text ?? "" };
-    } else if (name === "time") {
-      result = { now: new Date().toISOString() };
-    } else {
-      result = { error: "Unknown tool" };
+  try {
+    // tools/list
+    if (method === "tools/list") {
+      return res.json({
+        id,
+        result: {
+          tools
+        }
+      });
     }
 
-    // 你可以選擇「立刻回 HTTP」
-    return res.json({
-      id,
-      result
-    });
+    // tools/call
+    if (method === "tools/call") {
+      const callParams = params && typeof params === "object" && !Array.isArray(params) ? params : {};
+      const { name, input } = callParams;
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({ id, error: "params.name must be a non-empty string" });
+      }
 
-    // 或者：不回 HTTP，改用 SSE（AgentGoRound 也支援）
-    // pushEvent({ id, result });
-    // return res.status(202).end();
+      let result;
+      if (name === "echo") {
+        if (!input || typeof input !== "object" || Array.isArray(input)) {
+          return res.status(400).json({ id, error: "params.input must be an object for echo" });
+        }
+        result = { text: typeof input.text === "string" ? input.text : "" };
+      } else if (name === "time") {
+        result = { now: new Date().toISOString() };
+      } else {
+        return res.json({ id, error: `Unknown tool: ${name}` });
+      }
+
+      // 你可以選擇「立刻回 HTTP」
+      return res.json({
+        id,
+        result
+      });
+
+      // 或者：不回 HTTP，改用 SSE（AgentGoRound 也支援）
+      // pushEvent({ id, result });
+      // return res.status(202).end();
+    }
+
+    return res.json({ id, error: `Unknown method: ${method}` });
+  } catch (err) {
+    const message = err?.message ?? String(err);
+    console.error("[mcp-test] RPC handler failed:", err);
+    return res.status(500).json({ id, error: message });
   }
+});
 
-  res.json({ id, error: "Unknown method" });
+app.use((err, req, res, next) => {
+  console.error("[mcp-test] unhandled error:", err);
+  if (res.headersSent) return next(err);
+  return res.status(500).json({ error: String(err?.message ?? err) });
 });
 
 function getWslIp() {

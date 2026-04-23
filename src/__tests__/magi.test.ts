@@ -42,14 +42,14 @@ describe("resolveFinalVerdict", () => {
 });
 
 describe("createInitialState", () => {
-  it("creates EVA-style unit order with pending status", () => {
+  it("creates EVA-style unit order with thinking status", () => {
     const state = createInitialState("magi_vote", "是否批准測試計畫", buildUnits());
 
     expect(state.mode).toBe("magi_vote");
     expect(state.status).toBe("running");
     expect(state.units).toHaveLength(3);
     expect(state.units.map((unit) => unit.unitId)).toEqual(["Melchior", "Balthasar", "Casper"]);
-    expect(state.units.every((unit) => unit.status === "pending")).toBe(true);
+    expect(state.units.every((unit) => unit.status === "thinking")).toBe(true);
     expect(state.code).toBe("473");
   });
 });

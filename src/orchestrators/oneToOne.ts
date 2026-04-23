@@ -10,6 +10,8 @@ export async function runOneToOne(args: {
   onDelta: (t: string) => void;
   retry?: RetryConfig;
   onLog?: (t: string) => void;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<string> {
   let full = "";
   for await (const ev of args.adapter.chat({
@@ -18,7 +20,9 @@ export async function runOneToOne(args: {
     history: args.history,
     system: args.system,
     retry: args.retry,
-    onLog: args.onLog
+    onLog: args.onLog,
+    signal: args.signal,
+    timeoutMs: args.timeoutMs
   })) {
     if (ev.type === "delta") {
       full += ev.text;

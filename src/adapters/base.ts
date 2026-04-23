@@ -12,6 +12,8 @@ export type ChatRequest = {
   system?: string;
   retry?: RetryConfig;
   onLog?: (t: string) => void;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export type ChatDelta = { type: "delta"; text: string };

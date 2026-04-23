@@ -74,6 +74,7 @@ import AgentsPanel from "../ui/AgentsPanel";
 import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
 import ChatPanel from "../ui/ChatPanel";
 import DocsPanel from "../ui/DocsPanel";
+import ErrorBoundary from "../ui/ErrorBoundary";
 import HelpModal from "../ui/HelpModal";
 import LandingPage from "../ui/LandingPage";
 import McpPanel from "../ui/McpPanel";
@@ -3339,6 +3340,8 @@ export default function App() {
     onLog?: (text: string) => void;
     requestLabel?: string;
     requestId?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
   }) {
     const requestLabel = args.requestLabel ?? "chat response";
     let candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
@@ -3365,7 +3368,9 @@ export default function App() {
         system: args.system,
         onDelta: args.onDelta,
         retry: getRetryPolicyForAgent(args.logicalAgent),
-        onLog: args.onLog
+        onLog: args.onLog,
+        signal: args.signal,
+        timeoutMs: args.timeoutMs
       });
     }
 
@@ -3393,7 +3398,9 @@ export default function App() {
         system: args.system,
         onDelta: args.onDelta,
         retry,
-        onLog: args.onLog
+        onLog: args.onLog,
+        signal: args.signal,
+        timeoutMs: args.timeoutMs
       });
       const trimmedText = String(text ?? "").trim();
       if (!trimmedText) {
@@ -7821,6 +7828,17 @@ export default function App() {
     }
   }
 
+  function logRenderError(scope: string, error: Error, info: React.ErrorInfo) {
+    logNow({
+      category: "render_error",
+      level: "error",
+      ok: false,
+      stage: scope,
+      message: `Render failed: ${scope}`,
+      details: [String(error.stack ?? error.message ?? error), info.componentStack].filter(Boolean).join("\n\n")
+    });
+  }
+
   if (appEntryMode === "landing") {
     return (
       <>
@@ -7884,35 +7902,37 @@ export default function App() {
         {activeTab === "chat" && (
           <div className="content-grid">
             <div className="card panel chat-panel">
-              <ChatPanel
-                history={history}
-                onSend={onSend}
-                onClear={() => {
-                  setHistory([]);
-                  setTutorialOpenedToolResultMessageIds([]);
-                  logNow({ category: "chat", message: "Chat cleared" });
-                }}
-                leaderName={null}
-                userName={userProfile.name}
-                mode={mode}
-                modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
-                onExportRaw={exportRawHistory}
-                onExportSummary={exportSummaryHistory}
-                onImportHistory={importHistoryFile}
-                isSummaryExporting={isSummaryExporting}
-                onOpenFullscreen={() => setIsChatFullscreen(true)}
-                composerSeed={tutorialComposerSeed}
-                onDraftChange={setChatComposerDraft}
-                radioState={radioSessionState}
-                onStartRadioSession={() => void startRadioSession()}
-                onStopRadioSession={() => stopRadioSession()}
-                onForceRadioTurn={() => void forceRadioTurnSwitch()}
-                onOpenToolResult={(assistantMessageId) =>
-                  setTutorialOpenedToolResultMessageIds((current) =>
-                    current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
-                  )
-                }
-              />
+              <ErrorBoundary onError={(error, info) => logRenderError("ChatPanel", error, info)}>
+                <ChatPanel
+                  history={history}
+                  onSend={onSend}
+                  onClear={() => {
+                    setHistory([]);
+                    setTutorialOpenedToolResultMessageIds([]);
+                    logNow({ category: "chat", message: "Chat cleared" });
+                  }}
+                  leaderName={null}
+                  userName={userProfile.name}
+                  mode={mode}
+                  modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
+                  onExportRaw={exportRawHistory}
+                  onExportSummary={exportSummaryHistory}
+                  onImportHistory={importHistoryFile}
+                  isSummaryExporting={isSummaryExporting}
+                  onOpenFullscreen={() => setIsChatFullscreen(true)}
+                  composerSeed={tutorialComposerSeed}
+                  onDraftChange={setChatComposerDraft}
+                  radioState={radioSessionState}
+                  onStartRadioSession={() => void startRadioSession()}
+                  onStopRadioSession={() => stopRadioSession()}
+                  onForceRadioTurn={() => void forceRadioTurnSwitch()}
+                  onOpenToolResult={(assistantMessageId) =>
+                    setTutorialOpenedToolResultMessageIds((current) =>
+                      current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
+                    )
+                  }
+                />
+              </ErrorBoundary>
             </div>
           </div>
         )}
@@ -8211,19 +8231,21 @@ export default function App() {
 
             {configModal === "load_balancers" && (
               <HelpModal title="Load Balancer" onClose={() => setConfigModal(null)} width="min(980px, 96vw)">
-                <LoadBalancersPanel
-                  loadBalancers={loadBalancerSlots}
-                  credentials={credentialSlots}
-                  selectedId={loadBalancerPanelSelectedId}
-                  onSelect={setLoadBalancerPanelSelectedId}
-                  onChange={setLoadBalancers}
-                  onLoadModels={async ({ credential, credentialKeyId }) => {
-                    const key = credential.keys.find((entry) => entry.id === credentialKeyId) ?? credential.keys[0];
-                    return await fetchCredentialModels(credential, key?.apiKey ?? "");
-                  }}
-                  draftSeed={loadBalancerDraftSeed}
-                  onDraftSeedConsumed={() => setLoadBalancerDraftSeed(null)}
-                />
+                <ErrorBoundary onError={(error, info) => logRenderError("LoadBalancersPanel", error, info)}>
+                  <LoadBalancersPanel
+                    loadBalancers={loadBalancerSlots}
+                    credentials={credentialSlots}
+                    selectedId={loadBalancerPanelSelectedId}
+                    onSelect={setLoadBalancerPanelSelectedId}
+                    onChange={setLoadBalancers}
+                    onLoadModels={async ({ credential, credentialKeyId }) => {
+                      const key = credential.keys.find((entry) => entry.id === credentialKeyId) ?? credential.keys[0];
+                      return await fetchCredentialModels(credential, key?.apiKey ?? "");
+                    }}
+                    draftSeed={loadBalancerDraftSeed}
+                    onDraftSeedConsumed={() => setLoadBalancerDraftSeed(null)}
+                  />
+                </ErrorBoundary>
               </HelpModal>
             )}
 
@@ -8317,116 +8339,128 @@ export default function App() {
 
             {configModal === "radio" && (
               <HelpModal title="Radio" onClose={() => setConfigModal(null)} width="min(620px, 96vw)">
-                <RadioConfigPanel
-                  settings={radioSettings}
-                  setSettings={setRadioSettings}
-                  loadBalancerOptions={loadBalancerSlots}
-                  refineAgentOptions={radioRefineAgentOptions}
-                  sttProbeState={radioProbeState.stt}
-                  ttsProbeState={radioProbeState.tts}
-                  onTestStt={() => void testRadioSttLoadBalancer()}
-                  onTestTts={() => void testRadioTtsLoadBalancer()}
-                  onTestTone={() => void testRadioSystemTone()}
-                />
+                <ErrorBoundary onError={(error, info) => logRenderError("RadioConfigPanel", error, info)}>
+                  <RadioConfigPanel
+                    settings={radioSettings}
+                    setSettings={setRadioSettings}
+                    loadBalancerOptions={loadBalancerSlots}
+                    refineAgentOptions={radioRefineAgentOptions}
+                    sttProbeState={radioProbeState.stt}
+                    ttsProbeState={radioProbeState.tts}
+                    onTestStt={() => void testRadioSttLoadBalancer()}
+                    onTestTts={() => void testRadioTtsLoadBalancer()}
+                    onTestTone={() => void testRadioSystemTone()}
+                  />
+                </ErrorBoundary>
               </HelpModal>
             )}
 
             {configModal === "docs" && (
               <HelpModal title="Docs" onClose={() => setConfigModal(null)} width="min(560px, 96vw)">
-                <DocsPanel
-                  docs={docs}
-                  selectedId={docEditorId}
-                  onSelect={(id) => {
-                    setDocEditorId(id);
-                    if (id) {
-                      const doc = docs.find((d) => d.id === id);
-                      logNow({ category: "docs", message: `Doc selected: ${doc?.title ?? id}` });
-                    }
-                  }}
-                  onCreate={onCreateDoc}
-                  onSave={onSaveDoc}
-                  onDelete={onDeleteDoc}
-                />
+                <ErrorBoundary onError={(error, info) => logRenderError("DocsPanel", error, info)}>
+                  <DocsPanel
+                    docs={docs}
+                    selectedId={docEditorId}
+                    onSelect={(id) => {
+                      setDocEditorId(id);
+                      if (id) {
+                        const doc = docs.find((d) => d.id === id);
+                        logNow({ category: "docs", message: `Doc selected: ${doc?.title ?? id}` });
+                      }
+                    }}
+                    onCreate={onCreateDoc}
+                    onSave={onSaveDoc}
+                    onDelete={onDeleteDoc}
+                  />
+                </ErrorBoundary>
               </HelpModal>
             )}
 
             {configModal === "mcp" && (
               <HelpModal title="MCP (SSE)" onClose={() => setConfigModal(null)} width="min(560px, 96vw)">
-                <McpPanel
-                  servers={mcpServers}
-                  activeId={mcpPanelActiveId}
-                  toolsByServer={mcpToolsByServer}
-                  onChangeServers={onChangeMcpServers}
-                  onSelectActive={(id) => {
-                    setMcpPanelActiveId(id);
-                    if (id) {
+                <ErrorBoundary onError={(error, info) => logRenderError("McpPanel", error, info)}>
+                  <McpPanel
+                    servers={mcpServers}
+                    activeId={mcpPanelActiveId}
+                    toolsByServer={mcpToolsByServer}
+                    onChangeServers={onChangeMcpServers}
+                    onSelectActive={(id) => {
+                      setMcpPanelActiveId(id);
+                      if (id) {
+                        const server = mcpServers.find((s) => s.id === id);
+                        logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
+                      }
+                    }}
+                    onUpdateTools={(id, tools) => {
+                      setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
                       const server = mcpServers.find((s) => s.id === id);
-                      logNow({ category: "mcp", message: `Active MCP -> ${server?.name ?? id}` });
-                    }
-                  }}
-                  onUpdateTools={(id, tools) => {
-                    setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
-                    const server = mcpServers.find((s) => s.id === id);
-                    logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
-                  }}
-                  pushLog={pushLog}
-                />
+                      logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
+                    }}
+                    pushLog={pushLog}
+                  />
+                </ErrorBoundary>
               </HelpModal>
             )}
 
             {configModal === "prompts" && (
               <HelpModal title="Prompt Templates" onClose={() => setConfigModal(null)} width="min(1100px, 96vw)">
-                <PromptTemplatesPanel
-                  files={promptTemplateFiles}
-                  groups={promptTemplateRuntime.groups}
-                  activeDecisionLanguage={mcpPromptTemplates.activeId}
-                  onChangeActiveDecisionLanguage={(language) =>
-                    setMcpPromptTemplates((prev) => ({ ...prev, activeId: language }))
-                  }
-                  onChangeFileContent={updatePromptTemplateFile}
-                  onResetFile={resetPromptTemplateFile}
-                  testStates={promptTemplateTestStates}
-                  testsRunning={promptTemplateTestsRunning}
-                  onRunApiTest={runPromptTemplateApiTest}
-                  onRunAllApiTests={runAllPromptTemplateApiTests}
-                />
+                <ErrorBoundary onError={(error, info) => logRenderError("PromptTemplatesPanel", error, info)}>
+                  <PromptTemplatesPanel
+                    files={promptTemplateFiles}
+                    groups={promptTemplateRuntime.groups}
+                    activeDecisionLanguage={mcpPromptTemplates.activeId}
+                    onChangeActiveDecisionLanguage={(language) =>
+                      setMcpPromptTemplates((prev) => ({ ...prev, activeId: language }))
+                    }
+                    onChangeFileContent={updatePromptTemplateFile}
+                    onResetFile={resetPromptTemplateFile}
+                    testStates={promptTemplateTestStates}
+                    testsRunning={promptTemplateTestsRunning}
+                    onRunApiTest={runPromptTemplateApiTest}
+                    onRunAllApiTests={runAllPromptTemplateApiTests}
+                  />
+                </ErrorBoundary>
               </HelpModal>
             )}
 
             {configModal === "skills" && (
               <HelpModal title="Skills" onClose={() => setConfigModal(null)} width="min(900px, 96vw)">
-                <SkillsPanel
-                  skills={skills}
-                  selectedId={skillPanelSelectedId}
-                  selectedDocs={skillPanelDocs}
-                  selectedFiles={skillPanelFiles}
-                  agents={agents}
-                  activeAgentId={activeAgentId}
-                  executionMode={skillExecutionMode}
-                  verifyMax={skillVerifyMax}
-                  toolLoopMax={skillToolLoopMax}
-                  verifierAgentId={skillVerifierAgentId}
-                  builtInTools={allBuiltInTools}
-                  mcpToolCatalog={globalMcpToolCatalog}
-                  onChangeExecutionMode={setSkillExecutionMode}
-                  onChangeVerifyMax={(value) => setSkillVerifyMax(clampSkillVerifyMax(value))}
-                  onChangeToolLoopMax={(value) => setSkillToolLoopMax(clampSkillToolLoopMax(value))}
-                  onChangeVerifierAgentId={setSkillVerifierAgentId}
-                  onSelect={setSkillPanelSelectedId}
-                  onImport={onImportSkill}
-                  onCreateEmpty={onCreateEmptySkill}
-                  onDelete={onDeleteSkill}
-                  onExport={onExportSkill}
-                  onUpdateSkillMarkdown={onUpdateSkillMarkdown}
-                  onUpsertTextFile={onUpsertSkillTextFile}
-                  onDeleteTextFile={onDeleteSkillTextFile}
-                />
+                <ErrorBoundary onError={(error, info) => logRenderError("SkillsPanel", error, info)}>
+                  <SkillsPanel
+                    skills={skills}
+                    selectedId={skillPanelSelectedId}
+                    selectedDocs={skillPanelDocs}
+                    selectedFiles={skillPanelFiles}
+                    agents={agents}
+                    activeAgentId={activeAgentId}
+                    executionMode={skillExecutionMode}
+                    verifyMax={skillVerifyMax}
+                    toolLoopMax={skillToolLoopMax}
+                    verifierAgentId={skillVerifierAgentId}
+                    builtInTools={allBuiltInTools}
+                    mcpToolCatalog={globalMcpToolCatalog}
+                    onChangeExecutionMode={setSkillExecutionMode}
+                    onChangeVerifyMax={(value) => setSkillVerifyMax(clampSkillVerifyMax(value))}
+                    onChangeToolLoopMax={(value) => setSkillToolLoopMax(clampSkillToolLoopMax(value))}
+                    onChangeVerifierAgentId={setSkillVerifierAgentId}
+                    onSelect={setSkillPanelSelectedId}
+                    onImport={onImportSkill}
+                    onCreateEmpty={onCreateEmptySkill}
+                    onDelete={onDeleteSkill}
+                    onExport={onExportSkill}
+                    onUpdateSkillMarkdown={onUpdateSkillMarkdown}
+                    onUpsertTextFile={onUpsertSkillTextFile}
+                    onDeleteTextFile={onDeleteSkillTextFile}
+                  />
+                </ErrorBoundary>
               </HelpModal>
             )}
 
             {configModal === "tools" && (
               <HelpModal title="Built-in Tools" onClose={() => setConfigModal(null)} width="min(820px, 96vw)">
-                <BuiltInToolsPanel systemTools={systemBuiltInTools} tools={builtInTools} onChange={setBuiltInTools} />
+                <ErrorBoundary onError={(error, info) => logRenderError("BuiltInToolsPanel", error, info)}>
+                  <BuiltInToolsPanel systemTools={systemBuiltInTools} tools={builtInTools} onChange={setBuiltInTools} />
+                </ErrorBoundary>
               </HelpModal>
             )}
           </div>
@@ -8435,35 +8469,37 @@ export default function App() {
         {activeTab === "agents" && (
           <div className="content-grid">
             <div className="card panel">
-              <AgentsPanel
-                agents={agents}
-                activeAgentId={activeAgentId}
-                selectedAgentId={selectedAgentId}
-                onSelect={setSelectedAgentId}
-                onSetMain={(id) => {
-                  setActiveAgentId(id);
-                  setSelectedAgentId(id);
-                }}
-                onSave={onSaveAgent}
-                onDelete={onDeleteAgent}
-                onDetect={async (a) => {
-                  const r = await detectWithLoadBalancer(a);
-                  pushLog({
-                    category: "detect",
-                    agent: a.name,
-                    ok: r.ok,
-                    message: `${r.detectedType ?? ""} ${r.notes ?? ""}`.trim() || "detect()",
-                    details: r.notes ?? undefined
-                  });
-                  return r;
-                }}
-                docs={docs}
-                mcpServers={mcpServers}
-                builtInTools={allBuiltInTools}
-                skills={skills}
-                loadBalancers={loadBalancerSlots}
-                lockToMcpOnly={tutorialScenario?.id === "agent-browser-mcp-chat" && currentTutorialStep?.behavior === "enable_tutorial_mcp_access"}
-              />
+              <ErrorBoundary onError={(error, info) => logRenderError("AgentsPanel", error, info)}>
+                <AgentsPanel
+                  agents={agents}
+                  activeAgentId={activeAgentId}
+                  selectedAgentId={selectedAgentId}
+                  onSelect={setSelectedAgentId}
+                  onSetMain={(id) => {
+                    setActiveAgentId(id);
+                    setSelectedAgentId(id);
+                  }}
+                  onSave={onSaveAgent}
+                  onDelete={onDeleteAgent}
+                  onDetect={async (a) => {
+                    const r = await detectWithLoadBalancer(a);
+                    pushLog({
+                      category: "detect",
+                      agent: a.name,
+                      ok: r.ok,
+                      message: `${r.detectedType ?? ""} ${r.notes ?? ""}`.trim() || "detect()",
+                      details: r.notes ?? undefined
+                    });
+                    return r;
+                  }}
+                  docs={docs}
+                  mcpServers={mcpServers}
+                  builtInTools={allBuiltInTools}
+                  skills={skills}
+                  loadBalancers={loadBalancerSlots}
+                  lockToMcpOnly={tutorialScenario?.id === "agent-browser-mcp-chat" && currentTutorialStep?.behavior === "enable_tutorial_mcp_access"}
+                />
+              </ErrorBoundary>
             </div>
           </div>
         )}
@@ -8545,34 +8581,36 @@ export default function App() {
           padless
         >
           <div className="chat-fullscreen-host">
-            <ChatPanel
-              history={history}
-              onSend={onSend}
-              onClear={() => {
-                setHistory([]);
-                setTutorialOpenedToolResultMessageIds([]);
-                logNow({ category: "chat", message: "Chat cleared" });
-              }}
-              leaderName={null}
-              userName={userProfile.name}
-              mode={mode}
-              modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
-              onExportRaw={exportRawHistory}
-              onExportSummary={exportSummaryHistory}
-              onImportHistory={importHistoryFile}
-              isSummaryExporting={isSummaryExporting}
-              fullscreen
-              onCloseFullscreen={() => setIsChatFullscreen(false)}
-              radioState={radioSessionState}
-              onStartRadioSession={() => void startRadioSession()}
-              onStopRadioSession={() => stopRadioSession()}
-              onForceRadioTurn={() => void forceRadioTurnSwitch()}
-              onOpenToolResult={(assistantMessageId) =>
-                setTutorialOpenedToolResultMessageIds((current) =>
-                  current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
-                )
-              }
-            />
+            <ErrorBoundary onError={(error, info) => logRenderError("ChatPanel fullscreen", error, info)}>
+              <ChatPanel
+                history={history}
+                onSend={onSend}
+                onClear={() => {
+                  setHistory([]);
+                  setTutorialOpenedToolResultMessageIds([]);
+                  logNow({ category: "chat", message: "Chat cleared" });
+                }}
+                leaderName={null}
+                userName={userProfile.name}
+                mode={mode}
+                modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
+                onExportRaw={exportRawHistory}
+                onExportSummary={exportSummaryHistory}
+                onImportHistory={importHistoryFile}
+                isSummaryExporting={isSummaryExporting}
+                fullscreen
+                onCloseFullscreen={() => setIsChatFullscreen(false)}
+                radioState={radioSessionState}
+                onStartRadioSession={() => void startRadioSession()}
+                onStopRadioSession={() => stopRadioSession()}
+                onForceRadioTurn={() => void forceRadioTurnSwitch()}
+                onOpenToolResult={(assistantMessageId) =>
+                  setTutorialOpenedToolResultMessageIds((current) =>
+                    current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
+                  )
+                }
+              />
+            </ErrorBoundary>
           </div>
         </HelpModal>
       )}
