@@ -1,181 +1,100 @@
-# Batch 4 — 大型重構：App.tsx 拆解 + Storage 加固 + 測試補強（2-4 週）
+# Batch 4 — Reliability / Resource Limits（3-5 天）
 
 ## 包含 Issues
-- **Issue 9** — 測試覆蓋率嚴重不足
-- **Issue 1** — `App.tsx` 8000+ 行 god component
-- **Issue 7** — Credentials / API Keys 明文存 localStorage
-- **Issue 12** — Storage 無 quota 處理 + 載入時 silent 吞錯
-- **Issue 14（剩餘）** — Skill / LB 執行的 race condition + tutorial restore lock
-
-（Issue 14 的 MCP cache stampede 部分已在 Batch 3 處理。）
+- **Issue 10** — `runBuiltInScriptTool` 無 timeout / 無 sandbox
+- **Issue 13** — 多輪 skill / orchestrator 無 wall-clock timeout、無 AbortController 串連取消
+- **Issue 15** — MAGI consensus 無 deadlock detection、無 round timeout
 
 ## 為何整合
-五個 issue **互為前置 / 互相支撐**，分開做會白工：
+三個 issue 本質都是「**執行限制 / 取消 / timeout**」家族：
+- 共用工具：`AbortController` 串連、wall-clock deadline helper、timeout race wrapper
+- 影響面：user-defined code、skill runtime、MAGI orchestrator
+- 解決順序自然：先建好 `deadline helper`（Step 1）→ 三個 issue 都能複用
 
-1. **Issue 9 是 Issue 1 的前置條件**
-   拆 8000 行檔案沒有 integration test 護航是自殺。先補 high-level 行為測試（「給定 X 輸入，最終 chat 應該包含 Y」），再開始拆。
-
-2. **Issue 7 + Issue 12 + Issue 1 共用 storage 層改動**
-   - Issue 7：credentials 加密
-   - Issue 12：quota 處理 + Zod 驗證 + schema versioning
-   - Issue 1：拆 `AgentContext` / `CredentialsContext` 時 storage 介面會被重整
-   三者都動 `src/storage/*.ts` 與 App.tsx 內 storage 呼叫點，**一次解決最划算**。Issue 12 的 Zod schema 直接重用 Batch 2 已建立的 schema 定義。
-
-3. **拆 App.tsx 時順手把 `useReducer` 跟新 storage 串好**
-   分兩次做要 grep 兩次同樣的程式碼。
-
-4. **Issue 14（skill race）必須在 App.tsx 拆完後才好做**
-   execution lock / queue 需要乾淨的 hook 邊界（`useSkillExecution` 內持有 `Map<skillId, AbortController>`）。在 8000 行 god component 內加 lock 會很醜且易錯。
+如果分開做：
+- 會做三遍類似的 timeout / abort 機制
+- 取消訊號無法跨層串連（user code timeout 觸發但 fetch 仍在跑）
 
 ## 工作量
-2-4 週（這是最大的 batch，可拆成多個小 PR）
+3-5 天
 
 ## 風險
-高 — 動到全工程最核心的 component 與 storage schema；必須有測試保護
+中 — 動到執行核心，要小心：
+- 不要因為加 timeout 把正常的長時間請求誤殺
+- AbortController 串連時注意「abort 後 cleanup 要乾淨」
+- Issue 10 的 Web Worker 化會比較大改動，可能拆獨立 PR
 
 ## 前置依賴
-- **Batch 1 已完成**：Error Boundary 在 refactor 過程中救命；fetch 已支援 signal
-- **Batch 2 必須先完成**：拆 App.tsx 時靠 Zod schema 與型別安全當地圖；ESLint 守門避免 refactor 引入新 `any`
-- **Batch 3 強烈建議先完成**：MCP 邏輯已封裝乾淨，可直接搬進 `useMcp()` hook，否則拆 App.tsx 時還要邊改 MCP 邊改 context
-- **Batch 4.5 強烈建議先完成**：deadline / abort helper 與 user code timeout 已就緒，拆出 hook 時可直接整合
+- ✅ Batch 1 已完成（ErrorBoundary 已就位，timeout / abort 引發的 error 會被 boundary 接住）
+- ✅ Batch 2 已完成（型別安全 + Zod，callbacks chain 不會再被 `any` 拖累）
+- ✅ Adapter 層已完成 fetch `signal` + `timeoutMs` + `Retry-After`（先前的 Issue 11，已 merge）；本 batch 要做的是把 signal **從 caller 端串到底**
 
 ## 執行順序建議
 
-### Phase 4.1：補齊測試基礎建設（Issue 9 第一步，3-5 天）
-- 裝 testing libs：
-  ```bash
-  npm i -D @testing-library/react @testing-library/user-event @testing-library/jest-dom @vitest/coverage-v8 happy-dom
-  ```
-- 改 `vitest.config.ts`：環境、setup、coverage reporter
-- 加 `npm scripts`：`test:watch` / `test:coverage` / `test:ui`
-- 建 `src/__tests__/setup.ts`（jest-dom matchers）
-- **修復 / 重寫 `src/__tests__/app.test.tsx` 的 4 個既有失敗**（Batch 2 commit `317b54c` 已處理 LandingPage 那層；剩餘失敗是 fixture / UI drift）：
-  - 3 個「`waitForText` timeout」失敗：fixture 用 legacy `agent.endpoint + agent.model` 直接設定，但目前 agent 必須綁 `loadBalancerId` → LB instance → credential。需要新增 LB / credential mock fixture，或在 chat dispatch 前 seed 一個最小可用的 `agr_load_balancers_v1` + `agr_model_credentials_v1`
-  - 1 個「Button not found: Connect & List Tools」失敗：Chat Config tab 已從直接顯示 McpPanel 重構成 card grid（Main Agent / Credentials / Load Balancer / Mode / History 卡片 → click 開 modal）。測試導覽要改成：點 Chat Config → 點對應 card → 進 modal → 才找得到 Connect & List Tools；或從專屬 MCP 入口進
-  - 收尾後把 helper 抽乾淨，作為下一條 high-level integration test 的範本
-- **補 high-level integration test**（重點）：
-  - 一對一 chat happy path
-  - skill 多輪執行
-  - load balancer failover
-  - radio mode 啟動 → STT → 切換 → TTS
-  - tutorial 流程跑完一個 scenario
-  這些 test 在 Phase 4.2 拆 App.tsx 時是「不准退步」的契約
+### Step 1：建立統一的 deadline / abort 基礎建設（半天）
+新增 `src/utils/deadline.ts`：
+- `createDeadline({ totalMs, externalSignal? }): ExecutionDeadline`
+- `timeoutAfter(ms, label): Promise<never>`
+- `combineSignals(...signals): AbortSignal`
+- `withTimeout<T>(promise, ms, label): Promise<T>`
 
-### Phase 4.2：拆 App.tsx（Issue 1，2-3 週）
-**重要原則**：每個 PR 只抽一個 context / hook，不要一次大爆炸。
+補 unit test。後續所有 step 都用這些 helper。
 
-依下列順序抽，從最獨立到最耦合：
+### Step 2：Issue 13 之 multi-turn skill runtime 接 deadline（1 天）
+- `MultiTurnSkillCallbacks` 介面新增 `signal?: AbortSignal`
+- `runMultiTurnSkillRuntime` 主迴圈每輪檢查 `deadline.alive()`
+- callbacks 內呼叫 adapter / model 時把 signal 傳下去（吃 adapter 層既有的 `signal` / `timeoutMs` 介面）
+- 中途 timeout / abort 時要寫入 trace 說明原因
 
-1. **抽純 helper 函式**（最低風險，1-2 天）
-   - 把 `App.tsx` 內所有 normalize / extract / build* / format* 純函式搬到 `src/app/helpers/` 或對應 `src/utils/`
-   - 不動 component，純粹搬位置
-   - PR 應該很大但很簡單
+### Step 3：Issue 13 之 orchestrators 接 deadline（半天）
+- `oneToOne.ts`、`leaderTeam.ts`、`magi.ts` 的 entry function 接收 `deadline?` 參數
+- failover loop 每次切 instance 前檢查 deadline
+- App.tsx 內呼叫處建立 deadline（從 user 設定讀，預設 5 分鐘）
+- UI「停止」按鈕觸發 `controller.abort()`
 
-2. **抽超大 inline UI 區塊**（2-3 天）
-   - Credentials Modal → `src/ui/CredentialsModal.tsx`
-   - MCP Modal → `src/ui/McpModal.tsx`
-   - Skills Modal → `src/ui/SkillsModal.tsx`
-   - Prompts Modal → `src/ui/PromptsModal.tsx`
-   - Tools Modal → `src/ui/BuiltInToolsModal.tsx`
-   - Mode Modal → `src/ui/ModeModal.tsx`
-   - 透過 prop 傳遞需要的狀態與 callback（暫不引入 context）
+### Step 4：Issue 15 之 MAGI deadlock detection + round timeout（1 天）
+- 加 `ballotsAreIdentical()` 比對函式
+- 加 `checkMajority()`（2/3 多數提早結束）
+- 主迴圈：連續 2 輪 ballots 完全相同 → 標記 deadlock 結束
+- 每輪 `Promise.race(allBallots, roundTimeout)` + 個別 unit timeout
+- error unit 處理策略寫清楚（retry 次數、錯誤超門檻放棄）
 
-3. **抽 Context + Reducer**（依 domain 一個一個來）
-   - `src/contexts/AgentContext.tsx`（agents / credentials / load balancers）
-   - `src/contexts/McpContext.tsx`（吃 Batch 3 的 `clientManager` 與 `serverResolver`）
-   - `src/contexts/SkillContext.tsx`（skills / built-in tools）
-   - `src/contexts/TutorialContext.tsx`
-   - `src/contexts/RadioContext.tsx`
-   - 每抽一個 context，整顆 App 應該還能跑（用 Phase 4.1 的 integration test 護航）
+### Step 5：Issue 10 之 user code timeout（半天）
+- `runBuiltInScriptTool` 加 `Promise.race` + timeout（10s 預設）
+- 接收 `signal?` 與外部取消串連
+- 注意：同步 infinite loop 此時還是會卡 main thread，這只擋 async timeout
+- 在 UI 警告：「Built-in tool 預設執行上限 10 秒，可在 tool 設定調整」
 
-4. **抽 custom hooks**（封裝業務邏輯）
-   - `src/hooks/useOneToOne.ts` — 從 `sendOneToOneTurn`、`runOneToOneWithLoadBalancer` 抽
-   - `src/hooks/useSkillExecution.ts` — 從 `executeMultiTurnSkill` 抽
-   - `src/hooks/useTutorial.ts` — 整合 15+ tutorial ref
-   - `src/hooks/useRadioSession.ts` — 整合 4 個 radio ref
-   - `src/hooks/useLoadBalancerPlan.ts` — 從 `resolveLoadBalancerPlanForAgent` 抽，順便加 useMemo
-
-5. **把 orchestrator 真的搬進 `src/orchestrators/`**
-   - `sendOneToOneTurn` → 純函式版本搬到 `src/orchestrators/oneToOne.ts`
-   - `executeMultiTurnSkill` → `src/orchestrators/skillExecution.ts`
-   - hook 只負責串 React state + 呼叫純函式
-
-### Phase 4.3：Storage 加固（Issue 7 + Issue 12，3-5 天，與 Phase 4.2.3 的 AgentContext 同步做）
-
-#### 4.3.A — Issue 12（quota + 驗證 + versioning）先做（基礎設施）
-1. 新增 `src/storage/safeStorage.ts`：`safeSetItem(key, value)` 包 try/catch，回傳結構化結果（`ok | reason: "quota" | "denied" | "other"`）
-2. 所有 store 改用 `safeSetItem`；爆 quota 時 toast 提示，不沉默成功
-3. 載入時用 Zod schema 驗證（重用 Batch 2 的 schema），失敗時：
-   - 把原始 raw 字串備份到 `__backup_${key}_${ts}_${reason}` key
-   - log 警告
-   - 回傳 default，**不直接洗掉**
-4. 加 schema versioning：payload 結構為 `{ __version: number, data: T }`，加 `migrate()` pipeline
-5. IndexedDB 錯誤包裝：`reject(new Error(...))` 而不是 `reject(req.error)`（可能是 null）
-
-#### 4.3.B — Issue 7（credentials 加密）
-1. **短期防護**（先做，無痛）
-   - Credentials Modal 加警示 banner
-   - Credentials 從 settings 物件分離到單獨 `localStorage` key（XSS 取走 settings 不會帶到 key）
-   - `runBuiltInScriptTool` helpers 移除任何讀取 credential 的 API
-2. **中期方案**（重頭戲）
-   - 新增 `src/storage/credentialVault.ts`，用 Web Crypto AES-GCM
-   - 主密碼 PBKDF2 派生
-   - 第一次啟動跳「設定主密碼」流程（可選）
-   - 提供「session-only 模式」（記憶體保存，不寫 storage）
-   - migration：偵測到舊版明文 credentials → 提示使用者設定密碼後加密遷移
-
-### Phase 4.4：Skill execution lock + tutorial restore lock（Issue 14 剩餘）
-在 Phase 4.2.4 抽 `useSkillExecution()` 時順手做：
-
-1. **Skill instance lock**
-   - hook 內持有 `executionLockRef = useRef<Map<string, AbortController>>(new Map())`
-   - 啟動 skill 前檢查同一 skillId 是否已在跑：拒絕 / 排隊 / 取消舊的（政策由 UI 決定）
-   - 完成或取消時清掉 entry
-
-2. **Trace per-execution**
-   - 把 `skillTraceRef` 改成由 caller 傳入的 local 物件
-   - 每次 skill 執行自己持有 trace，最後一次性 commit 到 React state
-   - 中途取消（Batch 4.5 的 deadline）只會丟掉那個 local trace，不污染其他執行流
-
-3. **Tutorial restore lock**
-   - `useTutorial()` 暴露 `isRestoring` 狀態
-   - chat / skill 啟動前檢查此 flag，restore 中拒絕並提示「Tutorial 正在恢復」
-   - UI 「Send」按鈕 / skill 觸發按鈕在 restore 中 disabled
-
-### Phase 4.5：補完測試 coverage（Issue 9 收尾）
-- 為新抽出的每個 hook / context 補 unit test
-- 為 storage（quota / 載入失敗 / migration）補 round-trip test
-- 為 credential vault（加密 / 解密 / 主密碼錯誤）補 test
-- 為 skill execution lock 補 test（同 skill 並發觸發）
-- 加 CI coverage gate（漸進式：先建 baseline，再對 diff 要求 80%+）
+### Step 6：Issue 10 之 Web Worker 化（1-2 天，可獨立 PR）
+- 新增 `src/utils/sandbox/builtInToolWorker.ts`（worker source via Blob URL）
+- 主線程 ↔ worker 透過 postMessage 溝通
+- helpers proxy：worker 內呼叫 `system.foo(...)` → postMessage 給主線程 → 主線程執行 → 回結果
+- timeout 到了 `worker.terminate()`（同步 infinite loop 也能斷）
+- 加白名單：明確列出 worker 內可用 / 不可用 globals
+- UI 載入第三方 built-in tool 時跳警告 + code preview
 
 ## 驗收條件
-- `App.tsx` 行數 < 500（理想 < 300）
-- `src/app/App.tsx` 內無 `useState`（全進 context）或 < 5 個（純 UI 局部狀態）
-- 所有 Phase 4.1 補的 integration test 全綠
-- coverage report 整體 > 50%，新檔案 > 80%
-- credentials 不再以明文形式出現在 `localStorage` raw dump（除非使用者選 session-only 並輸入過）
-- storage 在版本不對時能 migrate 或 fallback，不再炸掉啟動
-- 模擬 quota exceeded，UI 應顯示警告而非沉默
-- 同一 skill 並發觸發兩次，第二次按既定政策被處理（不會兩個 trace 互相污染）
-- Tutorial restore 期間觸發 chat 應被擋住
+- multi-turn skill 設 30 秒 deadline，跑超時應 throw 並寫入 trace
+- 按 UI「停止」按鈕，正在進行的 model call 應在 1 秒內中斷
+- MAGI mock 三個 deadlock unit，應在連續 2 輪相同後 early-exit（不跑滿 maxRounds）
+- MAGI 一個 unit 故意 hang，整輪在 round timeout 內結束
+- Built-in tool 寫 `while(true){}`，10 秒後 worker 被 terminate（Step 6 完成後）
+- 既有 vitest 測試仍綠
+- 新增 deadline / timeout / deadlock 對應 unit test
+
+## 後續鋪墊
+- Batch 5 拆 App.tsx 時，`useOneToOne` / `useSkillExecution` hook 內持有 `AbortController`，可直接呼叫此 batch 已備好的 deadline helper
+- Issue 14 的 race condition 解法（execution lock）會直接用到 abort 機制（取消舊 instance）
 
 ## 不要做的事
-- 不要為了拆 App.tsx 而引入 Redux / Zustand（先用 React 內建 context + reducer 試）
-- 不要在 Phase 4.2 同時改業務邏輯（純搬，行為不變）
-- 不要跳過 Phase 4.1 的 integration test 直接拆 App.tsx
-- credentials 加密 UI 不要做太花俏（一個密碼欄、一個解鎖按鈕就好）
-- 不要在這個 batch 內順手做 Bundle / Build 優化（scope creep）
+- 不要在這個 batch 同時動「拆 App.tsx」（Batch 5 工作）
+- 不要把 deadline 的預設值寫死在 helper 內，要從 settings 讀（讓使用者可調）
+- Step 6（Web Worker）如果時間不夠可以延後到後續 batch，但 Step 5（async timeout）必做
+- 不要為了取消而強行 reject 已 commit 的 trace（保留部分結果，標記為「中斷」）
 
 ## PR 拆分建議
-這個 batch 至少拆成 10-14 個 PR：
-1. testing infra + integration test baseline
-2. **storage safeSetItem + Zod 驗證 + versioning + IDB 錯誤包裝（Issue 12）** ← 先做，當作後續 storage 動作的基礎
-3. helper 函式搬移
-4-8. modal 元件抽出（每個一個 PR）
-9-13. context + hook 抽出（每個 domain 一個 PR）
-   - 抽 `useSkillExecution` 時順手加 execution lock（Issue 14 剩餘）
-   - 抽 `useTutorial` 時順手加 restore lock（Issue 14 剩餘）
-14. credentials 加密 + 主密碼流程（Issue 7）
-
-每個 PR 都應該獨立可 revert，不影響其他功能。
+- PR 1：deadline helper + unit test（Step 1）
+- PR 2：multi-turn skill + orchestrator 接 deadline（Step 2-3）
+- PR 3：MAGI deadlock + timeout（Step 4）
+- PR 4：user code async timeout（Step 5）
+- PR 5：user code Web Worker 化（Step 6，獨立 PR 因為改動較大）

@@ -87,7 +87,7 @@ class McpToolCatalog {
 ### Step 2：Skill 執行加 instance lock / queue
 - 同一個 skill 同時間只允許一個 instance 跑（最簡單）
 - 或：每個 skill instance 都有獨立 trace 物件，不共用 ref
-- 屬於 Batch 4（拆 App.tsx）的範圍 — 抽 `useSkillExecution()` 時順便加 lock：
+- 屬於 Batch 5（拆 App.tsx）的範圍 — 抽 `useSkillExecution()` 時順便加 lock：
 ```ts
 const executionLockRef = useRef<Map<string, AbortController>>(new Map());
 
@@ -125,7 +125,7 @@ async function startSkill(skillId: string, ...) {
 
 ## 與其他 issue 的關聯
 - 場景 A（MCP stampede）→ 屬於 **Batch 3**（與 Issue 2/3 一起）
-- 場景 B/C（skill / LB race）→ 屬於 **Batch 4**（拆 App.tsx 時順便處理）
+- 場景 B/C（skill / LB race）→ 屬於 **Batch 5**（拆 App.tsx 時順便處理）
 - 場景全部都需要 **Issue 13**（AbortController 串連）才能乾淨清理
 
 ## 驗收條件

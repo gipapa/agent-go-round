@@ -143,7 +143,7 @@ const roundResults = await Promise.race([
 - error case：mock unit 拋錯
 
 ## 與其他 issue 的關聯
-- 屬於 Batch 4.5 的「reliability / resource limits」範疇
+- 屬於 Batch 4 的「reliability / resource limits」範疇
 - timeout 機制與 Issue 13 共用同一套 deadline helper
 - error handling 與 Issue 11（fetch 取消 / retry）綁
 
