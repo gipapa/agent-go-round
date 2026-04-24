@@ -277,7 +277,8 @@ async function hasBuiltInToolNamed(name: string) {
   return browserEval<boolean>(`
     (() => {
       const raw = localStorage.getItem("agr_built_in_tools_v1") || "[]";
-      const tools = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      const tools = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : [];
       return Array.isArray(tools) && tools.some((tool) => String(tool?.name || "").trim() === ${literal(name)});
     })()
   `);
@@ -470,8 +471,8 @@ async function hasLoadBalancer(name: string) {
         const raw = localStorage.getItem("agr_load_balancers_v1");
         if (!raw) return false;
         const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return false;
-        return parsed.some((entry) => String(entry?.name || "").trim() === ${literal(name)});
+        const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : [];
+        return entries.some((entry) => String(entry?.name || "").trim() === ${literal(name)});
       } catch {
         return false;
       }

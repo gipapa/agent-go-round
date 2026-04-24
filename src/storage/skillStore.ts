@@ -28,6 +28,10 @@ type ParsedFrontmatter = {
   body: string;
 };
 
+function idbError(label: string, error: DOMException | null) {
+  return new Error(`${label}: ${error?.message ?? "unknown IndexedDB error"}`);
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, VERSION);
@@ -46,7 +50,7 @@ function openDb(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("open skills db failed", req.error));
   });
 }
 
@@ -211,13 +215,14 @@ async function deleteSkillRecords(db: IDBDatabase, skillId: string): Promise<voi
         store.delete(cursor.primaryKey);
         cursor.continue();
       };
-      req.onerror = () => reject(req.error);
+      req.onerror = () => reject(idbError(`delete ${storeName} records failed`, req.error));
     };
 
     deleteBySkillId(DOCS_STORE);
     deleteBySkillId(FILES_STORE);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(idbError("delete skill records transaction failed", tx.error));
+    tx.onabort = () => reject(idbError("delete skill records transaction aborted", tx.error));
   });
 }
 
@@ -226,7 +231,8 @@ async function getSkillMeta(db: IDBDatabase, skillId: string): Promise<SkillConf
     const tx = db.transaction(META_STORE, "readonly");
     const req = tx.objectStore(META_STORE).get(skillId);
     req.onsuccess = () => resolve(req.result as SkillConfig | undefined);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("get skill metadata failed", req.error));
+    tx.onabort = () => reject(idbError("get skill metadata transaction aborted", tx.error));
   });
 }
 
@@ -235,7 +241,8 @@ async function getSkillFilesById(db: IDBDatabase, skillId: string): Promise<Skil
     const tx = db.transaction(FILES_STORE, "readonly");
     const req = tx.objectStore(FILES_STORE).index("bySkillId").getAll(IDBKeyRange.only(skillId));
     req.onsuccess = () => resolve((req.result as SkillFileItem[]) ?? []);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("get skill files failed", req.error));
+    tx.onabort = () => reject(idbError("get skill files transaction aborted", tx.error));
   });
 }
 
@@ -281,7 +288,8 @@ async function writeSkillSnapshot(db: IDBDatabase, meta: SkillConfig, files: Ski
     const fileStore = tx.objectStore(FILES_STORE);
     nextFiles.forEach((file) => fileStore.put(file));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(idbError("write skill snapshot failed", tx.error));
+    tx.onabort = () => reject(idbError("write skill snapshot transaction aborted", tx.error));
   });
 
   return nextMeta;
@@ -314,7 +322,8 @@ export async function listSkills(): Promise<SkillConfig[]> {
           })
           .sort((a, b) => b.updatedAt - a.updatedAt)
       );
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("list skills failed", req.error));
+    tx.onabort = () => reject(idbError("list skills transaction aborted", tx.error));
   });
 }
 
@@ -324,7 +333,8 @@ export async function listSkillDocs(skillId: string): Promise<SkillDocItem[]> {
     const tx = db.transaction(DOCS_STORE, "readonly");
     const req = tx.objectStore(DOCS_STORE).index("bySkillId").getAll(IDBKeyRange.only(skillId));
     req.onsuccess = () => resolve((req.result as SkillDocItem[]).sort((a, b) => a.path.localeCompare(b.path)));
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("list skill docs failed", req.error));
+    tx.onabort = () => reject(idbError("list skill docs transaction aborted", tx.error));
   });
 }
 
@@ -334,7 +344,8 @@ export async function listSkillFiles(skillId: string): Promise<SkillFileItem[]> 
     const tx = db.transaction(FILES_STORE, "readonly");
     const req = tx.objectStore(FILES_STORE).index("bySkillId").getAll(IDBKeyRange.only(skillId));
     req.onsuccess = () => resolve((req.result as SkillFileItem[]).sort((a, b) => a.path.localeCompare(b.path)));
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("list skill files failed", req.error));
+    tx.onabort = () => reject(idbError("list skill files transaction aborted", tx.error));
   });
 }
 
@@ -561,7 +572,8 @@ export async function importSkillZip(file: File): Promise<SkillConfig> {
     const fileStore = tx.objectStore(FILES_STORE);
     files.forEach((stored) => fileStore.put(stored));
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(idbError("import skill zip failed", tx.error));
+    tx.onabort = () => reject(idbError("import skill zip transaction aborted", tx.error));
   });
 
   return meta;

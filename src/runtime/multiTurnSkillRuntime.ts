@@ -11,6 +11,8 @@ import {
 import { applyCompletionDecisionToState, applyObservationToState, applyActionToState, applyManualGateToState, applyPlannerDecisionToState, createSkillRunState, resumeManualGate } from "./skillState";
 import { pushSkillPhaseTrace, pushSkillTodoTrace } from "./skillTrace";
 import { formatBrowserObservationDigest } from "./browserObservation";
+import type { ExecutionDeadline } from "../utils/deadline";
+import { getDeadlineAbortMessage, withTimeout } from "../utils/deadline";
 
 function compactTraceText(text: string, max = 1200) {
   const normalized = String(text ?? "").replace(/\r/g, "").trim();
@@ -59,7 +61,7 @@ export type MultiTurnSkillCallbacks = {
   onStatus?: (text: string) => void;
   onStateChange?: (state: SkillRunState) => void;
   buildToolScopeSummary: (state: SkillRunState) => MultiTurnToolScopeSummary;
-  bootstrapPlan: (args: { skill: SkillConfig; runtime: LoadedSkillRuntime; userInput: string }) => Promise<SkillTodoItem[]>;
+  bootstrapPlan: (args: { skill: SkillConfig; runtime: LoadedSkillRuntime; userInput: string; signal?: AbortSignal }) => Promise<SkillTodoItem[]>;
   decideNextStep: (args: {
     state: SkillRunState;
     skill: SkillConfig;
@@ -70,10 +72,11 @@ export type MultiTurnSkillCallbacks = {
     mustObserve: boolean;
     mustAct: boolean;
     phaseHint?: string;
+    signal?: AbortSignal;
   }) => Promise<SkillStepDecision | null>;
-  runObservation: (args: { state: SkillRunState; currentContext: string }) => Promise<MultiTurnObservationResult | null>;
-  runAction: (args: { decision: Extract<SkillStepDecision, { type: "act" }>; state: SkillRunState; currentContext: string }) => Promise<MultiTurnActionResult | null>;
-  runManualGate: (args: { decision: Extract<SkillStepDecision, { type: "ask_user" }>; state: SkillRunState; currentContext: string }) => Promise<MultiTurnActionResult | null>;
+  runObservation: (args: { state: SkillRunState; currentContext: string; signal?: AbortSignal }) => Promise<MultiTurnObservationResult | null>;
+  runAction: (args: { decision: Extract<SkillStepDecision, { type: "act" }>; state: SkillRunState; currentContext: string; signal?: AbortSignal }) => Promise<MultiTurnActionResult | null>;
+  runManualGate: (args: { decision: Extract<SkillStepDecision, { type: "ask_user" }>; state: SkillRunState; currentContext: string; signal?: AbortSignal }) => Promise<MultiTurnActionResult | null>;
   checkCompletion: (args: {
     state: SkillRunState;
     skill: SkillConfig;
@@ -81,6 +84,7 @@ export type MultiTurnSkillCallbacks = {
     userInput: string;
     currentContext: string;
     toolScopeSummary: string;
+    signal?: AbortSignal;
   }) => Promise<SkillCompletionDecision | null>;
 };
 
@@ -202,17 +206,52 @@ export async function runMultiTurnSkillRuntime(args: {
   initialInput: string;
   initialTrace: ChatTraceEntry[];
   toolLoopMax: number;
+  deadline?: ExecutionDeadline;
   callbacks: MultiTurnSkillCallbacks;
 }): Promise<MultiTurnSkillRuntimeResult> {
   const trace = [...args.initialTrace];
   let currentContext = args.initialInput;
+  const deadline = args.deadline;
+
+  const checkDeadline = (stage: string) => {
+    if (!deadline) return;
+    try {
+      deadline.throwIfExpired(stage);
+    } catch (error) {
+      pushSkillPhaseTrace(
+        trace,
+        "sync_state",
+        [`Runtime interrupted during ${stage}.`, getDeadlineAbortMessage(deadline.signal)].join("\n")
+      );
+      throw error;
+    }
+  };
+
+  const runWithDeadline = async <T,>(promise: Promise<T>, stage: string): Promise<T> => {
+    if (!deadline) return await promise;
+    checkDeadline(stage);
+    try {
+      return await withTimeout(promise, Math.max(1, deadline.remainingMs()), stage, deadline.signal);
+    } catch (error) {
+      pushSkillPhaseTrace(
+        trace,
+        "sync_state",
+        [`Runtime interrupted during ${stage}.`, getDeadlineAbortMessage(deadline.signal, error instanceof Error ? error.message : String(error))].join("\n")
+      );
+      throw error;
+    }
+  };
 
   args.callbacks.onStatus?.("正在建立 multi-turn skill todo…");
-  const todo = await args.callbacks.bootstrapPlan({
-    skill: args.skill,
-    runtime: args.runtime,
-    userInput: args.userInput
-  });
+  const todo = await runWithDeadline(
+    args.callbacks.bootstrapPlan({
+      skill: args.skill,
+      runtime: args.runtime,
+      userInput: args.userInput,
+      signal: deadline?.signal
+    }),
+    "skill bootstrap plan"
+  );
 
   let state = createSkillRunState({
     skillId: args.skill.id,
@@ -229,19 +268,24 @@ export async function runMultiTurnSkillRuntime(args: {
   let phaseHint = "";
 
   for (let round = 1; round <= args.toolLoopMax; round++) {
+    checkDeadline(`multi-turn round ${round}`);
     const toolScope = args.callbacks.buildToolScopeSummary(state);
     args.callbacks.onStatus?.(`正在規劃 multi-turn 第 ${round} 步…`);
-    let decision = await args.callbacks.decideNextStep({
-      state,
-      skill: args.skill,
-      runtime: args.runtime,
-      userInput: args.userInput,
-      currentContext,
-      toolScopeSummary: toolScope.summary,
-      mustObserve,
-      mustAct,
-      phaseHint
-    });
+    let decision = await runWithDeadline(
+      args.callbacks.decideNextStep({
+        state,
+        skill: args.skill,
+        runtime: args.runtime,
+        userInput: args.userInput,
+        currentContext,
+        toolScopeSummary: toolScope.summary,
+        mustObserve,
+        mustAct,
+        phaseHint,
+        signal: deadline?.signal
+      }),
+      `skill planner step ${round}`
+    );
 
     if (decision && !decisionSatisfiesConstraints(decision, mustObserve, mustAct)) {
       const constraintHint = mustObserve
@@ -259,17 +303,21 @@ export async function runMultiTurnSkillRuntime(args: {
         ].join("\n")
       );
 
-      decision = await args.callbacks.decideNextStep({
-        state,
-        skill: args.skill,
-        runtime: args.runtime,
-        userInput: args.userInput,
-        currentContext,
-        toolScopeSummary: toolScope.summary,
-        mustObserve,
-        mustAct,
-        phaseHint: [phaseHint, constraintHint, "請立即改成符合限制的下一步。"].filter(Boolean).join("\n")
-      });
+      decision = await runWithDeadline(
+        args.callbacks.decideNextStep({
+          state,
+          skill: args.skill,
+          runtime: args.runtime,
+          userInput: args.userInput,
+          currentContext,
+          toolScopeSummary: toolScope.summary,
+          mustObserve,
+          mustAct,
+          phaseHint: [phaseHint, constraintHint, "請立即改成符合限制的下一步。"].filter(Boolean).join("\n"),
+          signal: deadline?.signal
+        }),
+        `skill planner repair ${round}`
+      );
     }
 
     if (decision && !decisionSatisfiesConstraints(decision, mustObserve, mustAct)) {
@@ -328,7 +376,10 @@ export async function runMultiTurnSkillRuntime(args: {
 
     if (decision.type === "observe") {
       args.callbacks.onStatus?.(`正在觀察頁面，第 ${round} 步…`);
-      const observation = await args.callbacks.runObservation({ state, currentContext });
+      const observation = await runWithDeadline(
+        args.callbacks.runObservation({ state, currentContext, signal: deadline?.signal }),
+        `skill observation ${round}`
+      );
       pushSkillPhaseTrace(
         trace,
         "observe",
@@ -402,7 +453,10 @@ export async function runMultiTurnSkillRuntime(args: {
 
     if (decision.type === "act") {
       args.callbacks.onStatus?.(`正在執行工具「${decision.toolName}」…`);
-      const action = await args.callbacks.runAction({ decision, state, currentContext });
+      const action = await runWithDeadline(
+        args.callbacks.runAction({ decision, state, currentContext, signal: deadline?.signal }),
+        `skill action ${round}`
+      );
       pushSkillPhaseTrace(
         trace,
         "act",
@@ -449,7 +503,10 @@ export async function runMultiTurnSkillRuntime(args: {
       args.callbacks.onStatus?.("正在等待使用者確認…");
       state = applyManualGateToState(state, "awaiting_user_confirmation", decision.reason);
       args.callbacks.onStateChange?.(state);
-      const manual = await args.callbacks.runManualGate({ decision, state, currentContext });
+      const manual = await runWithDeadline(
+        args.callbacks.runManualGate({ decision, state, currentContext, signal: deadline?.signal }),
+        `skill manual gate ${round}`
+      );
       pushSkillPhaseTrace(
         trace,
         "manual_gate",
@@ -490,14 +547,18 @@ export async function runMultiTurnSkillRuntime(args: {
       };
     }
 
-    const completion = await args.callbacks.checkCompletion({
-      state,
-      skill: args.skill,
-      runtime: args.runtime,
-      userInput: args.userInput,
-      currentContext,
-      toolScopeSummary: toolScope.summary
-    });
+    const completion = await runWithDeadline(
+      args.callbacks.checkCompletion({
+        state,
+        skill: args.skill,
+        runtime: args.runtime,
+        userInput: args.userInput,
+        currentContext,
+        toolScopeSummary: toolScope.summary,
+        signal: deadline?.signal
+      }),
+      `skill completion gate ${round}`
+    );
 
     pushSkillPhaseTrace(
       trace,

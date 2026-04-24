@@ -15,10 +15,14 @@ export const AGENT_GO_ROUND_INDEXED_DB_TARGETS: Array<{ name: string; stores: st
   { name: "agr_skills_db", stores: ["skills_meta", "skills_docs", "skills_files"] }
 ];
 
+function idbError(label: string, error: DOMException | null) {
+  return new Error(`${label}: ${error?.message ?? "unknown IndexedDB error"}`);
+}
+
 function clearDbStores(dbName: string, stores: string[]) {
   return new Promise<void>((resolve, reject) => {
     const req = indexedDB.open(dbName);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError(`open ${dbName} failed`, req.error));
     req.onsuccess = () => {
       const db = req.result;
       const targets = stores.filter((store) => db.objectStoreNames.contains(store));
@@ -36,7 +40,11 @@ function clearDbStores(dbName: string, stores: string[]) {
       };
       tx.onerror = () => {
         db.close();
-        reject(tx.error);
+        reject(idbError(`clear ${dbName} failed`, tx.error));
+      };
+      tx.onabort = () => {
+        db.close();
+        reject(idbError(`clear ${dbName} aborted`, tx.error));
       };
     };
   });

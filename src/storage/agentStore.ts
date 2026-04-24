@@ -1,19 +1,24 @@
 import { AgentConfig } from "../types";
+import { readJsonStorage, writeJsonStorage } from "./safeStorage";
 
 const KEY = "agr_agents_v1";
 
+function isAgentArray(value: unknown): value is AgentConfig[] {
+  return Array.isArray(value) && value.every((item) => {
+    const agent = item as Partial<AgentConfig> | null;
+    return !!agent && typeof agent === "object" && typeof agent.id === "string" && typeof agent.name === "string" && typeof agent.type === "string";
+  });
+}
+
 export function loadAgents(): AgentConfig[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as AgentConfig[];
-  } catch {
-    return [];
-  }
+  return readJsonStorage(KEY, {
+    defaultValue: [],
+    validate: isAgentArray
+  });
 }
 
 export function saveAgents(agents: AgentConfig[]) {
-  localStorage.setItem(KEY, JSON.stringify(agents));
+  writeJsonStorage(KEY, agents);
 }
 
 export function upsertAgent(agent: AgentConfig) {

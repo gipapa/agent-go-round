@@ -1,5 +1,6 @@
 import YAML from "yaml";
 import { McpPromptTemplateKey, getDefaultMcpPromptTemplates, loadMcpPromptTemplates } from "../storage/settingsStore";
+import { readJsonStorage, writeJsonStorage } from "../storage/safeStorage";
 import { errorMessage } from "../utils/errors";
 import toolDecisionZhRaw from "./defaults/tool-decision.zh.yaml?raw";
 import toolDecisionEnRaw from "./defaults/tool-decision.en.yaml?raw";
@@ -352,34 +353,30 @@ export function getPromptTemplateBaseIds() {
 
 export function loadPromptTemplateFiles(): PromptTemplateFileState[] {
   const defaults = migrateLegacyToolDecisionTemplates(getDefaultStates());
-  try {
-    const raw = localStorage.getItem(PROMPT_TEMPLATE_KEY);
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return defaults;
-    const byId = new Map(
-      parsed
-        .filter(
-          (item): item is PromptTemplateFileState =>
-            isRecord(item) &&
-            typeof item.id === "string" &&
-            typeof item.content === "string" &&
-            typeof item.createdAt === "number" &&
-            typeof item.updatedAt === "number"
-        )
-        .map((item) => [item.id, item])
-    );
-    return defaults.map((entry) => {
-      const stored = byId.get(entry.id);
-      return stored ? { ...entry, ...stored } : entry;
-    });
-  } catch {
-    return defaults;
-  }
+  const parsed = readJsonStorage<unknown>(PROMPT_TEMPLATE_KEY, {
+    defaultValue: [],
+    validate: (value): value is unknown[] => Array.isArray(value)
+  });
+  const byId = new Map(
+    (Array.isArray(parsed) ? parsed : [])
+      .filter(
+        (item): item is PromptTemplateFileState =>
+          isRecord(item) &&
+          typeof item.id === "string" &&
+          typeof item.content === "string" &&
+          typeof item.createdAt === "number" &&
+          typeof item.updatedAt === "number"
+      )
+      .map((item) => [item.id, item])
+  );
+  return defaults.map((entry) => {
+    const stored = byId.get(entry.id);
+    return stored ? { ...entry, ...stored } : entry;
+  });
 }
 
 export function savePromptTemplateFiles(entries: PromptTemplateFileState[]) {
-  localStorage.setItem(PROMPT_TEMPLATE_KEY, JSON.stringify(entries));
+  writeJsonStorage(PROMPT_TEMPLATE_KEY, entries);
 }
 
 export function getPromptTemplateFileId(baseId: PromptTemplateBaseId, language: McpPromptTemplateKey): PromptTemplateFileId {

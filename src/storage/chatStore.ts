@@ -11,6 +11,10 @@ type ChatStateRecord = {
   updatedAt: number;
 };
 
+function idbError(label: string, error: DOMException | null) {
+  return new Error(`${label}: ${error?.message ?? "unknown IndexedDB error"}`);
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, VERSION);
@@ -21,7 +25,7 @@ function openDb(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("open chat db failed", req.error));
   });
 }
 
@@ -34,7 +38,8 @@ export async function loadChatHistory(): Promise<ChatMessage[]> {
       const record = req.result as ChatStateRecord | undefined;
       resolve(Array.isArray(record?.messages) ? record!.messages : []);
     };
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(idbError("load chat history failed", req.error));
+    tx.onabort = () => reject(idbError("load chat transaction aborted", tx.error));
   });
 }
 
@@ -48,6 +53,7 @@ export async function saveChatHistory(messages: ChatMessage[]): Promise<void> {
       updatedAt: Date.now()
     } satisfies ChatStateRecord);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(idbError("save chat history failed", tx.error));
+    tx.onabort = () => reject(idbError("save chat transaction aborted", tx.error));
   });
 }

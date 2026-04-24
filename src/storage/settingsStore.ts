@@ -1,4 +1,5 @@
 import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, RadioSettings, SkillExecutionMode } from "../types";
+import { readJsonStorage, writeJsonStorage } from "./safeStorage";
 
 export type UiState = {
   activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
@@ -8,6 +9,7 @@ export type UiState = {
   skillToolLoopMax?: number;
   skillVerifierAgentId?: string;
   activeAgentId?: string;
+  executionDeadlineMs?: number;
   memberAgentIds?: string[];
   reactMax?: number;
   // Legacy global retry settings kept only for migration.
@@ -109,26 +111,23 @@ export function getDefaultMcpPromptTemplates(): McpPromptTemplates {
 }
 
 export function loadUiState(): UiState {
-  try {
-    const raw = localStorage.getItem(UI_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as UiState;
-  } catch {
-    return {};
-  }
+  return readJsonStorage(UI_KEY, {
+    defaultValue: {},
+    validate: (value): value is UiState => isRecord(value)
+  });
 }
 
 export function saveUiState(state: UiState) {
-  localStorage.setItem(UI_KEY, JSON.stringify(state));
+  writeJsonStorage(UI_KEY, state);
 }
 
 export function loadMcpServers(): McpServerConfig[] {
-  try {
-    const raw = localStorage.getItem(MCP_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
+  const parsed = readJsonStorage<unknown>(MCP_KEY, {
+    defaultValue: [],
+    validate: (value): value is unknown[] => Array.isArray(value)
+  });
+  return Array.isArray(parsed)
+    ? parsed
       .filter(
         (item): item is Partial<McpServerConfig> & { id: string; name: string; sseUrl: string } =>
           isRecord(item) && typeof item.id === "string" && typeof item.name === "string" && typeof item.sseUrl === "string"
@@ -146,55 +145,48 @@ export function loadMcpServers(): McpServerConfig[] {
           typeof item.heartbeatSecond === "number" && Number.isFinite(item.heartbeatSecond)
             ? item.heartbeatSecond
             : undefined
-      }));
-  } catch {
-    return [];
-  }
+      }))
+    : [];
 }
 
 export function saveMcpServers(servers: McpServerConfig[]) {
-  localStorage.setItem(MCP_KEY, JSON.stringify(servers));
+  writeJsonStorage(MCP_KEY, servers);
 }
 
 export function loadMcpAliases(): McpToolAliases {
-  try {
-    const raw = localStorage.getItem(MCP_ALIAS_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as McpToolAliases;
-  } catch {
-    return {};
-  }
+  return readJsonStorage(MCP_ALIAS_KEY, {
+    defaultValue: {},
+    validate: (value): value is McpToolAliases => isRecord(value)
+  });
 }
 
 export function saveMcpAliases(aliases: McpToolAliases) {
-  localStorage.setItem(MCP_ALIAS_KEY, JSON.stringify(aliases));
+  writeJsonStorage(MCP_ALIAS_KEY, aliases);
 }
 
 export function loadMcpPromptTemplates(): McpPromptTemplates {
   const defaults = getDefaultMcpPromptTemplates();
-  try {
-    const raw = localStorage.getItem(MCP_PROMPT_KEY);
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as Partial<McpPromptTemplates>;
-    return {
-      activeId: parsed.activeId === "zh" ? "zh" : "en",
-      zh: typeof parsed.zh === "string" && parsed.zh.trim() ? parsed.zh : defaults.zh,
-      en: typeof parsed.en === "string" && parsed.en.trim() ? parsed.en : defaults.en
-    };
-  } catch {
-    return defaults;
-  }
+  const parsed = readJsonStorage<Partial<McpPromptTemplates>>(MCP_PROMPT_KEY, {
+    defaultValue: defaults,
+    validate: (value): value is Partial<McpPromptTemplates> => isRecord(value)
+  });
+  return {
+    activeId: parsed.activeId === "zh" ? "zh" : "en",
+    zh: typeof parsed.zh === "string" && parsed.zh.trim() ? parsed.zh : defaults.zh,
+    en: typeof parsed.en === "string" && parsed.en.trim() ? parsed.en : defaults.en
+  };
 }
 
 export function saveMcpPromptTemplates(templates: McpPromptTemplates) {
-  localStorage.setItem(MCP_PROMPT_KEY, JSON.stringify(templates));
+  writeJsonStorage(MCP_PROMPT_KEY, templates);
 }
 
 export function loadModelCredentials(): ModelCredentials {
   try {
-    const raw = localStorage.getItem(MODEL_CREDENTIALS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = readJsonStorage<unknown>(MODEL_CREDENTIALS_KEY, {
+      defaultValue: [],
+      validate: (value): value is unknown[] | Record<string, unknown> => Array.isArray(value) || isRecord(value)
+    });
     if (Array.isArray(parsed)) {
       return parsed.filter(
         (item): item is ModelCredentialEntry =>
@@ -256,16 +248,16 @@ export function loadModelCredentials(): ModelCredentials {
 }
 
 export function saveModelCredentials(credentials: ModelCredentials) {
-  localStorage.setItem(MODEL_CREDENTIALS_KEY, JSON.stringify(credentials));
+  writeJsonStorage(MODEL_CREDENTIALS_KEY, credentials);
 }
 
 export function loadLoadBalancers(): LoadBalancerConfig[] {
-  try {
-    const raw = localStorage.getItem(LOAD_BALANCERS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
+  const parsed = readJsonStorage<unknown>(LOAD_BALANCERS_KEY, {
+    defaultValue: [],
+    validate: (value): value is unknown[] => Array.isArray(value)
+  });
+  return Array.isArray(parsed)
+    ? parsed
       .filter(
         (item): item is LoadBalancerConfig =>
           isRecord(item) &&
@@ -282,14 +274,12 @@ export function loadLoadBalancers(): LoadBalancerConfig[] {
               ? instance.resumeMinute
               : 60
         }))
-      }));
-  } catch {
-    return [];
-  }
+      }))
+    : [];
 }
 
 export function saveLoadBalancers(loadBalancers: LoadBalancerConfig[]) {
-  localStorage.setItem(LOAD_BALANCERS_KEY, JSON.stringify(loadBalancers));
+  writeJsonStorage(LOAD_BALANCERS_KEY, loadBalancers);
 }
 
 export function getLoadBalancersStorageKey() {

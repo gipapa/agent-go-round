@@ -479,6 +479,7 @@ type ChatPanelProps = {
   history: ChatMessage[];
   onSend: (input: string) => Promise<void>;
   onDraftChange?: (value: string) => void;
+  onStop?: () => void;
   onClear: () => void;
   onExportRaw: () => void;
   onExportSummary: () => Promise<void>;
@@ -527,6 +528,7 @@ export default function ChatPanel(props: ChatPanelProps) {
     await props.onSend(t);
     inputRef.current?.focus();
   };
+  const chatBusy = props.history.some((message) => message.role === "assistant" && message.isStreaming);
 
   useEffect(() => {
     props.onDraftChange?.(text);
@@ -886,8 +888,13 @@ export default function ChatPanel(props: ChatPanelProps) {
             className="chat-input"
             data-tutorial-id="chat-input"
           />
-          <button onClick={send} className="chat-send-btn" data-tutorial-id="chat-send">
-            Send
+          <button
+            onClick={chatBusy ? props.onStop : send}
+            className="chat-send-btn"
+            data-tutorial-id="chat-send"
+            disabled={chatBusy && !props.onStop}
+          >
+            {chatBusy ? "Stop" : "Send"}
           </button>
         </div>
       )}

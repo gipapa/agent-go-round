@@ -2,7 +2,8 @@ import React, { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRequest } from "../adapters/base";
-import type { AgentConfig, DocItem, McpServerConfig } from "../types";
+import type { AgentConfig, DocItem, LoadBalancerConfig, McpServerConfig } from "../types";
+import type { ModelCredentials } from "../storage/settingsStore";
 import App from "../app/App";
 
 const responderRef = vi.hoisted<{ current: (req: ChatRequest) => string }>(() => ({ current: () => "" }));
@@ -76,6 +77,8 @@ vi.mock("../mcp/sseClient", () => ({
 const UI_KEY = "agr_ui_v1";
 const AGENTS_KEY = "agr_agents_v1";
 const MCP_KEY = "agr_mcp_v1";
+const CREDENTIALS_KEY = "agr_model_credentials_v1";
+const LOAD_BALANCERS_KEY = "agr_load_balancers_v1";
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
@@ -94,6 +97,62 @@ function seedUi(state: Record<string, unknown>) {
 
 function seedMcpServers(servers: McpServerConfig[]) {
   localStorage.setItem(MCP_KEY, JSON.stringify(servers));
+}
+
+function seedLoadBalancedAgent(agent: AgentConfig) {
+  const credentialId = `cred-${agent.id}`;
+  const keyId = `key-${agent.id}`;
+  const loadBalancerId = `lb-${agent.id}`;
+  const credentials: ModelCredentials = [
+    {
+      id: credentialId,
+      preset: "custom",
+      label: `${agent.name} credential`,
+      endpoint: agent.endpoint ?? "http://mock-llm.test/v1",
+      keys: [{ id: keyId, apiKey: "test-key", createdAt: 1, updatedAt: 1 }],
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ];
+  const loadBalancers: LoadBalancerConfig[] = [
+    {
+      id: loadBalancerId,
+      name: `${agent.name} LB`,
+      instances: [
+        {
+          id: `instance-${agent.id}`,
+          credentialId,
+          credentialKeyId: keyId,
+          model: agent.model ?? "mock",
+          description: "test instance",
+          maxRetries: 0,
+          delaySecond: 0,
+          resumeMinute: 1,
+          failure: false,
+          failureCount: 0,
+          nextCheckTime: null,
+          createdAt: 1,
+          updatedAt: 1
+        }
+      ],
+      createdAt: 1,
+      updatedAt: 1
+    }
+  ];
+  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
+  localStorage.setItem(LOAD_BALANCERS_KEY, JSON.stringify(loadBalancers));
+  return {
+    ...agent,
+    loadBalancerId
+  };
+}
+
+function isToolDecisionPrompt(input: string) {
+  return (
+    input.includes("請判斷這次是否需要使用工具") ||
+    input.includes("decide whether this turn needs a tool") ||
+    input.includes("TOOL_CATALOG")
+  );
 }
 
 async function renderApp() {
@@ -211,6 +270,7 @@ describe("App chat flows (mocked)", () => {
     };
 
     responderRef.current = (req) => {
+      if (isToolDecisionPrompt(req.input)) return '{"type":"no_tool"}';
       if (req.input === "I'm John") return "ok";
       if (req.input === "who am I") {
         const hasName = req.history.some((m) => m.role === "user" && m.content.includes("I'm John"));
@@ -219,8 +279,9 @@ describe("App chat flows (mocked)", () => {
       return "";
     };
 
-    seedAgents([agent]);
-    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: agent.id, memberAgentIds: [] });
+    const seededAgent = seedLoadBalancedAgent(agent);
+    seedAgents([seededAgent]);
+    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: seededAgent.id, memberAgentIds: [] });
 
     await renderApp();
     await sendMessage("I'm John");
@@ -253,14 +314,16 @@ describe("App chat flows (mocked)", () => {
     ];
 
     responderRef.current = (req) => {
+      if (isToolDecisionPrompt(req.input)) return '{"type":"no_tool"}';
       if (req.input === "tell me the funniest joke" && req.system?.includes("sad strawberry")) {
         return "What do you call a sad strawberry? Ans: A blueberry";
       }
       return "no idea";
     };
 
-    seedAgents([agent]);
-    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: agent.id, memberAgentIds: [] });
+    const seededAgent = seedLoadBalancedAgent(agent);
+    seedAgents([seededAgent]);
+    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: seededAgent.id, memberAgentIds: [] });
 
     await renderApp();
     await sendMessage("tell me the funniest joke");
@@ -284,23 +347,21 @@ describe("App chat flows (mocked)", () => {
     };
 
     responderRef.current = (req) => {
-      if (req.input.includes("請判斷這次是否需要使用工具")) {
+      if (isToolDecisionPrompt(req.input)) {
         return `{"type":"mcp_call","serverId":"${server.id}","tool":"time","input":{}}`;
       }
-      if (req.input.includes("工具執行結果")) {
+      if (req.input.includes("工具執行結果") || req.input.includes("2026-01-01 00:00:00")) {
         return "now: 2026-01-01 00:00:00";
       }
       return "";
     };
 
-    seedAgents([{ ...agent, allowedMcpServerIds: [server.id] }]);
+    const seededAgent = seedLoadBalancedAgent({ ...agent, allowedMcpServerIds: [server.id] });
+    seedAgents([seededAgent]);
     seedMcpServers([server]);
-    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: agent.id, memberAgentIds: [] });
+    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: seededAgent.id, memberAgentIds: [] });
 
     await renderApp();
-    await clickButton("Chat Config");
-    await clickButton("Connect & List Tools");
-    await clickButton("Chat");
     await sendMessage("use time tool, tell me what time it is");
     await waitForText("now: 2026-01-01 00:00:00");
     expect(callTool).toHaveBeenCalledWith(expect.anything(), "time", {});
@@ -317,20 +378,21 @@ describe("App chat flows (mocked)", () => {
     };
 
     responderRef.current = (req) => {
-      if (req.input.includes("請判斷這次是否需要使用工具")) {
+      if (isToolDecisionPrompt(req.input)) {
         return '{"type":"user_profile_call","tool":"get_user_profile"}';
       }
-      if (req.input.includes('"name": "Alice"') && req.input.includes('"description": "PM who prefers Traditional Chinese."')) {
+      if (req.input.includes("Alice") && req.input.includes("PM who prefers Traditional Chinese.")) {
         return "你是 Alice，一位偏好繁體中文的 PM。";
       }
       return "";
     };
 
-    seedAgents([agent]);
+    const seededAgent = seedLoadBalancedAgent(agent);
+    seedAgents([seededAgent]);
     seedUi({
       activeTab: "chat",
       mode: "one_to_one",
-      activeAgentId: agent.id,
+      activeAgentId: seededAgent.id,
       memberAgentIds: [],
       userName: "Alice",
       userDescription: "PM who prefers Traditional Chinese."

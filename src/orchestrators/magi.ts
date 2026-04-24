@@ -11,6 +11,8 @@ import {
 import { generateId } from "../utils/id";
 import { extractJsonObject } from "../utils/safeJson";
 import { errorMessage } from "../utils/errors";
+import type { ExecutionDeadline } from "../utils/deadline";
+import { combineSignals, createDeadline, withTimeout } from "../utils/deadline";
 
 export const MAGI_META = {
   code: "473",
@@ -33,7 +35,11 @@ export type MagiPreparedUnit = {
   system: string;
 };
 
-type ParsedBallot = {
+const DEFAULT_MAGI_ROUND_TIMEOUT_MS = 60_000;
+const DEFAULT_MAGI_UNIT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAGI_DEADLOCK_ROUNDS = 2;
+
+export type ParsedBallot = {
   verdict: MagiUnitVerdict;
   confidence: number;
   summary: string;
@@ -73,7 +79,13 @@ export async function runMagi(args: {
     unit: MagiPreparedUnit;
     prompt: string;
     requestLabel: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
   }) => Promise<string>;
+  deadline?: ExecutionDeadline;
+  roundTimeoutMs?: number;
+  unitTimeoutMs?: number;
+  deadlockRounds?: number;
   onState?: (state: MagiRenderState) => void;
   onLog?: (entry: MagiLogEntry) => void;
 }) {
@@ -89,13 +101,18 @@ export async function runMagi(args: {
 
   const log = (entry: MagiLogEntry) => args.onLog?.(entry);
   const maxRounds = Math.max(2, args.maxConsensusRounds ?? 3);
+  const roundTimeoutMs = Math.max(1, Math.round(args.roundTimeoutMs ?? DEFAULT_MAGI_ROUND_TIMEOUT_MS));
+  const unitTimeoutMs = Math.max(1, Math.round(args.unitTimeoutMs ?? DEFAULT_MAGI_UNIT_TIMEOUT_MS));
+  const deadlockRounds = Math.max(1, Math.round(args.deadlockRounds ?? DEFAULT_MAGI_DEADLOCK_ROUNDS));
 
   publish();
   log({ message: `MAGI started (${args.mode})`, details: args.question });
 
   let previousBallots = new Map<MagiUnitId, ParsedBallot>();
+  let stuckRounds = 0;
 
   for (let round = 1; round <= (args.mode === "magi_vote" ? 1 : maxRounds); round++) {
+    args.deadline?.throwIfExpired(`MAGI round ${round}`);
     state.round = round;
     appendTranscript(state, {
       round,
@@ -112,8 +129,19 @@ export async function runMagi(args: {
     }
     publish();
 
-    const roundResults = await Promise.all(
-      args.units.map(async (unit) => {
+    const roundDeadline = createDeadline({
+      totalMs: Math.min(roundTimeoutMs, Math.max(1, args.deadline?.remainingMs() ?? roundTimeoutMs)),
+      externalSignal: args.deadline?.signal,
+      label: `MAGI round ${round}`
+    });
+
+    const runUnit = async (unit: MagiPreparedUnit) => {
+      const unitDeadline = createDeadline({
+        totalMs: Math.min(unitTimeoutMs, Math.max(1, roundDeadline.remainingMs())),
+        externalSignal: roundDeadline.signal,
+        label: `MAGI ${unit.unitId} round ${round}`
+      });
+      try {
         const prompt =
           round === 1
             ? buildVotePrompt({ question: args.question, unit })
@@ -137,11 +165,20 @@ export async function runMagi(args: {
         });
 
         try {
-          const raw = await args.invokeUnit({
-            unit,
-            prompt,
-            requestLabel: `magi ${unit.unitId} round ${round}`
-          });
+          const signal = combineSignals(args.deadline?.signal, roundDeadline.signal, unitDeadline.signal);
+          const timeoutMs = Math.max(1, unitDeadline.remainingMs());
+          const raw = await withTimeout(
+            args.invokeUnit({
+              unit,
+              prompt,
+              requestLabel: `magi ${unit.unitId} round ${round}`,
+              signal,
+              timeoutMs
+            }),
+            timeoutMs,
+            `MAGI ${unit.unitId} round ${round}`,
+            signal
+          );
           const parsed = parseBallot(raw);
           if (!parsed.ok) {
             return {
@@ -171,8 +208,17 @@ export async function runMagi(args: {
             } as MagiUnitResult
           };
         }
-      })
-    );
+      } finally {
+        unitDeadline.dispose();
+      }
+    };
+
+    const roundResults = await withTimeout(
+      Promise.all(args.units.map((unit) => runUnit(unit))),
+      Math.max(1, roundDeadline.remainingMs()),
+      `MAGI round ${round}`,
+      roundDeadline.signal
+    ).finally(() => roundDeadline.dispose());
 
     let roundHasError = false;
     const nextBallots = new Map<MagiUnitId, ParsedBallot>();
@@ -245,7 +291,8 @@ export async function runMagi(args: {
 
     publish();
 
-    if (roundHasError) {
+    const majority = checkMajority(nextBallots);
+    if (roundHasError && !majority) {
       state.status = "failed";
       state.finalVerdict = "DEADLOCK";
       state.finalSummary = "至少一位 MAGI 單位執行失敗，系統無法完成有效裁決。";
@@ -265,9 +312,19 @@ export async function runMagi(args: {
       };
     }
 
-    previousBallots = nextBallots;
     const resolved = resolveFinalVerdict([...nextBallots.values()]);
     const unanimous = hasConsensus([...nextBallots.values()]);
+    const deadlocked =
+      args.mode === "magi_consensus" &&
+      round > 1 &&
+      nextBallots.size === previousBallots.size &&
+      ballotsAreIdentical(previousBallots, nextBallots);
+    if (deadlocked) {
+      stuckRounds += 1;
+    } else {
+      stuckRounds = 0;
+    }
+    previousBallots = nextBallots;
     state.finalVerdict = resolved;
     state.finalSummary = buildFinalSummary({
       question: args.question,
@@ -311,13 +368,38 @@ export async function runMagi(args: {
     });
     publish();
 
-    if (args.mode === "magi_vote" || unanimous) {
+    if (deadlocked && stuckRounds >= deadlockRounds) {
+      state.status = "completed";
+      state.finalVerdict = "DEADLOCK";
+      state.finalSummary = "MAGI 共識協商已連續多輪維持相同票型，系統判定為 deadlock 並提早停止。";
+      state.informationText = "CONSENSUS DEADLOCK";
+      appendTranscript(state, {
+        round,
+        speaker: "SYSTEM",
+        label: "DEADLOCK",
+        content: state.finalSummary,
+        kind: "system"
+      });
+      publish();
+      log({
+        round,
+        ok: false,
+        message: "MAGI deadlock detected",
+        details: `stuck_rounds=${stuckRounds}\nfinal_verdict=${state.finalVerdict}`
+      });
+      return {
+        state,
+        answer: buildFinalAnswer({ question: args.question, state })
+      };
+    }
+
+    if (args.mode === "magi_vote" || unanimous || majority) {
       state.status = "completed";
       publish();
       log({
         round,
         ok: true,
-        message: "MAGI completed",
+        message: majority && !unanimous ? "MAGI completed by majority" : "MAGI completed",
         details: `final_verdict=${resolved}`
       });
       return {
@@ -404,6 +486,40 @@ export function resolveFinalVerdict(ballots: Array<{ verdict: MagiUnitVerdict }>
   if ((counts.get("REJECT") ?? 0) >= 2) return "REJECT" as const;
   if ((counts.get("ABSTAIN") ?? 0) >= 2) return "ABSTAIN" as const;
   return "DEADLOCK" as const;
+}
+
+export function checkMajority(ballots: Map<MagiUnitId, ParsedBallot>, threshold = 2): MagiUnitVerdict | null {
+  const counts = new Map<MagiUnitVerdict, number>([
+    ["APPROVE", 0],
+    ["REJECT", 0],
+    ["ABSTAIN", 0]
+  ]);
+  for (const ballot of ballots.values()) {
+    counts.set(ballot.verdict, (counts.get(ballot.verdict) ?? 0) + 1);
+  }
+  for (const [verdict, count] of counts) {
+    if (count >= threshold) return verdict;
+  }
+  return null;
+}
+
+export function ballotsAreIdentical(a: Map<MagiUnitId, ParsedBallot>, b: Map<MagiUnitId, ParsedBallot>) {
+  if (a.size !== b.size) return false;
+  for (const [unitId, left] of a) {
+    const right = b.get(unitId);
+    if (!right) return false;
+    if (left.verdict !== right.verdict) return false;
+    if (left.confidence !== right.confidence) return false;
+    if (left.summary.trim() !== right.summary.trim()) return false;
+    if (left.rationale.trim() !== right.rationale.trim()) return false;
+    if ((left.critique ?? "").trim() !== (right.critique ?? "").trim()) return false;
+    if ((left.changedMind ?? null) !== (right.changedMind ?? null)) return false;
+    if (left.concerns.length !== right.concerns.length) return false;
+    for (let index = 0; index < left.concerns.length; index += 1) {
+      if (left.concerns[index].trim() !== right.concerns[index].trim()) return false;
+    }
+  }
+  return true;
 }
 
 function hasConsensus(ballots: ParsedBallot[]) {

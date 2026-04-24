@@ -8,6 +8,9 @@ import {
   normalizeLeaderPlan,
   normalizeLeaderVerify
 } from "../schemas/decisions";
+import type { ExecutionDeadline } from "../utils/deadline";
+import { combineSignals } from "../utils/deadline";
+import { sleepWithAbort } from "../utils/fetchWithTimeout";
 
 type RunState = {
   round: number;
@@ -184,6 +187,9 @@ export async function runLeaderTeam(args: {
   onDelta: (t: string) => void;
 
   onEvent?: (ev: LeaderTeamEvent) => void;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  deadline?: ExecutionDeadline;
 }): Promise<string> {
   const maxRounds = args.maxRounds ?? 8;
   const reactMax = args.reactMax ?? 2;
@@ -192,7 +198,9 @@ export async function runLeaderTeam(args: {
   let invalidActionRetries = 0;
   const retryDelaySec = Math.max(0, args.retry?.delaySec ?? 0);
   const retryMax = Math.max(0, args.retry?.max ?? 0);
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const signal = args.deadline ? combineSignals(args.signal, args.deadline.signal) : args.signal;
+  const getTimeoutMs = () => args.timeoutMs ?? (args.deadline ? Math.max(1, args.deadline.remainingMs()) : undefined);
+  const throwIfStopped = (stage: string) => args.deadline?.throwIfExpired(stage);
 
   const state: RunState = {
     round: 1,
@@ -207,6 +215,7 @@ export async function runLeaderTeam(args: {
     description: m.agent.description
   }));
 
+  throwIfStopped("leader plan");
   let plannedAssignments = membersMeta.map((m) => ({ memberId: m.id, message: "" }));
   const planText = await runOneToOne({
     adapter: args.leader.adapter,
@@ -220,7 +229,9 @@ export async function runLeaderTeam(args: {
     system: args.userSystem,
     onDelta: () => {},
     retry: args.retry,
-    onLog: args.onLog
+    onLog: args.onLog,
+    signal,
+    timeoutMs: getTimeoutMs()
   });
   const planObj = extractJsonObject(planText);
   const plan = normalizeLeaderPlan(planObj);
@@ -240,6 +251,7 @@ export async function runLeaderTeam(args: {
   });
 
   while (state.round <= maxRounds) {
+    throwIfStopped(`leader round ${state.round}`);
     args.onLog(`Leader round ${state.round}: deciding next action...`);
     const nextAssignment = plannedAssignments[planIndex] ?? plannedAssignments[plannedAssignments.length - 1];
     const nextMemberId = nextAssignment?.memberId;
@@ -263,7 +275,9 @@ export async function runLeaderTeam(args: {
       system: args.userSystem,
       onDelta: () => {},
       retry: args.retry,
-      onLog: args.onLog
+      onLog: args.onLog,
+      signal,
+      timeoutMs: getTimeoutMs()
     });
 
     args.onEvent?.({ type: "leader_decision_raw", text: leaderText });
@@ -283,7 +297,7 @@ export async function runLeaderTeam(args: {
           max: retryMax,
           raw: leaderText
         });
-        if (retryDelaySec > 0) await sleep(retryDelaySec * 1000);
+        if (retryDelaySec > 0) await sleepWithAbort(retryDelaySec * 1000, signal);
         continue;
       }
       args.onLog("Leader output was not a valid JSON action. Finishing with leader raw text.");
@@ -311,7 +325,9 @@ export async function runLeaderTeam(args: {
         system: args.userSystem,
         onDelta: () => {},
         retry: args.retry,
-        onLog: args.onLog
+        onLog: args.onLog,
+        signal,
+        timeoutMs: getTimeoutMs()
       });
       const verifyObj = extractJsonObject(verifyText);
       const verify = normalizeLeaderVerify(verifyObj);
@@ -353,7 +369,9 @@ export async function runLeaderTeam(args: {
       system: buildMemberSystem(args.goal, args.leader.agent.name),
       onDelta: () => {},
       retry: args.retry,
-      onLog: args.onLog
+      onLog: args.onLog,
+      signal,
+      timeoutMs: getTimeoutMs()
     });
 
     args.onEvent?.({
@@ -393,7 +411,9 @@ export async function runLeaderTeam(args: {
         system: args.userSystem,
         onDelta: () => {},
         retry: args.retry,
-        onLog: args.onLog
+        onLog: args.onLog,
+        signal,
+        timeoutMs: getTimeoutMs()
       });
 
       const verifyObj = extractJsonObject(verifyText);
@@ -446,7 +466,9 @@ export async function runLeaderTeam(args: {
         system: buildMemberSystem(args.goal, args.leader.agent.name),
         onDelta: () => {},
         retry: args.retry,
-        onLog: args.onLog
+        onLog: args.onLog,
+        signal,
+        timeoutMs: getTimeoutMs()
       });
 
       state.steps.push({
@@ -479,6 +501,7 @@ export async function runLeaderTeam(args: {
   }
 
   args.onLog(`Max rounds reached (${maxRounds}). Requesting leader to finalize...`);
+  throwIfStopped("leader finalization");
 
   const finalPrompt =
     `We reached max rounds. Provide the best final answer now.\n\n` +
@@ -501,7 +524,9 @@ export async function runLeaderTeam(args: {
     system: args.userSystem,
     onDelta: () => {},
     retry: args.retry,
-    onLog: args.onLog
+    onLog: args.onLog,
+    signal,
+    timeoutMs: getTimeoutMs()
   });
 
   const finalObj = extractJsonObject(finalText);

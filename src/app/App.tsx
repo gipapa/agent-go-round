@@ -174,6 +174,8 @@ import {
 import { buildToolResultPromptBlock, ToolPromptDetailMode } from "../utils/toolResultSummary";
 import { normalizeCredentialUrl } from "../utils/credential";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
+import type { ExecutionDeadline } from "../utils/deadline";
+import { combineSignals, createDeadline } from "../utils/deadline";
 import {
   DEFAULT_RADIO_REFINE_PROMPT,
   joinOrderedTranscriptChunks,
@@ -232,6 +234,16 @@ import {
   type SkillDecision,
   type ToolDecision
 } from "../schemas/decisions";
+
+const DEFAULT_EXECUTION_DEADLINE_MS = 5 * 60 * 1000;
+const DEFAULT_MAGI_ROUND_TIMEOUT_MS = 60 * 1000;
+const DEFAULT_MAGI_UNIT_TIMEOUT_MS = 30 * 1000;
+
+function normalizeExecutionDeadlineMs(value: unknown) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_EXECUTION_DEADLINE_MS;
+  return Math.max(10_000, Math.min(30 * 60 * 1000, Math.round(numeric)));
+}
 
 function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
@@ -1977,6 +1989,7 @@ function buildPromptTemplateApiTestSpec(args: {
 export default function App() {
   const [appEntryMode, setAppEntryMode] = useState<AppEntryMode>("landing");
   const initialUi = loadUiState();
+  const executionDeadlineMs = normalizeExecutionDeadlineMs(initialUi.executionDeadlineMs);
   const [agents, setAgents] = useState<AgentConfig[]>(() => {
     const existing = loadAgents();
     if (existing.length) return existing;
@@ -2140,6 +2153,9 @@ export default function App() {
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
   const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
+  const activeChatAbortRef = React.useRef<AbortController | null>(null);
+  const skillExecutionLocksRef = React.useRef<Map<string, AbortController>>(new Map());
+  const tutorialRestoringRef = React.useRef(false);
   const radioSessionIdRef = React.useRef<string | null>(null);
   const radioMediaStreamRef = React.useRef<MediaStream | null>(null);
   const radioRecorderRef = React.useRef<MediaRecorder | null>(null);
@@ -2388,13 +2404,14 @@ export default function App() {
       skillToolLoopMax,
       skillVerifierAgentId,
       activeAgentId,
+      executionDeadlineMs,
       historyMessageLimit,
       userName,
       userAvatarUrl,
       userDescription,
       radioSettings
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, historyMessageLimit, userName, userAvatarUrl, userDescription, radioSettings]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, executionDeadlineMs, historyMessageLimit, userName, userAvatarUrl, userDescription, radioSettings]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -3299,7 +3316,11 @@ export default function App() {
     requestId?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
+    deadline?: ExecutionDeadline;
   }) {
+    args.deadline?.throwIfExpired(args.requestLabel ?? "chat response");
+    const requestSignal = args.deadline ? combineSignals(args.signal, args.deadline.signal) : args.signal;
+    const requestTimeoutMs = args.timeoutMs ?? (args.deadline ? Math.max(1, args.deadline.remainingMs()) : undefined);
     const requestLabel = args.requestLabel ?? "chat response";
     let candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
     if (!candidates.length) {
@@ -3326,8 +3347,9 @@ export default function App() {
         onDelta: args.onDelta,
         retry: getRetryPolicyForAgent(args.logicalAgent),
         onLog: args.onLog,
-        signal: args.signal,
-        timeoutMs: args.timeoutMs
+        signal: requestSignal,
+        timeoutMs: requestTimeoutMs,
+        deadline: args.deadline
       });
     }
 
@@ -3335,6 +3357,7 @@ export default function App() {
     let lastFailureDetails = lastFailureText;
     let shouldReturnEmptyResponse = false;
     for (const [candidateIndex, candidate] of candidates.entries()) {
+      args.deadline?.throwIfExpired(`${requestLabel} failover`);
       logNow({
         category: "load_balancer",
         agent: args.logicalAgent.name,
@@ -3356,8 +3379,9 @@ export default function App() {
         onDelta: args.onDelta,
         retry,
         onLog: args.onLog,
-        signal: args.signal,
-        timeoutMs: args.timeoutMs
+        signal: requestSignal,
+        timeoutMs: requestTimeoutMs,
+        deadline: args.deadline
       });
       const trimmedText = String(text ?? "").trim();
       if (!trimmedText) {
@@ -4017,6 +4041,13 @@ export default function App() {
     setHistory((h) => h.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   }
 
+  function stopActiveChatExecution() {
+    const controller = activeChatAbortRef.current;
+    if (!controller || controller.signal.aborted) return;
+    controller.abort(new Error("使用者中斷目前執行。"));
+    logNow({ category: "chat", ok: false, outcome: "degraded", message: "Active chat execution aborted by user" });
+  }
+
   async function runToolDecision(args: {
     agent: AgentConfig;
     adapter: ReturnType<typeof pickAdapter>;
@@ -4026,6 +4057,7 @@ export default function App() {
     promptTemplate: string;
     fallbackPromptTemplate: string;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }): Promise<ToolDecision | null> {
     const toolList = buildToolDecisionCatalog(args.toolEntries);
 
@@ -4043,6 +4075,7 @@ export default function App() {
         history: [],
         requestId: args.requestId,
         requestLabel: "tool decision",
+        deadline: args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: t })
       });
@@ -4102,6 +4135,7 @@ export default function App() {
     language: "zh" | "en";
     promptTemplate?: string;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }): Promise<SkillDecision | null> {
     const skillList = buildSkillDecisionCatalog(args.skills);
     const prompt = buildSkillDecisionPrompt(args.userInput, JSON.stringify(skillList, null, 2), args.language, args.promptTemplate);
@@ -4113,6 +4147,7 @@ export default function App() {
         history: [],
         requestId: args.requestId,
         requestLabel: "skill decision",
+        deadline: args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill decision", message: t })
       });
@@ -4176,6 +4211,7 @@ export default function App() {
     retry: { delaySec: number; max: number };
     promptTemplate?: string;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }) {
     const prompt = buildSkillVerifyPrompt({
       skill: args.skill,
@@ -4194,6 +4230,7 @@ export default function App() {
         history: [],
         requestId: args.requestId,
         requestLabel: `skill verify round ${args.round}`,
+        deadline: args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, requestId: args.requestId, stage: `skill verify round ${args.round}`, message: t })
       });
@@ -4253,6 +4290,7 @@ export default function App() {
     userInput: string;
     promptTemplate?: string;
     requestId?: string;
+    deadline?: ExecutionDeadline;
     onTrace?: (label: string, content: string) => void;
   }): Promise<SkillBootstrapPlan> {
     const prompt = buildBootstrapPlanPrompt({
@@ -4269,6 +4307,7 @@ export default function App() {
         history: [],
         requestId: args.requestId,
         requestLabel: "skill bootstrap plan",
+        deadline: args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill bootstrap plan", message: t })
       });
@@ -4359,6 +4398,7 @@ export default function App() {
     phaseHint?: string;
     promptTemplate?: string;
     requestId?: string;
+    deadline?: ExecutionDeadline;
     onTrace?: (label: string, content: string) => void;
   }): Promise<SkillStepDecision | null> {
     const prompt = buildPlannerStepPrompt({
@@ -4381,6 +4421,7 @@ export default function App() {
         history: [],
         requestId: args.requestId,
         requestLabel: `skill planner step ${args.state.stepIndex + 1}`,
+        deadline: args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill planner step ${args.state.stepIndex + 1}`, message: t })
       });
@@ -4449,6 +4490,7 @@ export default function App() {
     toolScopeSummary: string;
     promptTemplate?: string;
     requestId?: string;
+    deadline?: ExecutionDeadline;
     onTrace?: (label: string, content: string) => void;
   }): Promise<SkillCompletionDecision | null> {
     const prompt = buildCompletionGatePrompt({
@@ -4467,6 +4509,7 @@ export default function App() {
         history: [],
         requestId: args.requestId,
         requestLabel: `skill completion gate ${args.state.stepIndex}`,
+        deadline: args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill completion gate ${args.state.stepIndex}`, message: t })
       });
@@ -4535,6 +4578,7 @@ export default function App() {
     onStatus?: (text: string) => void;
     promptDetail?: ToolPromptDetailMode;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }): Promise<ToolAugmentationResult> {
     if (args.toolEntries.length === 0) {
       if (args.availableBuiltinTools.length > 0) {
@@ -4571,7 +4615,8 @@ export default function App() {
         availableMcpTools: args.availableMcpTools,
         onStatus: args.onStatus,
         promptDetail: args.promptDetail ?? "default",
-        requestId: args.requestId
+        requestId: args.requestId,
+        deadline: args.deadline
       });
     }
 
@@ -4584,7 +4629,8 @@ export default function App() {
       toolEntries: args.toolEntries,
       promptTemplate: promptTemplateRuntime.resolve("tool-decision", mcpPromptTemplates.activeId).template,
       fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`),
-      requestId: args.requestId
+      requestId: args.requestId,
+      deadline: args.deadline
     });
 
     if (!decision) {
@@ -4625,7 +4671,8 @@ export default function App() {
       availableMcpTools: args.availableMcpTools,
       onStatus: args.onStatus,
       promptDetail: args.promptDetail ?? "default",
-      requestId: args.requestId
+      requestId: args.requestId,
+      deadline: args.deadline
     });
   }
 
@@ -4639,6 +4686,7 @@ export default function App() {
     onStatus?: (text: string) => void;
     promptDetail: ToolPromptDetailMode;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }): Promise<ToolAugmentationResult> {
     const normalizedDecision = args.selection;
 
@@ -4716,12 +4764,19 @@ export default function App() {
           };
         }
 
-        const toolOutput = await runBuiltInScriptTool(targetTool, normalizedDecision.input ?? {}, {
-          system: allowedSystemHelpers,
-          ui: {
-            dashboard: createToolDashboardHelpers()
+        const toolOutput = await runBuiltInScriptTool(
+          targetTool,
+          normalizedDecision.input ?? {},
+          {
+            system: allowedSystemHelpers,
+            ui: {
+              dashboard: createToolDashboardHelpers()
+            }
+          },
+          {
+            signal: args.deadline?.signal
           }
-        });
+        );
         const toolIntent = classifyBuiltInToolIntent(targetTool);
         const toolOutputText = stringifyAny(toolOutput);
         const browserObservation = extractBrowserObservation({
@@ -4976,6 +5031,7 @@ export default function App() {
     deferToolDecision?: boolean;
     onStatus?: (text: string) => void;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }): Promise<PreparedSkillExecution> {
     args.onStatus?.(`正在載入 skill「${args.skill.name}」中…`);
     const loaded = loadSkillRuntime({
@@ -5032,7 +5088,8 @@ export default function App() {
             toolEntries: scopedToolEntries,
             decisionContext,
             onStatus: args.onStatus,
-            requestId: args.requestId
+            requestId: args.requestId,
+            deadline: args.deadline
           });
           toolAugmentation = result.status === "tool_called" ? result : null;
           return result.input;
@@ -5062,7 +5119,20 @@ export default function App() {
     assistantMessageId: string;
     onStatus?: (text: string) => void;
     requestId?: string;
+    deadline?: ExecutionDeadline;
   }): Promise<{ finalInput: string; trace: ChatTraceEntry[]; todo: SkillTodoItem[]; phase: SkillPhase; finalAnswerOverride?: string }> {
+    if (skillExecutionLocksRef.current.has(args.skill.id)) {
+      throw new Error(`Skill「${args.skill.name}」正在執行中，請等待目前執行完成或先停止。`);
+    }
+    const lockController = new AbortController();
+    skillExecutionLocksRef.current.set(args.skill.id, lockController);
+    const skillDeadline = args.deadline
+      ? createDeadline({
+          totalMs: Math.max(1, args.deadline.remainingMs()),
+          externalSignal: combineSignals(args.deadline.signal, lockController.signal),
+          label: `skill ${args.skill.name}`
+        })
+      : undefined;
     const verifierAgent = resolveSkillVerifierAgent(args.agent);
     const verifierAdapter = pickAdapter(verifierAgent);
     const scopedToolEntries: ToolEntry[] = [
@@ -5182,6 +5252,8 @@ export default function App() {
       };
     };
 
+    let trace = [...args.initialTrace];
+
     async function runRuntimePass(initialInput: string, initialTrace: ChatTraceEntry[]) {
       return await runMultiTurnSkillRuntime({
         skill: args.skill,
@@ -5190,6 +5262,7 @@ export default function App() {
         initialInput,
         initialTrace,
         toolLoopMax: skillToolLoopMax,
+        deadline: skillDeadline ?? args.deadline,
         callbacks: {
           onStatus: args.onStatus,
           onStateChange: (state) => updateAssistantProgress(state.todo, state.phase),
@@ -5207,6 +5280,7 @@ export default function App() {
               userInput: args.userInput,
               promptTemplate: promptTemplateRuntime.resolve("skill-bootstrap-plan", mcpPromptTemplates.activeId).template,
               requestId: args.requestId,
+              deadline: skillDeadline ?? args.deadline,
               onTrace: (label, content) => {
                 pushSkillTrace(trace, label, content);
                 updateAssistantProgress(bootstrapPlanMeta?.todo?.length ? bootstrapTodoList(bootstrapPlanMeta.todo) : [], "bootstrap_plan", trace);
@@ -5336,7 +5410,9 @@ export default function App() {
                 retry: getRetryPolicyForAgent(args.agent),
                 toolEntries: fastPathScope.toolEntries,
                 promptTemplate: promptTemplateRuntime.resolve("tool-decision", mcpPromptTemplates.activeId).template,
-                fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`)
+                fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`),
+                requestId: args.requestId,
+                deadline: skillDeadline ?? args.deadline
               });
 
               if (fastDecision) {
@@ -5368,6 +5444,7 @@ export default function App() {
               phaseHint,
               promptTemplate: promptTemplateRuntime.resolve("skill-planner-step", mcpPromptTemplates.activeId).template,
               requestId: args.requestId,
+              deadline: skillDeadline ?? args.deadline,
               onTrace: (label, content) => {
                 pushSkillTrace(trace, label, content);
                 updateAssistantProgress(state.todo, "plan_next_step", trace);
@@ -5390,7 +5467,8 @@ export default function App() {
               availableMcpServers: args.prepared.scopedMcpServers,
               availableMcpTools: args.prepared.scopedMcpTools,
               onStatus: args.onStatus,
-              promptDetail: "actionable"
+              promptDetail: "actionable",
+              deadline: skillDeadline ?? args.deadline
             });
 
             return {
@@ -5424,7 +5502,8 @@ export default function App() {
               availableMcpServers: args.prepared.scopedMcpServers,
               availableMcpTools: args.prepared.scopedMcpTools,
               onStatus: args.onStatus,
-              promptDetail: "actionable"
+              promptDetail: "actionable",
+              deadline: skillDeadline ?? args.deadline
             });
 
             const enrichedBrowserObservation = enrichActionBrowserObservation({
@@ -5474,7 +5553,8 @@ export default function App() {
               availableMcpServers: args.prepared.scopedMcpServers,
               availableMcpTools: args.prepared.scopedMcpTools,
               onStatus: args.onStatus,
-              promptDetail: "actionable"
+              promptDetail: "actionable",
+              deadline: skillDeadline ?? args.deadline
             });
 
             return {
@@ -5543,6 +5623,7 @@ export default function App() {
                 toolScopeSummary,
                 promptTemplate: promptTemplateRuntime.resolve("skill-completion-gate", mcpPromptTemplates.activeId).template,
                 requestId: args.requestId,
+                deadline: skillDeadline ?? args.deadline,
                 onTrace: (label, content) => {
                   pushSkillTrace(trace, label, content);
                   updateAssistantProgress(state.todo, "completion_gate", trace);
@@ -5553,7 +5634,7 @@ export default function App() {
       });
     }
 
-    let trace = [...args.initialTrace];
+    try {
     pushSkillExecutionModeTrace(trace, {
       mode: "multi_turn",
       verifyMax: skillVerifyMax,
@@ -5570,6 +5651,17 @@ export default function App() {
     let currentInput = runtimeResult.finalInput;
     let currentTodo = runtimeResult.todo;
     let currentPhase = runtimeResult.phase;
+    const completeRemainingTodo = (todo: SkillTodoItem[], reason: string) =>
+      todo.map((item) =>
+        item.status === "completed" || item.status === "blocked"
+          ? item
+          : {
+              ...item,
+              status: "completed" as const,
+              reason: item.reason ?? reason,
+              updatedAt: Date.now()
+            }
+      );
 
     if (runtimeResult.finalAnswerOverride) {
       pushSkillTrace(trace, "Final answer", "已由 multi-turn runtime 直接產生 blocked/manual summary。");
@@ -5587,6 +5679,7 @@ export default function App() {
     const groundedHeuristicAnswer = buildGroundedRepoSummaryAnswer(runtimeResult.lastBrowserObservation);
     if (groundedHeuristicAnswer && goalWantsRepoSummary(args.userInput)) {
       pushSkillTrace(trace, "Final answer", "已由 grounded browser observation 直接產生最終摘要，避免 LLM 脫離實際頁面內容。");
+      currentTodo = completeRemainingTodo(currentTodo, "Grounded browser observation produced the final answer.");
       currentPhase = "final_answer";
       updateAssistantProgress(currentTodo, currentPhase, trace);
       return {
@@ -5606,6 +5699,7 @@ export default function App() {
       system: args.prepared.system,
       requestId: args.requestId,
       requestLabel: "skill final answer round 1",
+      deadline: skillDeadline ?? args.deadline,
       onDelta: () => {},
       onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill final answer round 1", message: t })
     });
@@ -5646,7 +5740,8 @@ export default function App() {
         round,
         retry: getRetryPolicyForAgent(verifierAgent),
         promptTemplate: promptTemplateRuntime.resolve("skill-verify", mcpPromptTemplates.activeId).template,
-        requestId: args.requestId
+        requestId: args.requestId,
+        deadline: skillDeadline ?? args.deadline
       });
 
       if (!verifyDecision) {
@@ -5707,6 +5802,7 @@ export default function App() {
       const refinedGroundedAnswer = buildGroundedRepoSummaryAnswer(runtimeResult.lastBrowserObservation);
       if (refinedGroundedAnswer && goalWantsRepoSummary(args.userInput)) {
         pushSkillTrace(trace, "Final answer", "refine 後已由 grounded browser observation 直接產生最終摘要。");
+        currentTodo = completeRemainingTodo(currentTodo, "Grounded browser observation produced the final answer.");
         currentPhase = "final_answer";
         updateAssistantProgress(currentTodo, currentPhase, trace);
         return {
@@ -5726,6 +5822,7 @@ export default function App() {
         system: args.prepared.system,
         requestId: args.requestId,
         requestLabel: `skill final answer round ${round + 1}`,
+        deadline: skillDeadline ?? args.deadline,
         onDelta: () => {},
         onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill final answer round ${round + 1}`, message: t })
       });
@@ -5749,6 +5846,13 @@ export default function App() {
 
     pushSkillTrace(trace, "Verify/refine", `已達最大 verify 次數 ${skillVerifyMax}，回傳最後一次 refine 的結果。`);
     return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
+    } finally {
+      skillDeadline?.dispose();
+      const currentLock = skillExecutionLocksRef.current.get(args.skill.id);
+      if (currentLock === lockController) {
+        skillExecutionLocksRef.current.delete(args.skill.id);
+      }
+    }
   }
 
   function readUserAvatar(file: File | undefined) {
@@ -5783,6 +5887,7 @@ export default function App() {
       preparing?: string;
       responding?: string;
     };
+    deadline?: ExecutionDeadline;
   }): Promise<OneToOneTurnResult> {
     const oneToOneAgent = activeAgent;
     if (!oneToOneAgent) {
@@ -5876,7 +5981,8 @@ export default function App() {
         toolEntries: resolvedToolEntries,
         decisionContext: toolArgs.decisionContext,
         onStatus: toolArgs.onStatus,
-        requestId
+        requestId,
+        deadline: args.deadline
       });
       latestToolAugmentation = result.status === "tool_called" ? result : null;
       return result.input;
@@ -5908,7 +6014,8 @@ export default function App() {
         skills: availableSkillsForAgent,
         language: mcpPromptTemplates.activeId,
         promptTemplate: promptTemplateRuntime.resolve("skill-decision", mcpPromptTemplates.activeId).template,
-        requestId
+        requestId,
+        deadline: args.deadline
       });
 
       if (!skillDecision) {
@@ -5964,7 +6071,8 @@ export default function App() {
             availableMcpTools: resolvedMcpToolsForAgent,
             deferToolDecision: skillExecutionMode === "multi_turn",
             onStatus: setAssistantStatus,
-            requestId
+            requestId,
+            deadline: args.deadline
           });
           preparedSkillExecution = prepared;
           selectedSkillForExecution = selectedSkill;
@@ -6007,7 +6115,8 @@ export default function App() {
           userInput: modelInput,
           assistantMessageId: assistantId,
           onStatus: setAssistantStatus,
-          requestId
+          requestId,
+          deadline: args.deadline
         });
         finalInput = executed.finalInput;
         finalSystem = mergeSystemText(preparedSkillExecution.system, args.extraSystem);
@@ -6088,6 +6197,7 @@ export default function App() {
       system: finalSystem,
       requestId,
       requestLabel: "chat response",
+      deadline: args.deadline,
       onDelta,
       onLog: (text) => pushLog({ category: "retry", agent: oneToOneAgent.name, requestId, stage: "chat response", message: text })
     });
@@ -7137,17 +7247,34 @@ export default function App() {
       logNow({ category: "radio", ok: false, message: "Direct text send skipped in radio mode", details: input });
       return;
     }
+    if (tutorialRestoringRef.current) {
+      logNow({ category: "tutorial", ok: false, message: "Send skipped: tutorial restore in progress", details: input });
+      append(msg("assistant", "Tutorial 正在恢復工作區，請稍候再送出。", "system", { displayName: "System" }));
+      return;
+    }
+    if (activeChatAbortRef.current && !activeChatAbortRef.current.signal.aborted) {
+      logNow({ category: "chat", ok: false, message: "Send skipped: another chat execution is running", details: input });
+      return;
+    }
     if (mode === "one_to_one") {
       if (!activeAgent) {
         logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: input });
         return;
       }
+      const controller = new AbortController();
+      activeChatAbortRef.current = controller;
+      const deadline = createDeadline({
+        totalMs: executionDeadlineMs,
+        externalSignal: controller.signal,
+        label: "chat execution"
+      });
       try {
         await sendOneToOneTurn({
           displayInput: input,
           modelInput: input,
           startedAt: Date.now(),
-          modeForLog: "one_to_one"
+          modeForLog: "one_to_one",
+          deadline
         });
       } catch (e) {
         const message = errorMessage(e);
@@ -7162,12 +7289,24 @@ export default function App() {
           message: "Send failed",
           details: message
         });
+      } finally {
+        deadline.dispose();
+        if (activeChatAbortRef.current === controller) {
+          activeChatAbortRef.current = null;
+        }
       }
       return;
     }
 
     const startedAt = Date.now();
     const requestId = createLogRequestId("magi");
+    const controller = new AbortController();
+    activeChatAbortRef.current = controller;
+    const deadline = createDeadline({
+      totalMs: executionDeadlineMs,
+      externalSignal: controller.signal,
+      label: "MAGI execution"
+    });
     const userMsg = msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl });
     append(userMsg);
     const modelHistory = limitHistory([...history, userMsg]);
@@ -7233,7 +7372,10 @@ export default function App() {
         units: initialMagiState.units,
         history: modelHistory,
         maxConsensusRounds: 3,
-        invokeUnit: async ({ unit, prompt, requestLabel }) => {
+        deadline,
+        roundTimeoutMs: DEFAULT_MAGI_ROUND_TIMEOUT_MS,
+        unitTimeoutMs: DEFAULT_MAGI_UNIT_TIMEOUT_MS,
+        invokeUnit: async ({ unit, prompt, requestLabel, signal, timeoutMs }) => {
           return await runOneToOneWithLoadBalancer({
             logicalAgent: unit.agent,
             input: prompt,
@@ -7241,6 +7383,9 @@ export default function App() {
             system: unit.system,
             requestId,
             requestLabel,
+            signal,
+            timeoutMs,
+            deadline,
             onDelta: () => {},
             onLog: (text) => pushLog({ category: "retry", agent: unit.agent.name, requestId, stage: requestLabel, message: text })
           });
@@ -7305,6 +7450,11 @@ export default function App() {
         message: "Send failed",
         details: message
       });
+    } finally {
+      deadline.dispose();
+      if (activeChatAbortRef.current === controller) {
+        activeChatAbortRef.current = null;
+      }
     }
   }
 
@@ -7928,6 +8078,7 @@ export default function App() {
                 <ChatPanel
                   history={history}
                   onSend={onSend}
+                  onStop={stopActiveChatExecution}
                   onClear={() => {
                     setHistory([]);
                     setTutorialOpenedToolResultMessageIds([]);
@@ -8080,6 +8231,19 @@ export default function App() {
                 <div style={{ display: "grid", gap: 14 }} data-tutorial-id="credentials-modal">
                   <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.7 }}>
                     這裡集中管理 provider / endpoint 與多把 API keys。Load Balancer 的 instance 會選擇其中一筆 credential，再綁定某一把 key 來執行。
+                  </div>
+                  <div
+                    style={{
+                      padding: 12,
+                      borderRadius: 8,
+                      border: "1px solid rgba(245, 158, 11, 0.42)",
+                      background: "rgba(245, 158, 11, 0.10)",
+                      color: "var(--text)",
+                      fontSize: 12,
+                      lineHeight: 1.7
+                    }}
+                  >
+                    安全提醒：目前 API keys 仍會存於本機瀏覽器 storage 的獨立 credential key。請避免在公用電腦或不信任的瀏覽器擴充環境使用；匯入第三方 built-in tool 前也請先檢查程式碼。
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button type="button" onClick={() => addCredential("openai")} style={iconActionBtn}>
@@ -8609,6 +8773,7 @@ export default function App() {
               <ChatPanel
                 history={history}
                 onSend={onSend}
+                onStop={stopActiveChatExecution}
                 onClear={() => {
                   setHistory([]);
                   setTutorialOpenedToolResultMessageIds([]);

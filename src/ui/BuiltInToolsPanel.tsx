@@ -199,10 +199,8 @@ export default function BuiltInToolsPanel(props: {
     <div style={{ display: "grid", gap: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.7 }}>
-          Register browser-side JavaScript tools for agents. Tool code runs in the same page context, so it can call globals
-          such as <code>alert</code>, <code>window</code>, and <code>document</code>. You can also use the injected
-          <code>dashboard</code> helper to create a live floating panel. Return a value if you want the model to receive
-          structured tool output.
+          Register browser-side JavaScript tools for agents. Non-DOM tools run with a 10s default timeout and worker isolation;
+          tools that use page UI helpers still execute in the page context for compatibility. Review third-party code before enabling it.
         </div>
         <button
           type="button"
@@ -219,7 +217,7 @@ export default function BuiltInToolsPanel(props: {
       {showHelp && (
         <HelpModal title="Built-in Tools 使用說明" onClose={() => setShowHelp(false)} width="min(760px, 96vw)">
           <div style={helpText}>
-            Built-in Tools 是在瀏覽器端執行的 JavaScript 工具。當 agent 決定呼叫它們時，系統會在目前頁面執行你寫的 JS，
+            Built-in Tools 是在瀏覽器端執行的 JavaScript 工具。當 agent 決定呼叫它們時，系統會在受限 worker 或必要時在目前頁面執行你寫的 JS，
             再把 <code>return</code> 的結果當成 tool output 帶回對話流程。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
@@ -234,9 +232,8 @@ export default function BuiltInToolsPanel(props: {
             4. 到 `Agents` 頁面開啟該 agent 對此 built-in tool 的使用權限
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
-            這些程式碼會直接跑在瀏覽器中，因此可以使用 <code>alert</code>、<code>window</code>、<code>document</code> 等全域物件。
-            系統也會注入 <code>dashboard</code> helper，讓你建立可重用的浮動 dashboard。
-            目前沒有 sandbox，請只使用你信任的程式碼。
+            一般工具預設有 10 秒執行上限；不需要 DOM 的工具會使用 worker 隔離，避免同步無限迴圈卡住整個 UI。
+            需要 <code>dashboard</code>、<code>window</code> 或 <code>document</code> 的工具會回退到頁面脈絡執行，請只使用你信任的程式碼。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
             補充：
@@ -314,81 +311,39 @@ return {
           </div>
           <hr style={divider} />
           <div style={{ ...helpText, marginTop: 8 }}>
-            <div style={exampleTitle}>範例：呼叫已儲存的 AI provider endpoint</div>
-            這種做法適合你想把任何一個已儲存 agent 當成工具來呼叫。
-            例如工具描述可以寫成「依照需求使用指定 agent 回答問題」。
-            下例會根據 <code>input.agentName</code> 找到對應的 agent，再使用 <code>input.prompt</code>
-            當成要送給該 agent 的使用者問題。
+            <div style={exampleTitle}>範例：使用允許的系統 helper</div>
+            Built-in Tool 不會提供讀取 credentials / API key 的 helper。需要模型能力時，請讓 Agent 在工具外層完成規劃；
+            工具本身只透過允許的 <code>system.*</code> helper 讀取非敏感上下文或請使用者確認。
             <br />
             Input schema：
             <pre style={exampleBlock}>{`{
   "type": "object",
   "properties": {
-    "agentName": { "type": "string", "description": "要使用的已儲存 agent 名稱" },
-    "prompt": { "type": "string", "description": "要交給該 agent 回答的問題" }
+    "question": { "type": "string", "description": "要用來挑選 Agent 的問題" }
   },
-  "required": ["agentName", "prompt"]
+  "required": ["question"]
 }`}</pre>
             JavaScript code：
-            <pre style={exampleBlock}>{`const agents = JSON.parse(localStorage.getItem("agr_agents_v1") || "[]");
-const credentials = JSON.parse(localStorage.getItem("agr_model_credentials_v1") || "[]");
-const loadBalancers = JSON.parse(localStorage.getItem("agr_load_balancers_v1") || "[]");
-const agentName = String(input?.agentName ?? "").trim();
-const prompt = String(input?.prompt ?? "").trim();
+            <pre style={exampleBlock}>{`const question = String(input?.question ?? "").trim();
 
-if (!agentName) {
-  throw new Error("Input must include agentName.");
+if (!question) {
+  throw new Error("Input must include question.");
 }
 
-if (!prompt) {
-  throw new Error("Input must include prompt.");
-}
+const selectedAgent = await system.pick_best_agent_for_question(question);
+const profile = await system.get_user_profile();
 
-const agent = agents.find((item) => item.name === agentName);
-
-if (!agent) {
-  throw new Error(\`Agent \${agentName} not found.\`);
-}
-
-const loadBalancer = loadBalancers.find((item) => item.id === agent.loadBalancerId);
-const instance = loadBalancer?.instances?.[0];
-const credential = credentials.find((item) => item.id === instance?.credentialId);
-const key = credential?.keys?.find((item) => item.id === instance?.credentialKeyId) || credential?.keys?.[0];
-const endpoint = String(credential?.endpoint || "").replace(/\\/$/, "");
-const model = String(instance?.model || "").trim();
-
-if (!endpoint || !key?.apiKey || !model) {
-  throw new Error(\`Load balancer for \${agentName} is not ready.\`);
-}
-
-const response = await fetch(\`\${endpoint}/chat/completions\`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: \`Bearer \${key.apiKey}\`
-  },
-  body: JSON.stringify({
-    model,
-    messages: [{ role: "user", content: prompt }]
-  })
-});
-
-if (!response.ok) {
-  throw new Error(\`Provider request failed: \${response.status}\`);
-}
-
-const json = await response.json();
 return {
-  text: json.choices?.[0]?.message?.content ?? "",
-  agent: agentName,
-  model
+  selectedAgent,
+  profile,
+  note: "Credentials are intentionally unavailable inside built-in tools."
 };`}</pre>
           </div>
           <hr style={divider} />
           <div style={{ ...helpText, marginTop: 8 }}>
             <div style={exampleTitle}>範例：自動選擇適合的 Agent 來回覆問題</div>
             這個工具會先呼叫內建 helper <code>system.pick_best_agent_for_question</code>，
-            從已儲存的 agent 清單中挑出最適合處理問題的 agent，然後再代替使用者呼叫該 agent。
+            從已儲存的 agent 清單中挑出最適合處理問題的 agent。工具不會代替使用者讀取 credential 或發出模型請求。
             <br />
             Input schema：
             <pre style={exampleBlock}>{`{
@@ -399,53 +354,17 @@ return {
   "required": ["question"]
 }`}</pre>
             JavaScript code：
-            <pre style={exampleBlock}>{`const agents = JSON.parse(localStorage.getItem("agr_agents_v1") || "[]");
-const credentials = JSON.parse(localStorage.getItem("agr_model_credentials_v1") || "[]");
-const loadBalancers = JSON.parse(localStorage.getItem("agr_load_balancers_v1") || "[]");
-const question = String(input?.question ?? "").trim();
+            <pre style={exampleBlock}>{`const question = String(input?.question ?? "").trim();
 
 if (!question) {
   throw new Error("Input must include question.");
 }
 
 const agentName = await system.pick_best_agent_for_question(question);
-const agent = agents.find((item) => item.name === agentName);
 
-if (!agent) {
-  throw new Error(\`Agent \${agentName} not found.\`);
-}
-
-const loadBalancer = loadBalancers.find((item) => item.id === agent.loadBalancerId);
-const instance = loadBalancer?.instances?.[0];
-const credential = credentials.find((item) => item.id === instance?.credentialId);
-const key = credential?.keys?.find((item) => item.id === instance?.credentialKeyId) || credential?.keys?.[0];
-const endpoint = String(credential?.endpoint || "").replace(/\\/$/, "");
-const model = String(instance?.model || "").trim();
-
-if (!endpoint || !key?.apiKey || !model) {
-  throw new Error(\`Load balancer for \${agentName} is not ready.\`);
-}
-
-const response = await fetch(\`\${endpoint}/chat/completions\`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: \`Bearer \${key.apiKey}\`
-  },
-  body: JSON.stringify({
-    model,
-    messages: [{ role: "user", content: question }]
-  })
-});
-
-if (!response.ok) {
-  throw new Error(\`Provider request failed: \${response.status}\`);
-}
-
-const json = await response.json();
 return {
   selectedAgent: agentName,
-  answer: json.choices?.[0]?.message?.content ?? ""
+  nextStep: "Ask the selected Agent from chat, where credentials stay in the normal credential flow."
 };`}</pre>
           </div>
         </HelpModal>

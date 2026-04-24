@@ -1,22 +1,21 @@
 import { BuiltInToolConfig } from "../types";
+import { readJsonStorage, writeJsonStorage } from "./safeStorage";
 
 const KEY = "agr_built_in_tools_v1";
 
+function isBuiltInToolArray(value: unknown): value is BuiltInToolConfig[] {
+  return Array.isArray(value);
+}
+
 export function loadBuiltInTools(): BuiltInToolConfig[] {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as BuiltInToolConfig[];
-    return Array.isArray(parsed)
-      ? parsed
-          .filter((item) => item && typeof item.id === "string" && typeof item.name === "string" && typeof item.code === "string")
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-      : [];
-  } catch {
-    return [];
-  }
+  return readJsonStorage(KEY, {
+    defaultValue: [],
+    validate: isBuiltInToolArray
+  })
+    .filter((item) => item && typeof item.id === "string" && typeof item.name === "string" && typeof item.code === "string")
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 export function saveBuiltInTools(tools: BuiltInToolConfig[]) {
-  localStorage.setItem(KEY, JSON.stringify(tools));
+  writeJsonStorage(KEY, tools);
 }

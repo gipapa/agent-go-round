@@ -1,6 +1,5 @@
 import { AgentConfig } from "../types";
-
-const AGENTS_STORAGE_KEY = "agr_agents_v1";
+import { loadAgents } from "../storage/agentStore";
 
 function buildSearchTokens(text: string) {
   const source = (text ?? "").toLowerCase();
@@ -16,14 +15,7 @@ function buildSearchTokens(text: string) {
 }
 
 export function loadSavedAgentsFromStorage() {
-  try {
-    const raw = localStorage.getItem(AGENTS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as AgentConfig[]) : [];
-  } catch {
-    return [];
-  }
+  return loadAgents();
 }
 
 export function pickBestAgentNameForQuestion(question: string, agents: AgentConfig[], fallbackName?: string) {
