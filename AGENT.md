@@ -28,6 +28,7 @@ Landmines that aren't obvious from the code. Skim before any non-trivial change.
 - **`src/app/App.tsx` is ~8990 lines, god component.** ~58 `useState`, modals + orchestrators inlined. Don't add more `useState` — extract a hook/context. BATCH4's new lock / abort refs (`activeChatAbortRef`, `skillExecutionLocksRef`) all live here too. [issue/issue1.md](issue/issue1.md), [issue/BATCH6.md](issue/BATCH6.md).
 - **API keys are still plaintext in `localStorage`.** `credentialVault.ts` exists with full AES-GCM + PBKDF2 + tests, but is **not wired** into App / settingsStore / Credentials Modal. The exfil surface is reduced (script tool helpers no longer expose credentials, key is on its own storage key) but not eliminated. [issue/issue7.md](issue/issue7.md).
 - **Test coverage is still thin at the integration layer.** Infra is in (testing-library / happy-dom / coverage-v8) and 76 unit tests pass, but the 4 high-level scenarios (skill multi-turn / LB failover / radio / tutorial) listed for BATCH6 Phase 6.1 are not yet written. Add them **before** refactoring App.tsx. [issue/issue9.md](issue/issue9.md), [issue/BATCH6.md](issue/BATCH6.md).
+- **MAGI VISUAL BOARD overlaps inside chat bubbles.** `.magi-grid` uses absolute positioning + fixed widths, and the responsive breakpoint is viewport-based (`@media max-width: 880px`) while the panel actually lives in a chat-bubble container that's often ~520px wide on a 1440px desktop. Result: three unit cards / center core / side panels stack on top of each other when MAGI is running. [issue/issue16.md](issue/issue16.md), [issue/BATCH7.md](issue/BATCH7.md).
 
 ### Already hardened (don't redo)
 
@@ -70,6 +71,7 @@ Only the open batches remain. Earlier batches (BATCH1 reliability, BATCH2 type s
 | Batch | Focus | Effort |
 |---|---|---|
 | [BATCH6](issue/BATCH6.md) | high-level integration tests → split `App.tsx` → wire credential vault + master-password UI | 2–4 wk |
+| [BATCH7](issue/BATCH7.md) | fix MAGI VISUAL BOARD layout (CSS grid + container queries) | 0.5–1 d |
 
 Before touching:
 
@@ -78,3 +80,4 @@ Before touching:
 | `App.tsx` | issue 1 |
 | credentials / vault wiring | issue 7 |
 | tests | issue 9 |
+| MAGI panel CSS / `MagiPanel` | issue 16 |
