@@ -25,18 +25,24 @@ cd mcp-test && bash run.sh -simple    # local MCP fixture on :3333
 
 Landmines that aren't obvious from the code. Skim before any non-trivial change.
 
-- **`src/app/App.tsx` is 8800+ lines, god component.** 30+ `useState`, modals + orchestrators inlined. Don't add more `useState` — extract a hook/context. [issue/issue1.md](issue/issue1.md), [issue/BATCH5.md](issue/BATCH5.md).
-- **`utils/runBuiltInScriptTool.ts` runs user JS via `new Function()` with no sandbox / no timeout.** Anything you put in `helpers` becomes part of the untrusted-code surface. [issue/issue10.md](issue/issue10.md).
-- **Adapter layer accepts `signal` + `timeoutMs`, but most callers don't thread it.** Only `oneToOne.ts` actually passes a signal down; MAGI / leaderTeam / multiTurnSkillRuntime / radio / ChatPanel don't, so the user-visible "stop" still fails for those paths. [issue/issue13.md](issue/issue13.md), [issue/BATCH4.md](issue/BATCH4.md).
-- **Skill runtime / MAGI have no wall-clock timeout.** `toolLoopMax` only caps step count. MAGI has no deadlock detection or majority early-exit. [issue/issue13.md](issue/issue13.md), [issue/issue15.md](issue/issue15.md).
-- **`localStorage.setItem` is never wrapped — quota errors silent.** On load, `JSON.parse` failure silently falls back to `[]` (data loss invisible). No schema versioning despite `_v1` suffix. [issue/issue12.md](issue/issue12.md).
-- **API keys are plaintext in `localStorage`.** Combined with the unsandboxed script tool → complete exfil chain. [issue/issue7.md](issue/issue7.md).
-- **Concurrent skills share refs** (`skillTraceRef` etc.) — two skills running at once corrupt each other's trace. (MCP tool list stampede is already deduped via `McpToolCatalog`.) [issue/issue14.md](issue/issue14.md).
-- **Test coverage is still thin.** `app.test.tsx` has 4 known-failing flows pending fixture rewrite (LB/credential seed + Chat-Config card-grid navigation). Fix this before refactoring App.tsx. [issue/issue9.md](issue/issue9.md), [issue/BATCH5.md](issue/BATCH5.md) Phase 4.1.
+- **`src/app/App.tsx` is ~8990 lines, god component.** ~58 `useState`, modals + orchestrators inlined. Don't add more `useState` — extract a hook/context. BATCH4's new lock / abort refs (`activeChatAbortRef`, `skillExecutionLocksRef`) all live here too. [issue/issue1.md](issue/issue1.md), [issue/BATCH6.md](issue/BATCH6.md).
+- **API keys are still plaintext in `localStorage`.** `credentialVault.ts` exists with full AES-GCM + PBKDF2 + tests, but is **not wired** into App / settingsStore / Credentials Modal. The exfil surface is reduced (script tool helpers no longer expose credentials, key is on its own storage key) but not eliminated. [issue/issue7.md](issue/issue7.md).
+- **Test coverage is still thin at the integration layer.** Infra is in (testing-library / happy-dom / coverage-v8) and 76 unit tests pass, but the 4 high-level scenarios (skill multi-turn / LB failover / radio / tutorial) listed for BATCH6 Phase 6.1 are not yet written. Add them **before** refactoring App.tsx. [issue/issue9.md](issue/issue9.md), [issue/BATCH6.md](issue/BATCH6.md).
 
 ### Already hardened (don't redo)
 
-ErrorBoundary at root + key panels, fetch `signal`/`timeoutMs` + `Retry-After`, `extractJsonObject` brace-counting + Zod schemas, ESLint with `no-explicit-any: error`, MCP `clientManager` pool with idle close, `serverResolver` (with `mcp_routing_fallback` log), `McpToolCatalog` in-flight dedup, `mcp-test/server.js` input validation. See git history (`git log --grep batch`) for details.
+ErrorBoundary at root + key panels, fetch `signal`/`timeoutMs` + `Retry-After`, `extractJsonObject` brace-counting + Zod schemas, ESLint with `no-explicit-any: error`, MCP `clientManager` pool with idle close, `serverResolver` (with `mcp_routing_fallback` log), `McpToolCatalog` in-flight dedup, `mcp-test/server.js` input validation.
+
+BATCH4 additions (2026-04):
+- `src/utils/deadline.ts` — `createDeadline` / `combineSignals` / `withTimeout`, threaded through `oneToOne` / `leaderTeam` / `magi` / `multiTurnSkillRuntime`.
+- `src/utils/runBuiltInScriptTool.ts` — Web Worker sandbox + 10s timeout + external abort; `helpers` no longer exposes credentials.
+- `src/orchestrators/magi.ts` — majority early-exit, round / unit timeout, deadlock detection.
+- `src/storage/safeStorage.ts` + versioned envelope + corrupt-payload backup; IndexedDB errors wrapped in real `Error` objects. All stores migrated.
+- `src/storage/credentialVault.ts` — Web Crypto AES-GCM + PBKDF2 (210k iters). **Not yet wired**, see issue 7.
+- Chat stop button + `skillExecutionLocksRef` (skill execution lock) + tutorial restore lock. Refs still inside `App.tsx`.
+- Testing infra: `@testing-library/*`, `happy-dom`, `coverage-v8`, `setup.ts`. 17 files / 76 tests, all green.
+
+See git history (`git log --grep batch`) for details.
 
 ## Conventions
 
@@ -54,25 +60,21 @@ ErrorBoundary at root + key panels, fetch `signal`/`timeoutMs` + `Retry-After`, 
 - `base: "/agent-go-round/"` in build → GitHub Pages path. Override via `BASE_PATH`.
 - `run.sh -dev` does `fuser -k 5566/tcp` deliberately.
 - MAGI prompts are not user-editable by design.
-- Many panels live inline in `App.tsx` — extraction is scheduled in BATCH5, not a bug.
+- Many panels live inline in `App.tsx` — extraction is scheduled in BATCH6, not a bug.
 - McpPanel test-connection bypasses the client pool — it's an instant health check.
 
 ## Refactor backlog
 
-Only the open batches remain. Earlier batches (BATCH1 reliability, BATCH2 type safety, BATCH3 MCP layer) have been delivered and removed from this folder; check git history if you need their context.
+Only the open batches remain. Earlier batches (BATCH1 reliability, BATCH2 type safety, BATCH3 MCP layer, BATCH4 deadline / abort / sandbox / storage envelope / credential vault code) have been delivered and removed from this folder; check git history if you need their context. BATCH5 was retired — its scope (testing infra, storage hardening, execution lock, vault code) was absorbed into BATCH4.
 
 | Batch | Focus | Effort |
 |---|---|---|
-| [BATCH4](issue/BATCH4.md) | deadline / abort wiring / sandbox / MAGI deadlock | 3–5 d |
-| [BATCH5](issue/BATCH5.md) | tests → split App.tsx → storage hardening → credential vault | 2–4 wk |
+| [BATCH6](issue/BATCH6.md) | high-level integration tests → split `App.tsx` → wire credential vault + master-password UI | 2–4 wk |
 
 Before touching:
 
 | Touching... | Read first |
 |---|---|
-| `App.tsx` | issue 1, 14 |
-| `runBuiltInScriptTool` / helpers | issue 10 |
-| any adapter / `fetch` cancellation chain | issue 13 |
-| storage / credentials | issue 12, 7 |
-| MAGI | issue 15 |
+| `App.tsx` | issue 1 |
+| credentials / vault wiring | issue 7 |
 | tests | issue 9 |
