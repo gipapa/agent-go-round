@@ -1,20 +1,20 @@
 # Batch 6 — App.tsx 拆解 + Credential Vault 收尾 + 測試護欄（2-4 週）
 
-## 包含 Issues
-- **Issue 9** — High-level integration test 補齊 + coverage gate
+## 包含工作項
+- High-level integration test 補齊 + coverage gate
 - **Issue 1** — `App.tsx` 8990 行拆解
-- **Issue 7** — Credential Vault wiring + 主密碼 UI + migration
+- Credential Vault wiring + 主密碼 UI + migration
 
 ## 為何整合
 這三個是 BATCH5 跑完後**唯一還沒收斂的結構性問題**。BATCH4 已經把 deadline / abort / lock / sandbox / storage envelope / credential vault **程式碼**全寫完了，但：
 
-1. **vault 沒 wire 進 App** → `localStorage` 仍明文（issue 7）
+1. **vault 沒 wire 進 App** → `localStorage` 仍明文
 2. **App.tsx 反而從 8800 漲到 8990 行**（lock / abort 都堆在裡面，issue 1）
-3. **integration test 只有原本 4 條 chat 修綠，新情境沒補**（issue 9）
+3. **integration test 只有原本 4 條 chat 修綠，新情境沒補**
 
 三者必須整合：
-- 拆 App.tsx 必須先有 integration test 護欄（**issue 9 是 issue 1 的硬前置**）
-- 拆 `AgentContext` 時自然要把 vault 解鎖狀態收進去（issue 7 + issue 1 共用 storage 邊界）
+- 拆 App.tsx 必須先有 integration test 護欄
+- 拆 `AgentContext` 時自然要把 vault 解鎖狀態收進去
 - 拆完 hook 後 lock / abort ref 才能從 App.tsx 搬出來
 
 ## 工作量
@@ -32,7 +32,7 @@
 
 ## 執行順序
 
-### Phase 6.1 — 補 high-level integration test（Issue 9，3-5 天）
+### Phase 6.1 — 補 high-level integration test（3-5 天）
 模式直接抄目前 `app.test.tsx` 已修綠的 4 個 chat 測試。
 - skill 多輪執行 happy path
 - load balancer failover（mock 第一個 instance fetch fail → 應切下一個）
@@ -64,7 +64,7 @@
 
 每抽完一塊 → Phase 6.1 的 integration test 必須全綠才能 merge。
 
-### Phase 6.3 — Credential Vault Wiring（Issue 7，3-5 天，與 Phase 6.2.3 `AgentContext` 同步）
+### Phase 6.3 — Credential Vault Wiring（3-5 天，與 Phase 6.2.3 `AgentContext` 同步）
 1. **Credentials Modal 加警示 banner**（半天獨立 PR）
 2. **主密碼解鎖 / 設定 UI**
    - 啟動偵測 `agr_credential_vault_v1`
@@ -73,7 +73,7 @@
 4. **「鎖定」按鈕** + **「session-only」模式**
 5. **Migration**：舊 `agr_model_credentials_v1` 明文 → 加密遷移 → 清舊 key
 
-### Phase 6.4 — 收尾測試 coverage（Issue 9 收尾）
+### Phase 6.4 — 收尾測試 coverage
 - 為每個新拆 hook / context 補 unit test
 - skill execution lock 並發測試
 - vault unlock / 主密碼錯誤 / migration 測試

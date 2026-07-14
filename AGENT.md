@@ -26,8 +26,8 @@ cd mcp-test && bash run.sh -simple    # local MCP fixture on :3333
 Landmines that aren't obvious from the code. Skim before any non-trivial change.
 
 - **`src/app/App.tsx` is ~8990 lines, god component.** ~58 `useState`, modals + orchestrators inlined. Don't add more `useState` — extract a hook/context. BATCH4's new lock / abort refs (`activeChatAbortRef`, `skillExecutionLocksRef`) all live here too. [issue/issue1.md](issue/issue1.md), [issue/BATCH6.md](issue/BATCH6.md).
-- **API keys are still plaintext in `localStorage`.** `credentialVault.ts` exists with full AES-GCM + PBKDF2 + tests, but is **not wired** into App / settingsStore / Credentials Modal. The exfil surface is reduced (script tool helpers no longer expose credentials, key is on its own storage key) but not eliminated. [issue/issue7.md](issue/issue7.md).
-- **Test coverage is still thin at the integration layer.** Infra is in (testing-library / happy-dom / coverage-v8) and 76 unit tests pass, but the 4 high-level scenarios (skill multi-turn / LB failover / radio / tutorial) listed for BATCH6 Phase 6.1 are not yet written. Add them **before** refactoring App.tsx. [issue/issue9.md](issue/issue9.md), [issue/BATCH6.md](issue/BATCH6.md).
+- **API keys are still plaintext in `localStorage`.** `credentialVault.ts` exists with full AES-GCM + PBKDF2 + tests, but is **not wired** into App / settingsStore / Credentials Modal. The exfil surface is reduced (script tool helpers no longer expose credentials, key is on its own storage key) but not eliminated. See [issue/BATCH6.md](issue/BATCH6.md).
+- **Test coverage is still thin at the integration layer.** Infra is in (testing-library / happy-dom / coverage-v8) and 76 unit tests pass, but the 4 high-level scenarios (skill multi-turn / LB failover / radio / tutorial) listed for BATCH6 Phase 6.1 are not yet written. Add them **before** refactoring App.tsx. See [issue/BATCH6.md](issue/BATCH6.md).
 - **MAGI VISUAL BOARD overlaps inside chat bubbles.** `.magi-grid` uses absolute positioning + fixed widths, and the responsive breakpoint is viewport-based (`@media max-width: 880px`) while the panel actually lives in a chat-bubble container that's often ~520px wide on a 1440px desktop. Result: three unit cards / center core / side panels stack on top of each other when MAGI is running. [issue/issue16.md](issue/issue16.md), [issue/BATCH7.md](issue/BATCH7.md).
 
 ### Already hardened (don't redo)
@@ -39,7 +39,7 @@ BATCH4 additions (2026-04):
 - `src/utils/runBuiltInScriptTool.ts` — Web Worker sandbox + 10s timeout + external abort; `helpers` no longer exposes credentials.
 - `src/orchestrators/magi.ts` — majority early-exit, round / unit timeout, deadlock detection.
 - `src/storage/safeStorage.ts` + versioned envelope + corrupt-payload backup; IndexedDB errors wrapped in real `Error` objects. All stores migrated.
-- `src/storage/credentialVault.ts` — Web Crypto AES-GCM + PBKDF2 (210k iters). **Not yet wired**, see issue 7.
+- `src/storage/credentialVault.ts` — Web Crypto AES-GCM + PBKDF2 (210k iters). **Not yet wired**, see BATCH6.
 - Chat stop button + `skillExecutionLocksRef` (skill execution lock) + tutorial restore lock. Refs still inside `App.tsx`.
 - Testing infra: `@testing-library/*`, `happy-dom`, `coverage-v8`, `setup.ts`. 17 files / 76 tests, all green.
 
