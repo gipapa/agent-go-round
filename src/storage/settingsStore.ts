@@ -1,4 +1,4 @@
-import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, RadioSettings, SkillExecutionMode } from "../types";
+import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, VoiceSettings, SkillExecutionMode } from "../types";
 import { readJsonStorage, writeJsonStorage } from "./safeStorage";
 
 export type UiState = {
@@ -19,7 +19,9 @@ export type UiState = {
   userName?: string;
   userAvatarUrl?: string;
   userDescription?: string;
-  radioSettings?: RadioSettings;
+  voiceSettings?: VoiceSettings;
+  // Legacy voice settings kept for migration from the old walkie-talkie mode.
+  radioSettings?: Partial<VoiceSettings> & Record<string, unknown>;
 };
 
 const UI_KEY = "agr_ui_v1";

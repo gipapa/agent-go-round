@@ -8,7 +8,7 @@ Critical（仍未處理）
 
 > 現存 ref / state 範例（`src/app/App.tsx`）：
 > - `activeChatAbortRef`、`skillExecutionLocksRef`（BATCH4 新增的 lock / abort）
-> - 30+ 個 `useState` 涵蓋 agents / skills / docs / credentials / MCP / load balancers / radio / tutorial / logs / 各種 modal 開關
+> - 30+ 個 `useState` 涵蓋 agents / skills / docs / credentials / MCP / load balancers / voice / tutorial / logs / 各種 modal 開關
 > - `sendOneToOneTurn()` / `executeMultiTurnSkill()` / `runOneToOneWithLoadBalancer()` 仍然 inline
 
 `src/orchestrators/` 雖然存在 `oneToOne.ts` / `magi.ts` / `leaderTeam.ts`，但 App.tsx 內仍有自己的 wrapper 版本與 React state 牽動。
@@ -29,10 +29,10 @@ Critical（仍未處理）
 - `McpContext`（吃既有 `clientManager` / `serverResolver` / `McpToolCatalog`）
 - `SkillContext`（skills / built-in tools）
 - `TutorialContext`（吸收 15+ tutorial ref）
-- `RadioContext`（吸收 4 個 radio ref）
+- `VoiceContext`（吸收 STT/TTS refs）
 
 ### Phase C — Custom hooks（封裝業務邏輯）
-- `useOneToOne()`、`useSkillExecution()`、`useTutorial()`、`useRadioSession()`、`useLoadBalancerPlan()`
+- `useOneToOne()`、`useSkillExecution()`、`useTutorial()`、`useVoice()`、`useLoadBalancerPlan()`
 - `useSkillExecution` 內把現存的 `skillExecutionLocksRef` 收進來，順便把 `skillTraceRef` 改 per-execution local
 - 各 hook 直接用 BATCH4 的 `createDeadline` / `combineSignals`
 

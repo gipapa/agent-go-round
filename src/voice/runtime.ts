@@ -1,7 +1,7 @@
 import type { ModelCredentialEntry } from "../storage/settingsStore";
-import type { RadioSettings } from "../types";
+import type { VoiceSettings } from "../types";
 
-export const RADIO_STT_LANGUAGE_OPTIONS = [
+export const VOICE_STT_LANGUAGE_OPTIONS = [
   { value: "", label: "Auto" },
   { value: "zh", label: "Chinese (zh)" },
   { value: "en", label: "English (en)" },
@@ -22,7 +22,7 @@ export const RADIO_STT_LANGUAGE_OPTIONS = [
   { value: "vi", label: "Vietnamese (vi)" }
 ] as const;
 
-export const RADIO_TTS_VOICE_OPTIONS = [
+export const VOICE_TTS_VOICE_OPTIONS = [
   "Kore",
   "Aoede",
   "Charon",
@@ -55,28 +55,13 @@ export const RADIO_TTS_VOICE_OPTIONS = [
   "Sulafat"
 ] as const;
 
-export const DEFAULT_RADIO_STT_PROMPT = "";
+export const DEFAULT_VOICE_STT_PROMPT = "";
 
-export const DEFAULT_RADIO_REFINE_PROMPT = [
-  "You clean up a speech-to-text draft before it is sent to another assistant.",
-  "Return only the cleaned transcript.",
-  "Do not answer the user's request.",
-  "Do not continue the conversation.",
-  "Do not add facts, jokes, examples, or explanations.",
-  "Keep the original meaning and language.",
-  "Fix obvious STT noise, repetition, punctuation, and awkward line breaks.",
-  "If the draft is already understandable, make only minimal edits.",
-  "Return plain text only."
-].join("\n");
-
-export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
+export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   sttLoadBalancerId: "",
   sttLanguage: "",
   sttTemperature: 0,
-  sttPrompt: DEFAULT_RADIO_STT_PROMPT,
-  chunkSeconds: 60,
-  refinePrompt: DEFAULT_RADIO_REFINE_PROMPT,
-  refineAgentId: "",
+  sttPrompt: DEFAULT_VOICE_STT_PROMPT,
   ttsLoadBalancerId: "",
   ttsVoice: "Kore"
 };
@@ -108,7 +93,7 @@ function base64ToBlob(base64: string, mimeType: string) {
   return new Blob([bytes], { type: mimeType });
 }
 
-function resolveRequiredRadioModel(modelOverride: string | undefined, purpose: "STT" | "TTS") {
+function resolveRequiredVoiceModel(modelOverride: string | undefined, purpose: "STT" | "TTS") {
   const model = String(modelOverride ?? "").trim();
   if (!model) {
     throw new Error(`${purpose} load balancer instance has no model configured.`);
@@ -126,8 +111,8 @@ function getGeminiParts(candidate: unknown): unknown[] {
   return Array.isArray(parts) ? parts : [];
 }
 
-export function normalizeRadioSettings(input?: Partial<RadioSettings> | null): RadioSettings {
-  const legacyInput = input as Partial<RadioSettings> & {
+export function normalizeVoiceSettings(input?: Partial<VoiceSettings> | null): VoiceSettings {
+  const legacyInput = input as Partial<VoiceSettings> & {
     sttCredentialId?: string;
     ttsCredentialId?: string;
   };
@@ -137,16 +122,10 @@ export function normalizeRadioSettings(input?: Partial<RadioSettings> | null): R
     sttTemperature:
       typeof input?.sttTemperature === "number" && Number.isFinite(input.sttTemperature)
         ? Math.max(0, Math.min(1, input.sttTemperature))
-        : DEFAULT_RADIO_SETTINGS.sttTemperature,
-    sttPrompt: String(input?.sttPrompt ?? DEFAULT_RADIO_SETTINGS.sttPrompt).trim(),
-    chunkSeconds:
-      typeof input?.chunkSeconds === "number" && Number.isFinite(input.chunkSeconds)
-        ? Math.max(2, Math.min(300, Math.round(input.chunkSeconds)))
-        : DEFAULT_RADIO_SETTINGS.chunkSeconds,
-    refinePrompt: String(input?.refinePrompt ?? DEFAULT_RADIO_SETTINGS.refinePrompt).trim() || DEFAULT_RADIO_SETTINGS.refinePrompt,
-    refineAgentId: String(input?.refineAgentId ?? "").trim(),
+        : DEFAULT_VOICE_SETTINGS.sttTemperature,
+    sttPrompt: String(input?.sttPrompt ?? DEFAULT_VOICE_SETTINGS.sttPrompt).trim(),
     ttsLoadBalancerId: String(input?.ttsLoadBalancerId ?? legacyInput?.ttsCredentialId ?? "").trim(),
-    ttsVoice: String(input?.ttsVoice ?? DEFAULT_RADIO_SETTINGS.ttsVoice).trim() || DEFAULT_RADIO_SETTINGS.ttsVoice
+    ttsVoice: String(input?.ttsVoice ?? DEFAULT_VOICE_SETTINGS.ttsVoice).trim() || DEFAULT_VOICE_SETTINGS.ttsVoice
   };
 }
 
@@ -167,7 +146,7 @@ export function joinOrderedTranscriptChunks(chunks: Map<number, string>) {
 export async function transcribeAudioChunk(args: {
   credential: ModelCredentialEntry;
   apiKey: string;
-  settings: RadioSettings;
+  settings: VoiceSettings;
   blob: Blob;
   chunkIndex: number;
   modelOverride?: string;
@@ -176,10 +155,10 @@ export async function transcribeAudioChunk(args: {
   const endpoint = String(args.credential.endpoint || "").replace(/\/+$/, "");
   if (!endpoint) throw new Error("STT credential endpoint is missing.");
   if (!args.apiKey.trim()) throw new Error("STT API key is missing.");
-  const model = resolveRequiredRadioModel(args.modelOverride, "STT");
+  const model = resolveRequiredVoiceModel(args.modelOverride, "STT");
 
   const form = new FormData();
-  const fileName = `radio-${args.chunkIndex}.${args.blob.type.includes("ogg") ? "ogg" : "webm"}`;
+  const fileName = `voice-${args.chunkIndex}.${args.blob.type.includes("ogg") ? "ogg" : "webm"}`;
   form.append("file", new File([args.blob], fileName, { type: args.blob.type || "audio/webm" }));
   form.append("model", model);
   form.append("response_format", "json");
@@ -242,7 +221,7 @@ export function pcmBase64ToWavBlob(base64: string, sampleRate = 24000) {
 export async function synthesizeGeminiSpeech(args: {
   credential: ModelCredentialEntry;
   apiKey: string;
-  settings: RadioSettings;
+  settings: VoiceSettings;
   text: string;
   modelOverride?: string;
 }): Promise<Blob> {
@@ -250,7 +229,7 @@ export async function synthesizeGeminiSpeech(args: {
   if (!endpoint) throw new Error("TTS credential endpoint is missing.");
   if (!args.apiKey.trim()) throw new Error("TTS API key is missing.");
 
-  const model = resolveRequiredRadioModel(args.modelOverride, "TTS");
+  const model = resolveRequiredVoiceModel(args.modelOverride, "TTS");
   const response = await fetch(`${endpoint}/models/${model}:generateContent`, {
     method: "POST",
     headers: {

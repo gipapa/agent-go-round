@@ -11,8 +11,7 @@ import {
   MagiRenderState,
   MagiUnitId,
   OrchestratorMode,
-  RadioSessionState,
-  RadioSettings,
+  VoiceSettings,
   SkillExecutionMode,
   SkillStepDecision,
   SkillCompletionDecision,
@@ -86,7 +85,7 @@ import SkillsPanel from "../ui/SkillsPanel";
 import TutorialGuide from "../ui/TutorialGuide";
 import LoadBalancersPanel from "../ui/LoadBalancersPanel";
 import PromptTemplatesPanel from "../ui/PromptTemplatesPanel";
-import RadioConfigPanel, { type RadioProbeState } from "../ui/RadioConfigPanel";
+import VoiceConfigPanel, { type VoiceProbeState } from "../ui/VoiceConfigPanel";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   applyTutorialStepEntry,
@@ -177,29 +176,16 @@ import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 import type { ExecutionDeadline } from "../utils/deadline";
 import { combineSignals, createDeadline } from "../utils/deadline";
 import {
-  DEFAULT_RADIO_REFINE_PROMPT,
-  joinOrderedTranscriptChunks,
-  normalizeRadioSettings,
+  normalizeTranscriptSpacing,
+  normalizeVoiceSettings,
   synthesizeGeminiSpeech,
   transcribeAudioChunk
-} from "../radio/runtime";
+} from "../voice/runtime";
 import {
-  buildLocalRadioRefineFallback,
-  buildRadioAgentSystemPrompt,
-  buildRadioTtsFallbackSystemPrompt,
-  createRadioProbeWavBlob,
-  getDefaultRadioSessionState,
-  getRadioMicrophoneSupportIssue,
-  isRadioTtsEmptyAudioError,
-  isRadioTtsQuotaExhaustedError,
-  MIN_RADIO_STT_BLOB_BYTES,
-  normalizeRadioAssistantText,
-  playRadioSystemTone,
-  RADIO_MIN_SPEECH_MS,
-  RADIO_SILENCE_FINALIZE_MS,
-  RADIO_VAD_RMS_THRESHOLD,
-  shouldRejectRadioRefine
-} from "../radio/helpers";
+  createVoiceProbeWavBlob,
+  getVoiceMicrophoneSupportIssue,
+  MIN_VOICE_STT_BLOB_BYTES
+} from "../voice/helpers";
 import {
   applyInstanceFailure,
   applyInstanceSuccess,
@@ -485,7 +471,6 @@ const MAGI_MODE_LABELS: Record<MagiMode, string> = {
   magi_vote: "S.C. Magi System (基本版: 三賢人同時表決)",
   magi_consensus: "S.C. Magi System (進階版: 三賢人共識)"
 };
-const RADIO_MODE_LABEL = "Radio / Walkie-Talkie";
 
 const MAGI_RESERVED_PREFIX = "[系統保留]";
 const TUTORIAL_LOAD_BALANCER_NAMES = new Set([TUTORIAL_PRIMARY_LOAD_BALANCER_NAME, TUTORIAL_SECONDARY_LOAD_BALANCER_NAME]);
@@ -596,14 +581,6 @@ function mergeSystemText(...parts: Array<string | undefined>) {
     .map((part) => String(part ?? "").trim())
     .filter(Boolean)
     .join("\n\n");
-}
-
-function formatRadioAssistantResponse(raw: string): AssistantResponseFormatResult {
-  const trimmed = normalizeRadioAssistantText(raw);
-  return {
-    displayContent: trimmed,
-    spokenContent: trimmed
-  };
 }
 
 function getThinkStreamingState(buffer: string) {
@@ -2024,7 +2001,7 @@ export default function App() {
   const [mode, setMode] = useState<OrchestratorMode>(() => {
     const storedMode = initialUi.mode;
     if (storedMode === "leader_team") return "magi_vote";
-    if (storedMode === "magi_vote" || storedMode === "magi_consensus" || storedMode === "one_to_one" || storedMode === "radio") return storedMode;
+    if (storedMode === "magi_vote" || storedMode === "magi_consensus" || storedMode === "one_to_one") return storedMode;
     return "one_to_one";
   });
   const [skillExecutionMode, setSkillExecutionMode] = useState<SkillExecutionMode>(() =>
@@ -2042,20 +2019,17 @@ export default function App() {
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
-  const [radioSettings, setRadioSettings] = useState<RadioSettings>(() => normalizeRadioSettings(initialUi.radioSettings));
-  const [radioSessionState, setRadioSessionState] = useState<RadioSessionState>(() => getDefaultRadioSessionState());
-  const [radioProbeState, setRadioProbeState] = useState<{ stt: RadioProbeState; tts: RadioProbeState }>({
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(() => normalizeVoiceSettings(initialUi.voiceSettings ?? initialUi.radioSettings));
+  const [voiceDictationStatus, setVoiceDictationStatus] = useState<"idle" | "recording" | "transcribing">("idle");
+  const [voicePlaybackMessageId, setVoicePlaybackMessageId] = useState<string | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceProbeState, setVoiceProbeState] = useState<{ stt: VoiceProbeState; tts: VoiceProbeState }>({
     stt: { running: false },
     tts: { running: false }
   });
-  const radioRefineAgentOptions = useMemo(() => agents.filter((agent) => !isManagedMagiAgent(agent)), [agents]);
-  const selectedRadioRefineAgent = useMemo(
-    () => radioRefineAgentOptions.find((agent) => agent.id === radioSettings.refineAgentId) ?? null,
-    [radioRefineAgentOptions, radioSettings.refineAgentId]
-  );
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
-  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | "radio" | null;
+  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | "voice" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
   const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
@@ -2156,23 +2130,11 @@ export default function App() {
   const activeChatAbortRef = React.useRef<AbortController | null>(null);
   const skillExecutionLocksRef = React.useRef<Map<string, AbortController>>(new Map());
   const tutorialRestoringRef = React.useRef(false);
-  const radioSessionIdRef = React.useRef<string | null>(null);
-  const radioMediaStreamRef = React.useRef<MediaStream | null>(null);
-  const radioRecorderRef = React.useRef<MediaRecorder | null>(null);
-  const radioChunkTimerRef = React.useRef<number | null>(null);
-  const radioAudioContextRef = React.useRef<AudioContext | null>(null);
-  const radioAnalyserRef = React.useRef<AnalyserNode | null>(null);
-  const radioSourceNodeRef = React.useRef<MediaStreamAudioSourceNode | null>(null);
-  const radioVadFrameRef = React.useRef<number | null>(null);
-  const radioSpeechStartedAtRef = React.useRef<number | null>(null);
-  const radioLastVoiceAtRef = React.useRef<number | null>(null);
-  const radioAudioRef = React.useRef<HTMLAudioElement | null>(null);
-  const radioChunkTextsRef = React.useRef<Map<number, string>>(new Map());
-  const radioNextChunkIndexRef = React.useRef(0);
-  const radioPendingTranscriptionsRef = React.useRef(0);
-  const radioPendingFinalizeRef = React.useRef(false);
-  const radioRecorderStoppedRef = React.useRef(false);
-  const radioFinalizeInFlightRef = React.useRef(false);
+  const voiceMediaStreamRef = React.useRef<MediaStream | null>(null);
+  const voiceRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const voiceRecordedChunksRef = React.useRef<Blob[]>([]);
+  const voiceAudioRef = React.useRef<HTMLAudioElement | null>(null);
+  const voiceAudioUrlRef = React.useRef<string | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
       scenarioId: tutorialScenario?.id,
@@ -2409,9 +2371,9 @@ export default function App() {
       userName,
       userAvatarUrl,
       userDescription,
-      radioSettings
+      voiceSettings
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, executionDeadlineMs, historyMessageLimit, userName, userAvatarUrl, userDescription, radioSettings]);
+  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, executionDeadlineMs, historyMessageLimit, userName, userAvatarUrl, userDescription, voiceSettings]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -2454,18 +2416,10 @@ export default function App() {
 
   React.useEffect(() => {
     return () => {
-      radioSessionIdRef.current = null;
-      stopRadioAudioPlayback();
-      stopRadioCapture();
-      resetRadioTurnBuffers();
+      stopVoicePlayback();
+      stopVoiceCapture();
     };
   }, []);
-
-  React.useEffect(() => {
-    if (mode === "radio") return;
-    if (radioSessionState.status === "idle") return;
-    stopRadioSession();
-  }, [mode]);
 
   React.useEffect(() => {
     if (!historyLoaded) return;
@@ -2750,13 +2704,13 @@ export default function App() {
     () => loadBalancerSlots.filter((entry) => entry.instances.length > 0).length,
     [loadBalancerSlots]
   );
-  const radioSttLoadBalancer = useMemo(
-    () => loadBalancerSlots.find((entry) => entry.id === radioSettings.sttLoadBalancerId) ?? null,
-    [loadBalancerSlots, radioSettings.sttLoadBalancerId]
+  const voiceSttLoadBalancer = useMemo(
+    () => loadBalancerSlots.find((entry) => entry.id === voiceSettings.sttLoadBalancerId) ?? null,
+    [loadBalancerSlots, voiceSettings.sttLoadBalancerId]
   );
-  const radioTtsLoadBalancer = useMemo(
-    () => loadBalancerSlots.find((entry) => entry.id === radioSettings.ttsLoadBalancerId) ?? null,
-    [loadBalancerSlots, radioSettings.ttsLoadBalancerId]
+  const voiceTtsLoadBalancer = useMemo(
+    () => loadBalancerSlots.find((entry) => entry.id === voiceSettings.ttsLoadBalancerId) ?? null,
+    [loadBalancerSlots, voiceSettings.ttsLoadBalancerId]
   );
 
   function resolveLoadBalancerPlanForAgent(agent: AgentConfig, now?: number) {
@@ -2814,7 +2768,7 @@ export default function App() {
   const magiReadyCount = useMemo(() => magiSetup.filter((entry) => entry.ready).length, [magiSetup]);
 
   React.useEffect(() => {
-    setRadioSettings((prev) => {
+    setVoiceSettings((prev) => {
       let changed = false;
       const next = { ...prev };
       if (next.sttLoadBalancerId && !loadBalancerSlots.some((entry) => entry.id === next.sttLoadBalancerId)) {
@@ -2833,17 +2787,9 @@ export default function App() {
         next.ttsLoadBalancerId = loadBalancerSlots[0].id;
         changed = true;
       }
-      return changed ? normalizeRadioSettings(next) : prev;
+      return changed ? normalizeVoiceSettings(next) : prev;
     });
   }, [loadBalancerSlots]);
-
-  React.useEffect(() => {
-    setRadioSettings((prev) => {
-      if (!prev.refineAgentId) return prev;
-      if (radioRefineAgentOptions.some((agent) => agent.id === prev.refineAgentId)) return prev;
-      return normalizeRadioSettings({ ...prev, refineAgentId: "" });
-    });
-  }, [radioRefineAgentOptions]);
 
   function buildMagiUnitSystem(unitId: MagiUnitId, agent: AgentConfig, question: string) {
     const bundle = getMagiSkillBundle(unitId);
@@ -3178,17 +3124,17 @@ export default function App() {
     });
   }
 
-  async function runRadioTaskWithLoadBalancer<T>(args: {
+  async function runVoiceTaskWithLoadBalancer<T>(args: {
     loadBalancerId?: string;
     requestId?: string;
     stage: string;
-    radioModel: string;
+    voiceModel: string;
     execute: (candidate: ResolvedLoadBalancerInstance) => Promise<T>;
     describeSuccess?: (result: T) => string;
   }) {
-    const agentName = activeAgent?.name ?? "Radio";
+    const agentName = activeAgent?.name ?? "Voice";
     const logicalAgent: AgentConfig = {
-      id: `radio-${args.stage}`,
+      id: `voice-${args.stage}`,
       name: agentName,
       type: "openai_compat",
       loadBalancerId: args.loadBalancerId
@@ -3220,7 +3166,7 @@ export default function App() {
         requestId: args.requestId,
         stage: args.stage,
         message: `LB selected [${args.stage}]`,
-        details: [describeResolvedLoadBalancerCandidate(candidate), `radio_model=${args.radioModel}`].join("\n\n")
+        details: [describeResolvedLoadBalancerCandidate(candidate), `voice_model=${args.voiceModel}`].join("\n\n")
       });
       try {
         const result = await args.execute(candidate);
@@ -3240,7 +3186,7 @@ export default function App() {
           message: `LB success [${args.stage}]`,
           details: [
             describeResolvedLoadBalancerCandidate(candidate),
-            `radio_model=${args.radioModel}`,
+            `voice_model=${args.voiceModel}`,
             args.describeSuccess ? args.describeSuccess(result) : ""
           ]
             .filter(Boolean)
@@ -3272,7 +3218,7 @@ export default function App() {
             message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${args.stage}]`,
             details: [
               describeResolvedLoadBalancerCandidate(candidate),
-              `radio_model=${args.radioModel}`,
+              `voice_model=${args.voiceModel}`,
               `error=${errorText}`,
               `marked_failure=${failure.markFailure}`,
               nextCandidate ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}` : "next_candidate: none"
@@ -3287,7 +3233,7 @@ export default function App() {
           requestId: args.requestId,
           stage: args.stage,
           message: `LB terminal error [${args.stage}]`,
-          details: [describeResolvedLoadBalancerCandidate(candidate), `radio_model=${args.radioModel}`, `error=${errorText}`].join("\n\n")
+          details: [describeResolvedLoadBalancerCandidate(candidate), `voice_model=${args.voiceModel}`, `error=${errorText}`].join("\n\n")
         });
         throw error;
       }
@@ -3302,7 +3248,7 @@ export default function App() {
       message: `LB final failure [${args.stage}]`,
       details: lastFailureDetails
     });
-    throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unknown radio load balancer failure."));
+    throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unknown voice load balancer failure."));
   }
 
   async function runOneToOneWithLoadBalancer(args: {
@@ -5881,7 +5827,7 @@ export default function App() {
     requestId?: string;
     startedAt?: number;
     extraSystem?: string;
-    modeForLog?: "one_to_one" | "radio";
+    modeForLog?: "one_to_one";
     responseFormatter?: (raw: string) => AssistantResponseFormatResult;
     statusText?: {
       preparing?: string;
@@ -5895,7 +5841,7 @@ export default function App() {
     }
 
     const startedAt = args.startedAt ?? Date.now();
-    const requestId = args.requestId ?? createLogRequestId(args.modeForLog === "radio" ? "radio" : "chat");
+    const requestId = args.requestId ?? createLogRequestId("chat");
     const input = args.displayInput;
     const modelInput = args.modelInput ?? args.displayInput;
     const logMode = args.modeForLog ?? "one_to_one";
@@ -6293,82 +6239,23 @@ export default function App() {
     return target?.apiKey.trim() ?? "";
   }
 
-  function resetRadioTurnBuffers() {
-    radioChunkTextsRef.current = new Map();
-    radioNextChunkIndexRef.current = 0;
-    radioPendingTranscriptionsRef.current = 0;
-    radioPendingFinalizeRef.current = false;
-    radioRecorderStoppedRef.current = false;
-    radioFinalizeInFlightRef.current = false;
-    radioSpeechStartedAtRef.current = null;
-    radioLastVoiceAtRef.current = null;
+  function stopVoicePlayback() {
+    const audio = voiceAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.src = "";
+    }
+    voiceAudioRef.current = null;
+    if (voiceAudioUrlRef.current) {
+      URL.revokeObjectURL(voiceAudioUrlRef.current);
+      voiceAudioUrlRef.current = null;
+    }
+    setVoicePlaybackMessageId(null);
   }
 
-  function computeRadioContiguousChunkIndex() {
-    const orderedIndexes = Array.from(radioChunkTextsRef.current.keys()).sort((left, right) => left - right);
-    let expected = 0;
-    for (const index of orderedIndexes) {
-      if (index !== expected) break;
-      expected += 1;
-    }
-    return expected - 1;
-  }
-
-  function syncRadioDraftState(patch?: Partial<RadioSessionState>) {
-    const raw = joinOrderedTranscriptChunks(radioChunkTextsRef.current);
-    setRadioSessionState((prev) => ({
-      ...prev,
-      draftTranscriptRaw: raw,
-      currentChunkIndex: radioNextChunkIndexRef.current,
-      lastProcessedChunkIndex: computeRadioContiguousChunkIndex(),
-      ...patch
-    }));
-  }
-
-  function stopRadioAudioPlayback() {
-    const audio = radioAudioRef.current;
-    if (!audio) return;
-    audio.pause();
-    audio.src = "";
-    radioAudioRef.current = null;
-  }
-
-  function clearRadioChunkTimer() {
-    if (radioChunkTimerRef.current !== null) {
-      window.clearTimeout(radioChunkTimerRef.current);
-      radioChunkTimerRef.current = null;
-    }
-  }
-
-  function stopRadioSpeechMonitor() {
-    if (radioVadFrameRef.current !== null) {
-      window.cancelAnimationFrame(radioVadFrameRef.current);
-      radioVadFrameRef.current = null;
-    }
-    try {
-      radioSourceNodeRef.current?.disconnect();
-    } catch {
-      // Ignore audio node cleanup failures.
-    }
-    try {
-      radioAnalyserRef.current?.disconnect();
-    } catch {
-      // Ignore analyser cleanup failures.
-    }
-    radioSourceNodeRef.current = null;
-    radioAnalyserRef.current = null;
-    const context = radioAudioContextRef.current;
-    radioAudioContextRef.current = null;
-    if (context) {
-      void context.close().catch(() => undefined);
-    }
-  }
-
-  function stopRadioCapture() {
-    stopRadioSpeechMonitor();
-    clearRadioChunkTimer();
-    const recorder = radioRecorderRef.current;
-    radioRecorderRef.current = null;
+  function stopVoiceCapture() {
+    const recorder = voiceRecorderRef.current;
+    voiceRecorderRef.current = null;
     if (recorder && recorder.state !== "inactive") {
       try {
         recorder.stop();
@@ -6377,8 +6264,8 @@ export default function App() {
       }
     }
 
-    const stream = radioMediaStreamRef.current;
-    radioMediaStreamRef.current = null;
+    const stream = voiceMediaStreamRef.current;
+    voiceMediaStreamRef.current = null;
     if (stream) {
       for (const track of stream.getTracks()) {
         track.stop();
@@ -6386,763 +6273,203 @@ export default function App() {
     }
   }
 
-  function stopRadioSession(options?: { status?: RadioSessionState["status"]; lastError?: string }) {
-    radioSessionIdRef.current = null;
-    stopRadioAudioPlayback();
-    stopRadioCapture();
-    resetRadioTurnBuffers();
-    setRadioSessionState({
-      ...getDefaultRadioSessionState(),
-      status: options?.status ?? "idle",
-      lastError: options?.lastError
+  function getVoiceRecorderOptions() {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+    for (const candidate of candidates) {
+      if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(candidate)) {
+        return { mimeType: candidate };
+      }
+    }
+    return undefined;
+  }
+
+  function appendVoiceTranscriptToComposer(transcript: string) {
+    const normalized = normalizeTranscriptSpacing(transcript);
+    if (!normalized) return;
+    const current = chatComposerDraft.trimEnd();
+    const next = current ? `${current} ${normalized}` : normalized;
+    setChatComposerDraft(next);
+    setTutorialComposerSeed({ value: next, token: Date.now() });
+  }
+
+  async function transcribeVoiceBlob(blob: Blob, requestId: string) {
+    if (!voiceSttLoadBalancer?.id) {
+      throw new Error("請先在 Chat Config > Voice 設定可用的 STT load balancer。");
+    }
+    return await runVoiceTaskWithLoadBalancer({
+      loadBalancerId: voiceSttLoadBalancer.id,
+      requestId,
+      stage: "voice stt",
+      voiceModel: "(from load balancer)",
+      execute: async (candidate) => {
+        const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+        if (!apiKey) {
+          throw new Error("STT load balancer instance is missing API key.");
+        }
+        return transcribeAudioChunk({
+          credential: candidate.credential,
+          apiKey,
+          settings: voiceSettings,
+          blob,
+          chunkIndex: 0,
+          modelOverride: candidate.instance.model
+        });
+      },
+      describeSuccess: (text) => `response_length=${String(text ?? "").length}`
     });
   }
 
-  function handleRadioSessionFailure(message: string, requestId?: string, stage?: string) {
-    radioSessionIdRef.current = null;
-    if (requestId || stage) {
+  async function startVoiceDictation() {
+    setVoiceError(null);
+    if (!voiceSttLoadBalancer?.id) {
+      setVoiceError("請先在 Chat Config > Voice 設定可用的 STT load balancer。");
+      return;
+    }
+    const microphoneIssue = getVoiceMicrophoneSupportIssue();
+    if (microphoneIssue) {
+      setVoiceError(microphoneIssue);
+      return;
+    }
+
+    const requestId = createLogRequestId("voice");
+    logNow({
+      category: "voice",
+      agent: activeAgent?.name ?? "Voice",
+      requestId,
+      stage: "dictation",
+      message: "Voice dictation started"
+    });
+
+    try {
+      stopVoiceCapture();
+      voiceRecordedChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceMediaStreamRef.current = stream;
+      const recorderOptions = getVoiceRecorderOptions();
+      const recorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
+      voiceRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          voiceRecordedChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        setVoiceError("語音錄音失敗。");
+        setVoiceDictationStatus("idle");
+        stopVoiceCapture();
+      };
+      recorder.start();
+      setVoiceDictationStatus("recording");
+    } catch (error) {
+      stopVoiceCapture();
+      setVoiceDictationStatus("idle");
+      const message = errorMessage(error);
+      setVoiceError(message);
       logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
+        category: "voice",
+        agent: activeAgent?.name ?? "Voice",
         ok: false,
         requestId,
-        stage,
-        outcome: "failure",
-        message: "Radio session failed",
+        stage: "dictation",
+        message: "Voice dictation failed to start",
         details: message
       });
     }
-    stopRadioAudioPlayback();
-    stopRadioCapture();
-    resetRadioTurnBuffers();
-    setRadioSessionState((prev) => ({
-      ...prev,
-      status: "error",
-      lastError: message
-    }));
   }
 
-  async function restartRadioAfterRefineIssue(sessionId: string, requestId: string, details: string) {
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId,
-      stage: "refine_user_turn",
-      outcome: "degraded",
-      message: "Radio refine failed; returning to human turn",
-      details
-    });
-    if (radioSessionIdRef.current !== sessionId) return;
-    await beginRadioHumanTurn(sessionId, { notice: "整理逐字稿失敗，請再說一次。" });
-  }
-
-  async function maybeFinalizeRadioTurn(sessionId: string) {
-    if (radioSessionIdRef.current !== sessionId) return;
-    if (!radioPendingFinalizeRef.current || !radioRecorderStoppedRef.current || radioPendingTranscriptionsRef.current > 0) return;
-    if (radioFinalizeInFlightRef.current) return;
-    radioFinalizeInFlightRef.current = true;
-    radioPendingFinalizeRef.current = false;
-
-    const activeRadioAgent = activeAgent;
-    if (!activeRadioAgent) {
-      handleRadioSessionFailure("Radio mode 需要先選擇一個 Main Agent。");
+  async function stopVoiceDictationAndTranscribe() {
+    const recorder = voiceRecorderRef.current;
+    if (!recorder) {
+      setVoiceDictationStatus("idle");
+      stopVoiceCapture();
       return;
     }
 
-    const rawDraft = joinOrderedTranscriptChunks(radioChunkTextsRef.current);
-    const trimmedDraft = rawDraft;
-    if (!trimmedDraft) {
-      radioFinalizeInFlightRef.current = false;
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "paused",
-        lastError: "沒有可送出的語音內容。"
-      }));
-      return;
-    }
+    const requestId = createLogRequestId("voice");
+    setVoiceError(null);
+    setVoiceDictationStatus("transcribing");
 
-    const refineRequestId = createLogRequestId("radio");
-    const refineAgent = selectedRadioRefineAgent ?? activeRadioAgent;
-    setRadioSessionState((prev) => ({
-      ...prev,
-      status: "refining_user_turn",
-      turn: "human",
-      draftTranscriptRefinedPreview: undefined,
-      lastError: undefined
-    }));
-    logNow({
-      category: "radio",
-      agent: refineAgent.name,
-      requestId: refineRequestId,
-      stage: "refine_user_turn",
-      message: "Radio user turn refining",
-      details: trimmedDraft
+    const stopped = new Promise<void>((resolve) => {
+      const previousOnStop = recorder.onstop;
+      recorder.onstop = (event) => {
+        if (typeof previousOnStop === "function") previousOnStop.call(recorder, event);
+        resolve();
+      };
     });
 
     try {
-      const refined = await runOneToOneWithLoadBalancer({
-        logicalAgent: refineAgent,
-        input: trimmedDraft,
-        history: [],
-        system: String(radioSettings.refinePrompt ?? "").trim() || DEFAULT_RADIO_REFINE_PROMPT,
-        requestId: refineRequestId,
-        requestLabel: "radio refine",
-        onDelta: () => {},
-        onLog: (text) => pushLog({ category: "retry", agent: refineAgent.name, requestId: refineRequestId, stage: "radio refine", message: text })
-      });
-      const terminalFailure = detectTerminalAgentFailure(refined);
-      if (terminalFailure) {
-        await restartRadioAfterRefineIssue(sessionId, refineRequestId, terminalFailure);
-        return;
+      if (recorder.state !== "inactive") {
+        recorder.stop();
       }
-      const refinedText = String(refined ?? "").trim();
-      if (!refinedText) {
-        await restartRadioAfterRefineIssue(sessionId, refineRequestId, "整理語音逐字稿時模型沒有回傳任何內容。");
-        return;
+      await stopped;
+      const mimeType = voiceRecordedChunksRef.current.find((chunk) => chunk.type)?.type || recorder.mimeType || "audio/webm";
+      const blob = new Blob(voiceRecordedChunksRef.current, { type: mimeType });
+      stopVoiceCapture();
+      voiceRecordedChunksRef.current = [];
+      if (blob.size < MIN_VOICE_STT_BLOB_BYTES) {
+        throw new Error("錄音太短，沒有送出轉寫。");
       }
-      const fallbackRefinedText = buildLocalRadioRefineFallback(trimmedDraft);
-      const finalRefinedText = shouldRejectRadioRefine(trimmedDraft, refinedText) ? fallbackRefinedText : refinedText;
-      if (finalRefinedText !== refinedText) {
-        logNow({
-          category: "radio",
-          agent: refineAgent.name,
-          requestId: refineRequestId,
-          stage: "refine_user_turn",
-          outcome: "degraded",
-          message: "Radio refine rejected; using local cleanup fallback",
-          details: `raw=${trimmedDraft}\n\nrefined=${refinedText}\n\nfallback=${finalRefinedText}`
-        });
-      }
-
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "sending_to_agent",
-        turn: "agent",
-        draftTranscriptRefinedPreview: finalRefinedText,
-        lastError: undefined
-      }));
-
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "agent_thinking",
-        turn: "agent",
-        draftTranscriptRefinedPreview: finalRefinedText,
-        lastError: undefined
-      }));
-
-      const agentResult = await sendOneToOneTurn({
-        displayInput: finalRefinedText,
-        modelInput: finalRefinedText,
-        startedAt: Date.now(),
-        modeForLog: "radio",
-        extraSystem: buildRadioAgentSystemPrompt(),
-        responseFormatter: formatRadioAssistantResponse,
-        statusText: {
-          preparing: "Agent 準備回話中…",
-          responding: "Agent 正在回話中…"
-        }
-      });
-
-      if (agentResult.status === "failure" || !agentResult.spokenContent?.trim()) {
-        handleRadioSessionFailure(agentResult.displayContent || "Agent 回覆失敗。", agentResult.requestId, "agent_turn");
-        return;
-      }
-
-      if (radioSessionIdRef.current !== sessionId) return;
-
-      if (!radioTtsLoadBalancer?.id) {
-        handleRadioSessionFailure("請先設定可用的 TTS load balancer。", agentResult.requestId, "tts");
-        return;
-      }
-
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "agent_synthesizing",
-        turn: "agent",
-        lastError: undefined
-      }));
+      const transcript = await transcribeVoiceBlob(blob, requestId);
+      appendVoiceTranscriptToComposer(transcript);
       logNow({
-        category: "radio",
-        agent: activeRadioAgent.name,
-        requestId: agentResult.requestId,
-        stage: "tts",
-        message: "Radio TTS requested",
-        details: agentResult.spokenContent
-      });
-
-      let ttsText = agentResult.spokenContent;
-      let audioBlob: Blob;
-      try {
-        audioBlob = await runRadioTaskWithLoadBalancer({
-          loadBalancerId: radioTtsLoadBalancer.id,
-          requestId: agentResult.requestId,
-          stage: "radio tts",
-          radioModel: "(from load balancer)",
-          execute: async (candidate) => {
-            const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-            if (!apiKey) {
-              throw new Error("TTS load balancer instance is missing API key.");
-            }
-            return synthesizeGeminiSpeech({
-              credential: candidate.credential,
-              apiKey,
-              settings: radioSettings,
-              text: ttsText,
-              modelOverride: candidate.instance.model
-            });
-          },
-          describeSuccess: (blob) => `audio_bytes=${blob.size}`
-        });
-      } catch (ttsError) {
-        if (isRadioTtsQuotaExhaustedError(ttsError)) {
-          logNow({
-            category: "radio",
-            agent: activeRadioAgent.name,
-            requestId: agentResult.requestId,
-            stage: "tts",
-            outcome: "degraded",
-            message: "Radio TTS quota exhausted, skipping playback",
-            details: errorMessage(ttsError)
-          });
-          await playRadioSystemTone();
-          if (radioSessionIdRef.current !== sessionId) return;
-          await beginRadioHumanTurn(sessionId, { notice: "TTS quota exhausted, text only." });
-          return;
-        }
-        if (!isRadioTtsEmptyAudioError(ttsError)) {
-          throw ttsError;
-        }
-        logNow({
-          category: "radio",
-          agent: activeRadioAgent.name,
-          requestId: agentResult.requestId,
-          stage: "tts",
-          outcome: "degraded",
-          message: "Radio TTS empty audio, retrying with English fallback",
-          details: errorMessage(ttsError)
-        });
-
-        const fallbackTtsRequestId = createLogRequestId("radio");
-        const translated = await runOneToOneWithLoadBalancer({
-          logicalAgent: activeRadioAgent,
-          input: ttsText,
-          history: [],
-          system: buildRadioTtsFallbackSystemPrompt(),
-          requestId: fallbackTtsRequestId,
-          requestLabel: "radio tts fallback",
-          onDelta: () => {},
-          onLog: (text) => pushLog({ category: "retry", agent: activeRadioAgent.name, requestId: fallbackTtsRequestId, stage: "radio tts fallback", message: text })
-        });
-        const fallbackFailure = detectTerminalAgentFailure(translated);
-        if (fallbackFailure) {
-          throw new Error(`TTS fallback translation failed.\n${fallbackFailure}`);
-        }
-        const translatedText = String(translated ?? "").trim();
-        if (!translatedText) {
-          throw new Error(`TTS fallback translation returned empty content.\n${errorMessage(ttsError)}`);
-        }
-        ttsText = translatedText;
-        logNow({
-          category: "radio",
-          agent: activeRadioAgent.name,
-          requestId: fallbackTtsRequestId,
-          stage: "tts",
-          outcome: "degraded",
-          message: "Radio TTS fallback translation ready",
-          details: ttsText
-        });
-        try {
-          audioBlob = await runRadioTaskWithLoadBalancer({
-            loadBalancerId: radioTtsLoadBalancer.id,
-            requestId: fallbackTtsRequestId,
-            stage: "radio tts",
-            radioModel: "(from load balancer)",
-            execute: async (candidate) => {
-              const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-              if (!apiKey) {
-                throw new Error("TTS load balancer instance is missing API key.");
-              }
-              return synthesizeGeminiSpeech({
-                credential: candidate.credential,
-                apiKey,
-                settings: radioSettings,
-                text: ttsText,
-                modelOverride: candidate.instance.model
-              });
-            },
-            describeSuccess: (blob) => `audio_bytes=${blob.size}`
-          });
-        } catch (fallbackTtsError) {
-          if (isRadioTtsQuotaExhaustedError(fallbackTtsError)) {
-            logNow({
-              category: "radio",
-              agent: activeRadioAgent.name,
-              requestId: fallbackTtsRequestId,
-              stage: "tts",
-              outcome: "degraded",
-              message: "Radio TTS quota exhausted after fallback, skipping playback",
-              details: errorMessage(fallbackTtsError)
-            });
-            await playRadioSystemTone();
-            if (radioSessionIdRef.current !== sessionId) return;
-            await beginRadioHumanTurn(sessionId, { notice: "TTS quota exhausted, text only." });
-            return;
-          }
-          throw fallbackTtsError;
-        }
-      }
-      if (radioSessionIdRef.current !== sessionId) return;
-      setRadioSessionState((prev) => ({
-        ...prev,
-        lastNotice: undefined
-      }));
-
-      stopRadioAudioPlayback();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      radioAudioRef.current = audio;
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl);
-        if (radioAudioRef.current === audio) {
-          radioAudioRef.current = null;
-        }
-        if (radioSessionIdRef.current !== sessionId) return;
-        void (async () => {
-          await playRadioSystemTone();
-          if (radioSessionIdRef.current !== sessionId) return;
-          await beginRadioHumanTurn(sessionId);
-        })();
-      };
-      audio.onerror = () => {
-        URL.revokeObjectURL(audioUrl);
-        if (radioAudioRef.current === audio) {
-          radioAudioRef.current = null;
-        }
-        handleRadioSessionFailure("語音播放失敗。", agentResult.requestId, "audio_playback");
-      };
-
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "agent_speaking",
-        turn: "agent"
-      }));
-      logNow({
-        category: "radio",
-        agent: activeRadioAgent.name,
-        requestId: agentResult.requestId,
-        stage: "audio_playback",
-        message: "Radio playback started"
-      });
-      await audio.play();
-    } catch (e) {
-      handleRadioSessionFailure(errorMessage(e), refineRequestId, "radio_finalize");
-    } finally {
-      radioFinalizeInFlightRef.current = false;
-    }
-  }
-
-  async function beginRadioHumanTurn(sessionId: string, options?: { notice?: string }) {
-    if (radioSessionIdRef.current !== sessionId) return;
-
-    stopRadioAudioPlayback();
-    stopRadioCapture();
-    resetRadioTurnBuffers();
-    setRadioSessionState({
-      status: "requesting_permission",
-      turn: "human",
-      draftTranscriptRaw: "",
-      draftTranscriptRefinedPreview: undefined,
-      lastError: undefined,
-      lastNotice: options?.notice,
-      currentChunkIndex: 0,
-      lastProcessedChunkIndex: -1
-    });
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId: sessionId,
-      stage: "permission",
-      message: "Radio microphone permission requested"
-    });
-
-    const microphoneIssue = getRadioMicrophoneSupportIssue();
-    if (microphoneIssue) {
-      handleRadioSessionFailure(microphoneIssue, sessionId, "permission");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (radioSessionIdRef.current !== sessionId) {
-        for (const track of stream.getTracks()) track.stop();
-        return;
-      }
-      radioMediaStreamRef.current = stream;
-      radioRecorderStoppedRef.current = false;
-
-      const AudioContextCtor =
-        typeof window !== "undefined"
-          ? (globalThis.AudioContext ??
-            (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
-          : undefined;
-      if (AudioContextCtor) {
-        try {
-          const context = new AudioContextCtor();
-          const source = context.createMediaStreamSource(stream);
-          const analyser = context.createAnalyser();
-          analyser.fftSize = 2048;
-          analyser.smoothingTimeConstant = 0.2;
-          source.connect(analyser);
-          radioAudioContextRef.current = context;
-          radioSourceNodeRef.current = source;
-          radioAnalyserRef.current = analyser;
-          const samples = new Uint8Array(analyser.fftSize);
-
-          const monitor = () => {
-            if (radioSessionIdRef.current !== sessionId) return;
-            const currentAnalyser = radioAnalyserRef.current;
-            if (!currentAnalyser || radioPendingFinalizeRef.current) return;
-            currentAnalyser.getByteTimeDomainData(samples);
-            let sum = 0;
-            for (let index = 0; index < samples.length; index += 1) {
-              const centered = (samples[index] - 128) / 128;
-              sum += centered * centered;
-            }
-            const rms = Math.sqrt(sum / samples.length);
-            const now = Date.now();
-            if (rms >= RADIO_VAD_RMS_THRESHOLD) {
-              radioLastVoiceAtRef.current = now;
-              if (radioSpeechStartedAtRef.current === null) {
-                radioSpeechStartedAtRef.current = now;
-              }
-            } else if (
-              radioSpeechStartedAtRef.current !== null &&
-              radioLastVoiceAtRef.current !== null &&
-              now - radioSpeechStartedAtRef.current >= RADIO_MIN_SPEECH_MS &&
-              now - radioLastVoiceAtRef.current >= RADIO_SILENCE_FINALIZE_MS
-            ) {
-              radioPendingFinalizeRef.current = true;
-              logNow({
-                category: "radio",
-                agent: activeAgent?.name ?? "Unknown agent",
-                requestId: sessionId,
-                stage: "silence_detect",
-                message: "Radio silence detected; finalizing human turn",
-                details: `rms=${rms.toFixed(4)}\nsilence_ms=${now - radioLastVoiceAtRef.current}`
-              });
-              stopRadioCapture();
-              return;
-            }
-            radioVadFrameRef.current = window.requestAnimationFrame(monitor);
-          };
-
-          radioVadFrameRef.current = window.requestAnimationFrame(monitor);
-        } catch {
-          stopRadioSpeechMonitor();
-        }
-      }
-
-      const recorderOptions = (() => {
-        const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
-        for (const candidate of candidates) {
-          if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(candidate)) {
-            return { mimeType: candidate };
-          }
-        }
-        return undefined;
-      })();
-
-      const handleRecordedBlob = (blob: Blob) => {
-        if (radioSessionIdRef.current !== sessionId) return;
-        if (!blob || blob.size <= 0) return;
-        if (blob.size < MIN_RADIO_STT_BLOB_BYTES) {
-          logNow({
-            category: "radio",
-            agent: activeAgent?.name ?? "Unknown agent",
-            requestId: sessionId,
-            stage: "stt",
-            outcome: "info",
-            message: "Radio tiny chunk skipped",
-            details: `blob_size=${blob.size}\nblob_type=${blob.type || "-"}`
-          });
-          return;
-        }
-        const chunkIndex = radioNextChunkIndexRef.current;
-        radioNextChunkIndexRef.current += 1;
-        radioPendingTranscriptionsRef.current += 1;
-        syncRadioDraftState({ status: "human_transcribing" });
-
-        void (async () => {
-          try {
-            if (!radioSttLoadBalancer?.id) {
-              throw new Error("請先設定可用的 STT load balancer。");
-            }
-            const transcript = await runRadioTaskWithLoadBalancer({
-              loadBalancerId: radioSttLoadBalancer.id,
-              requestId: sessionId,
-              stage: "radio stt",
-              radioModel: "(from load balancer)",
-              execute: async (candidate) => {
-                const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-                if (!apiKey) {
-                  throw new Error("STT load balancer instance is missing API key.");
-                }
-                return transcribeAudioChunk({
-                  credential: candidate.credential,
-                  apiKey,
-                  settings: radioSettings,
-                  blob,
-                  chunkIndex,
-                  modelOverride: candidate.instance.model
-                });
-              },
-              describeSuccess: (text) => `response_length=${String(text ?? "").length}`
-            });
-            if (radioSessionIdRef.current !== sessionId) return;
-            radioChunkTextsRef.current.set(chunkIndex, transcript);
-            syncRadioDraftState();
-            logNow({
-              category: "radio",
-              agent: activeAgent?.name ?? "Unknown agent",
-              requestId: sessionId,
-              stage: "stt",
-              message: `Radio chunk transcribed #${chunkIndex + 1}`,
-              details: transcript
-            });
-          } catch (e) {
-            if (radioSessionIdRef.current === sessionId) {
-              handleRadioSessionFailure(errorMessage(e), sessionId, "stt");
-            }
-          } finally {
-            radioPendingTranscriptionsRef.current = Math.max(0, radioPendingTranscriptionsRef.current - 1);
-            if (radioSessionIdRef.current === sessionId) {
-              if (!radioPendingFinalizeRef.current) {
-                syncRadioDraftState({ status: "human_listening" });
-              }
-              void maybeFinalizeRadioTurn(sessionId);
-            }
-          }
-        })();
-      };
-
-      const startRecorderCycle = () => {
-        if (radioSessionIdRef.current !== sessionId) return;
-        const currentStream = radioMediaStreamRef.current;
-        if (!currentStream || radioPendingFinalizeRef.current) return;
-        const recorder = recorderOptions ? new MediaRecorder(currentStream, recorderOptions) : new MediaRecorder(currentStream);
-        radioRecorderRef.current = recorder;
-
-        recorder.ondataavailable = (event) => {
-          handleRecordedBlob(event.data);
-        };
-
-        recorder.onstop = () => {
-          clearRadioChunkTimer();
-          if (radioRecorderRef.current === recorder) {
-            radioRecorderRef.current = null;
-          }
-          if (radioSessionIdRef.current !== sessionId) return;
-          if (radioPendingFinalizeRef.current) {
-            radioRecorderStoppedRef.current = true;
-            void maybeFinalizeRadioTurn(sessionId);
-            return;
-          }
-          startRecorderCycle();
-        };
-
-        recorder.start();
-        radioChunkTimerRef.current = window.setTimeout(() => {
-          if (radioRecorderRef.current === recorder && recorder.state !== "inactive") {
-            try {
-              recorder.stop();
-            } catch {
-              // Ignore recorder stop races.
-            }
-          }
-        }, radioSettings.chunkSeconds * 1000);
-      };
-
-      startRecorderCycle();
-      setRadioSessionState({
-        status: "human_listening",
-        turn: "human",
-        draftTranscriptRaw: "",
-        draftTranscriptRefinedPreview: undefined,
-        lastError: undefined,
-        lastNotice: options?.notice,
-        currentChunkIndex: 0,
-        lastProcessedChunkIndex: -1
-      });
-      logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
-        requestId: sessionId,
-        stage: "permission",
-        outcome: "success",
-        message: "Radio microphone permission granted"
-      });
-    } catch (e) {
-      handleRadioSessionFailure(errorMessage(e), sessionId, "permission");
-    }
-  }
-
-  async function startRadioSession() {
-    if (mode !== "radio") {
-      setMode("radio");
-    }
-    if (!activeAgent) {
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "error",
-        lastError: "請先選擇 Main Agent。"
-      }));
-      return;
-    }
-    if (!radioSttLoadBalancer?.id) {
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "error",
-        lastError: "請先在 Chat Config > Radio 設定可用的 STT load balancer。"
-      }));
-      return;
-    }
-    if (!radioTtsLoadBalancer?.id) {
-      setRadioSessionState((prev) => ({
-        ...prev,
-        status: "error",
-        lastError: "請先在 Chat Config > Radio 設定可用的 TTS load balancer。"
-      }));
-      return;
-    }
-
-    stopRadioSession();
-    const sessionId = createLogRequestId("radio");
-    radioSessionIdRef.current = sessionId;
-    logNow({
-      category: "radio",
-      agent: activeAgent.name,
-      requestId: sessionId,
-      stage: "session",
-      message: "Radio session started"
-    });
-    await beginRadioHumanTurn(sessionId);
-  }
-
-  async function testRadioSystemTone() {
-    const requestId = createLogRequestId("radio");
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId,
-      stage: "tone_test",
-      message: "Radio tone test requested"
-    });
-    await playRadioSystemTone();
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId,
-      stage: "tone_test",
-      outcome: "success",
-      message: "Radio tone test played"
-    });
-  }
-
-  async function testRadioSttLoadBalancer() {
-    const requestId = createLogRequestId("radio");
-    if (!radioSttLoadBalancer?.id) {
-      setRadioProbeState((prev) => ({
-        ...prev,
-        stt: { running: false, ok: false, message: "請先選擇 STT load balancer。" }
-      }));
-      return;
-    }
-    setRadioProbeState((prev) => ({ ...prev, stt: { running: true } }));
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId,
-      stage: "stt_probe",
-      message: "Radio STT probe requested"
-    });
-    try {
-      const transcript = await runRadioTaskWithLoadBalancer({
-        loadBalancerId: radioSttLoadBalancer.id,
+        category: "voice",
+        agent: activeAgent?.name ?? "Voice",
+        ok: true,
         requestId,
-        stage: "radio stt probe",
-        radioModel: "(from load balancer)",
-        execute: async (candidate) => {
-          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-          if (!apiKey) {
-            throw new Error("STT load balancer instance is missing API key.");
-          }
-          return transcribeAudioChunk({
-            credential: candidate.credential,
-            apiKey,
-            settings: radioSettings,
-            blob: createRadioProbeWavBlob(),
-            chunkIndex: 0,
-            modelOverride: candidate.instance.model,
-            allowEmptyTranscript: true
-          });
-        },
-        describeSuccess: (text) => `response_length=${String(text ?? "").length}`
-      });
-      const message = `STT probe OK${transcript ? `，transcript=${transcript}` : "，provider accepted probe audio"}`;
-      setRadioProbeState((prev) => ({
-        ...prev,
-        stt: { running: false, ok: true, message }
-      }));
-      logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
-        requestId,
-        stage: "stt_probe",
-        outcome: "success",
-        message: "Radio STT probe passed",
-        details: message
+        stage: "stt",
+        message: "Voice dictation transcribed",
+        details: transcript
       });
     } catch (error) {
       const message = errorMessage(error);
-      setRadioProbeState((prev) => ({
-        ...prev,
-        stt: { running: false, ok: false, message }
-      }));
+      setVoiceError(message);
       logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
+        category: "voice",
+        agent: activeAgent?.name ?? "Voice",
+        ok: false,
         requestId,
-        stage: "stt_probe",
-        outcome: "failure",
-        message: "Radio STT probe failed",
+        stage: "stt",
+        message: "Voice dictation transcription failed",
         details: message
       });
+    } finally {
+      stopVoiceCapture();
+      setVoiceDictationStatus("idle");
     }
   }
 
-  async function testRadioTtsLoadBalancer() {
-    const requestId = createLogRequestId("radio");
-    if (!radioTtsLoadBalancer?.id) {
-      setRadioProbeState((prev) => ({
-        ...prev,
-        tts: { running: false, ok: false, message: "請先選擇 TTS load balancer。" }
-      }));
+  async function toggleVoiceDictation() {
+    if (voiceDictationStatus === "recording") {
+      await stopVoiceDictationAndTranscribe();
       return;
     }
-    setRadioProbeState((prev) => ({ ...prev, tts: { running: true } }));
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId,
-      stage: "tts_probe",
-      message: "Radio TTS probe requested"
-    });
+    if (voiceDictationStatus === "idle") {
+      await startVoiceDictation();
+    }
+  }
+
+  async function playMessageTts(messageId: string, text: string) {
+    const trimmed = String(text ?? "").trim();
+    if (!trimmed) return;
+    if (voicePlaybackMessageId === messageId) {
+      stopVoicePlayback();
+      return;
+    }
+    if (!voiceTtsLoadBalancer?.id) {
+      setVoiceError("請先在 Chat Config > Voice 設定可用的 TTS load balancer。");
+      return;
+    }
+
+    const requestId = createLogRequestId("voice");
+    setVoiceError(null);
+    stopVoicePlayback();
+    setVoicePlaybackMessageId(messageId);
     try {
-      const audioBlob = await runRadioTaskWithLoadBalancer({
-        loadBalancerId: radioTtsLoadBalancer.id,
+      const audioBlob = await runVoiceTaskWithLoadBalancer({
+        loadBalancerId: voiceTtsLoadBalancer.id,
         requestId,
-        stage: "radio tts probe",
-        radioModel: "(from load balancer)",
+        stage: "voice tts",
+        voiceModel: "(from load balancer)",
         execute: async (candidate) => {
           const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
           if (!apiKey) {
@@ -7151,102 +6478,142 @@ export default function App() {
           return synthesizeGeminiSpeech({
             credential: candidate.credential,
             apiKey,
-            settings: radioSettings,
-            text: "Radio TTS test.",
+            settings: voiceSettings,
+            text: trimmed,
             modelOverride: candidate.instance.model
           });
         },
         describeSuccess: (blob) => `audio_bytes=${blob.size}`
       });
-      const message = `TTS probe OK，audio_bytes=${audioBlob.size}`;
-      setRadioProbeState((prev) => ({
-        ...prev,
-        tts: { running: false, ok: true, message }
-      }));
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      voiceAudioRef.current = audio;
+      voiceAudioUrlRef.current = audioUrl;
+      audio.onended = () => {
+        if (voiceAudioRef.current === audio) stopVoicePlayback();
+      };
+      audio.onerror = () => {
+        if (voiceAudioRef.current === audio) stopVoicePlayback();
+        setVoiceError("語音播放失敗。");
+      };
+      await audio.play();
       logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
+        category: "voice",
+        agent: activeAgent?.name ?? "Voice",
+        ok: true,
         requestId,
-        stage: "tts_probe",
-        outcome: "success",
-        message: "Radio TTS probe passed",
-        details: message
+        stage: "tts",
+        message: "Voice playback started",
+        details: `message_id=${messageId}`
       });
     } catch (error) {
       const message = errorMessage(error);
-      setRadioProbeState((prev) => ({
-        ...prev,
-        tts: { running: false, ok: false, message }
-      }));
+      stopVoicePlayback();
+      setVoiceError(message);
       logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
+        category: "voice",
+        agent: activeAgent?.name ?? "Voice",
+        ok: false,
         requestId,
-        stage: "tts_probe",
-        outcome: "failure",
-        message: "Radio TTS probe failed",
+        stage: "tts",
+        message: "Voice playback failed",
         details: message
       });
     }
   }
 
-  async function forceRadioTurnSwitch() {
-    const sessionId = radioSessionIdRef.current;
-    if (!sessionId) return;
-
-    if (radioSessionState.turn === "human") {
-      logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
-        requestId: sessionId,
-        stage: "manual_turn_switch",
-        message: "Manual turn switch: human -> agent"
-      });
-      radioPendingFinalizeRef.current = true;
-      const recorder = radioRecorderRef.current;
-      if (recorder && recorder.state !== "inactive") {
-        try {
-          recorder.stop();
-          return;
-        } catch {
-          // Fall back to capture shutdown below.
-        }
-      }
-      stopRadioCapture();
-      radioRecorderStoppedRef.current = true;
-      void maybeFinalizeRadioTurn(sessionId);
+  async function testVoiceSttLoadBalancer() {
+    const requestId = createLogRequestId("voice");
+    if (!voiceSttLoadBalancer?.id) {
+      setVoiceProbeState((prev) => ({
+        ...prev,
+        stt: { running: false, ok: false, message: "請先選擇 STT load balancer。" }
+      }));
       return;
     }
-
-    if (radioSessionState.status === "agent_speaking") {
-      logNow({
-        category: "radio",
-        agent: activeAgent?.name ?? "Unknown agent",
-        requestId: sessionId,
-        stage: "manual_turn_switch",
-        message: "Manual turn switch: agent -> human"
+    setVoiceProbeState((prev) => ({ ...prev, stt: { running: true } }));
+    try {
+      const transcript = await runVoiceTaskWithLoadBalancer({
+        loadBalancerId: voiceSttLoadBalancer.id,
+        requestId,
+        stage: "voice stt probe",
+        voiceModel: "(from load balancer)",
+        execute: async (candidate) => {
+          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+          if (!apiKey) {
+            throw new Error("STT load balancer instance is missing API key.");
+          }
+          return transcribeAudioChunk({
+            credential: candidate.credential,
+            apiKey,
+            settings: voiceSettings,
+            blob: createVoiceProbeWavBlob(),
+            chunkIndex: 0,
+            modelOverride: candidate.instance.model,
+            allowEmptyTranscript: true
+          });
+        },
+        describeSuccess: (text) => `response_length=${String(text ?? "").length}`
       });
-      stopRadioAudioPlayback();
-      await beginRadioHumanTurn(sessionId);
+      const message = `STT probe OK${transcript ? `，transcript=${transcript}` : "，provider accepted probe audio"}`;
+      setVoiceProbeState((prev) => ({
+        ...prev,
+        stt: { running: false, ok: true, message }
+      }));
+    } catch (error) {
+      const message = errorMessage(error);
+      setVoiceProbeState((prev) => ({
+        ...prev,
+        stt: { running: false, ok: false, message }
+      }));
+    }
+  }
+
+  async function testVoiceTtsLoadBalancer() {
+    const requestId = createLogRequestId("voice");
+    if (!voiceTtsLoadBalancer?.id) {
+      setVoiceProbeState((prev) => ({
+        ...prev,
+        tts: { running: false, ok: false, message: "請先選擇 TTS load balancer。" }
+      }));
       return;
     }
-
-    logNow({
-      category: "radio",
-      agent: activeAgent?.name ?? "Unknown agent",
-      requestId: sessionId,
-      stage: "manual_turn_switch",
-      outcome: "info",
-      message: "Manual turn switch ignored",
-      details: `turn=${radioSessionState.turn}\nstatus=${radioSessionState.status}`
-    });
+    setVoiceProbeState((prev) => ({ ...prev, tts: { running: true } }));
+    try {
+      const audioBlob = await runVoiceTaskWithLoadBalancer({
+        loadBalancerId: voiceTtsLoadBalancer.id,
+        requestId,
+        stage: "voice tts probe",
+        voiceModel: "(from load balancer)",
+        execute: async (candidate) => {
+          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
+          if (!apiKey) {
+            throw new Error("TTS load balancer instance is missing API key.");
+          }
+          return synthesizeGeminiSpeech({
+            credential: candidate.credential,
+            apiKey,
+            settings: voiceSettings,
+            text: "Voice TTS test.",
+            modelOverride: candidate.instance.model
+          });
+        },
+        describeSuccess: (blob) => `audio_bytes=${blob.size}`
+      });
+      setVoiceProbeState((prev) => ({
+        ...prev,
+        tts: { running: false, ok: true, message: `TTS probe OK，audio_bytes=${audioBlob.size}` }
+      }));
+    } catch (error) {
+      const message = errorMessage(error);
+      setVoiceProbeState((prev) => ({
+        ...prev,
+        tts: { running: false, ok: false, message }
+      }));
+    }
   }
 
   async function onSend(input: string) {
-    if (mode === "radio") {
-      logNow({ category: "radio", ok: false, message: "Direct text send skipped in radio mode", details: input });
-      return;
-    }
     if (tutorialRestoringRef.current) {
       logNow({ category: "tutorial", ok: false, message: "Send skipped: tutorial restore in progress", details: input });
       append(msg("assistant", "Tutorial 正在恢復工作區，請稍候再送出。", "system", { displayName: "System" }));
@@ -8087,7 +7454,7 @@ export default function App() {
                   leaderName={null}
                   userName={userProfile.name}
                   mode={mode}
-                  modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
+                  modeLabel={mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}
                   onExportRaw={exportRawHistory}
                   onExportSummary={exportSummaryHistory}
                   onImportHistory={importHistoryFile}
@@ -8095,10 +7462,11 @@ export default function App() {
                   onOpenFullscreen={() => setIsChatFullscreen(true)}
                   composerSeed={tutorialComposerSeed}
                   onDraftChange={setChatComposerDraft}
-                  radioState={radioSessionState}
-                  onStartRadioSession={() => void startRadioSession()}
-                  onStopRadioSession={() => stopRadioSession()}
-                  onForceRadioTurn={() => void forceRadioTurnSwitch()}
+                  voiceDictationStatus={voiceDictationStatus}
+                  voicePlaybackMessageId={voicePlaybackMessageId}
+                  voiceError={voiceError}
+                  onToggleVoiceDictation={() => void toggleVoiceDictation()}
+                  onPlayMessageTts={(messageId, text) => void playMessageTts(messageId, text)}
                   onOpenToolResult={(assistantMessageId) =>
                     setTutorialOpenedToolResultMessageIds((current) =>
                       current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
@@ -8129,7 +7497,7 @@ export default function App() {
                 <span className="cc-card-label">Main Agent</span>
                 <strong className="cc-card-value">{activeAgent?.name ?? "None"}</strong>
                 <span className="cc-card-hint">
-                  {mode === "one_to_one" || mode === "radio"
+                  {mode === "one_to_one"
                     ? loadBalancerSlots.find((entry) => entry.id === activeAgent?.loadBalancerId)?.name ?? "No load balancer"
                     : `MAGI mode 固定使用 ${formatManagedMagiAgentName("Melchior")} / ${formatManagedMagiAgentName("Balthasar")} / ${formatManagedMagiAgentName("Casper")}`}
                 </span>
@@ -8146,8 +7514,8 @@ export default function App() {
               </button>
               <button className="cc-card" onClick={() => setConfigModal("mode")} data-tutorial-id="chat-config-mode-card">
                 <span className="cc-card-label">Mode</span>
-                <strong className="cc-card-value">{mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}</strong>
-                <span className="cc-card-hint">{mode === "one_to_one" ? "1:1 對話" : mode === "radio" ? "半雙工對講機模式" : "S.C. MAGI 裁決模式"}</span>
+                <strong className="cc-card-value">{mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}</strong>
+                <span className="cc-card-hint">{mode === "one_to_one" ? "1:1 對話" : "S.C. MAGI 裁決模式"}</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("history")} data-tutorial-id="chat-config-history-card">
                 <span className="cc-card-label">History</span>
@@ -8163,10 +7531,10 @@ export default function App() {
                   </span>
                 </button>
               )}
-              <button className="cc-card" onClick={() => setConfigModal("radio")}>
-                <span className="cc-card-label">Radio</span>
-                <strong className="cc-card-value">{radioSttLoadBalancer?.name ?? "No STT"} / {radioTtsLoadBalancer?.name ?? "No TTS"}</strong>
-                <span className="cc-card-hint">STT LB + TTS LB</span>
+              <button className="cc-card" onClick={() => setConfigModal("voice")}>
+                <span className="cc-card-label">Voice</span>
+                <strong className="cc-card-value">{voiceSttLoadBalancer?.name ?? "No STT"} / {voiceTtsLoadBalancer?.name ?? "No TTS"}</strong>
+                <span className="cc-card-hint">STT typing + TTS playback</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("docs")} data-tutorial-id="chat-config-docs-card">
                 <span className="cc-card-label">Docs</span>
@@ -8201,7 +7569,6 @@ export default function App() {
                 <div style={{ display: "grid", gap: 8 }}>
                   {([
                     ["one_to_one", "Normal", "一般一對一對話模式，可自由搭配 skills、MCP、built-in tools 與 docs 使用"],
-                    ["radio", RADIO_MODE_LABEL, "半雙工對講機模式：人類用 STT 說話、停頓後自動切換；Agent 用 TTS 回話"],
                     ["magi_vote", MAGI_MODE_LABELS.magi_vote, "三賢人同步表決，一輪完成裁決，適合快速取得多視角結論"],
                     ["magi_consensus", MAGI_MODE_LABELS.magi_consensus, "三賢人最多三輪反覆協商，若仍無法達成共識則輸出 deadlock"]
                   ] as const).map(([value, title, desc]) => (
@@ -8523,19 +7890,17 @@ export default function App() {
               </HelpModal>
             )}
 
-            {configModal === "radio" && (
-              <HelpModal title="Radio" onClose={() => setConfigModal(null)} width="min(620px, 96vw)">
-                <ErrorBoundary onError={(error, info) => logRenderError("RadioConfigPanel", error, info)}>
-                  <RadioConfigPanel
-                    settings={radioSettings}
-                    setSettings={setRadioSettings}
+            {configModal === "voice" && (
+              <HelpModal title="Voice" onClose={() => setConfigModal(null)} width="min(620px, 96vw)">
+                <ErrorBoundary onError={(error, info) => logRenderError("VoiceConfigPanel", error, info)}>
+                  <VoiceConfigPanel
+                    settings={voiceSettings}
+                    setSettings={setVoiceSettings}
                     loadBalancerOptions={loadBalancerSlots}
-                    refineAgentOptions={radioRefineAgentOptions}
-                    sttProbeState={radioProbeState.stt}
-                    ttsProbeState={radioProbeState.tts}
-                    onTestStt={() => void testRadioSttLoadBalancer()}
-                    onTestTts={() => void testRadioTtsLoadBalancer()}
-                    onTestTone={() => void testRadioSystemTone()}
+                    sttProbeState={voiceProbeState.stt}
+                    ttsProbeState={voiceProbeState.tts}
+                    onTestStt={() => void testVoiceSttLoadBalancer()}
+                    onTestTts={() => void testVoiceTtsLoadBalancer()}
                   />
                 </ErrorBoundary>
               </HelpModal>
@@ -8782,17 +8147,18 @@ export default function App() {
                 leaderName={null}
                 userName={userProfile.name}
                 mode={mode}
-                modeLabel={mode === "one_to_one" ? "normal" : mode === "radio" ? RADIO_MODE_LABEL : MAGI_MODE_LABELS[mode]}
+                modeLabel={mode === "one_to_one" ? "normal" : MAGI_MODE_LABELS[mode]}
                 onExportRaw={exportRawHistory}
                 onExportSummary={exportSummaryHistory}
                 onImportHistory={importHistoryFile}
                 isSummaryExporting={isSummaryExporting}
                 fullscreen
                 onCloseFullscreen={() => setIsChatFullscreen(false)}
-                radioState={radioSessionState}
-                onStartRadioSession={() => void startRadioSession()}
-                onStopRadioSession={() => stopRadioSession()}
-                onForceRadioTurn={() => void forceRadioTurnSwitch()}
+                voiceDictationStatus={voiceDictationStatus}
+                voicePlaybackMessageId={voicePlaybackMessageId}
+                voiceError={voiceError}
+                onToggleVoiceDictation={() => void toggleVoiceDictation()}
+                onPlayMessageTts={(messageId, text) => void playMessageTts(messageId, text)}
                 onOpenToolResult={(assistantMessageId) =>
                   setTutorialOpenedToolResultMessageIds((current) =>
                     current.includes(assistantMessageId) ? current : [...current, assistantMessageId]

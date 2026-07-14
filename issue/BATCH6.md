@@ -36,7 +36,7 @@
 模式直接抄目前 `app.test.tsx` 已修綠的 4 個 chat 測試。
 - skill 多輪執行 happy path
 - load balancer failover（mock 第一個 instance fetch fail → 應切下一個）
-- radio mode 啟動 → STT → 切換 → TTS（mock Web Speech API）
+- voice STT 輸入 → TTS 手動播放（mock Web Speech API / Audio）
 - tutorial 流程跑完一個 scenario
 
 跑一次 `npm run test:coverage`，把 baseline 寫進 AGENT.md。
@@ -54,9 +54,9 @@
    - `McpContext`
    - `SkillContext`
    - `TutorialContext`
-   - `RadioContext`
+   - `VoiceContext`
 4. **抽 custom hooks**
-   - `useOneToOne` / `useSkillExecution`（吸收 `skillExecutionLocksRef`） / `useTutorial`（吸收 restore lock） / `useRadioSession` / `useLoadBalancerPlan`
+   - `useOneToOne` / `useSkillExecution`（吸收 `skillExecutionLocksRef`） / `useTutorial`（吸收 restore lock） / `useVoice` / `useLoadBalancerPlan`
 5. **Orchestrator 真的搬到 `src/orchestrators/`**
    - `sendOneToOneTurn` → `src/orchestrators/oneToOne.ts` 純函式版
    - `executeMultiTurnSkill` → `src/orchestrators/skillExecution.ts`
@@ -102,7 +102,7 @@
 至少 10-14 個 PR：
 1. integration test：skill 多輪
 2. integration test：LB failover
-3. integration test：radio
+3. integration test：voice
 4. integration test：tutorial scenario
 5. coverage baseline 寫入文件
 6. helper 函式搬移

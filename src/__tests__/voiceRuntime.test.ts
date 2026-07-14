@@ -1,28 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_RADIO_SETTINGS,
+  DEFAULT_VOICE_SETTINGS,
   joinOrderedTranscriptChunks,
-  normalizeRadioSettings,
+  normalizeVoiceSettings,
   synthesizeGeminiSpeech,
   transcribeAudioChunk
-} from "../radio/runtime";
+} from "../voice/runtime";
 import type { ModelCredentialEntry } from "../storage/settingsStore";
 
-describe("radio runtime helpers", () => {
-  it("normalizes radio settings with defaults and clamps chunk length", () => {
+describe("voice runtime helpers", () => {
+  it("normalizes voice settings with defaults", () => {
     expect(
-      normalizeRadioSettings({
-        chunkSeconds: 999,
-        sttPrompt: "",
-        refinePrompt: ""
+      normalizeVoiceSettings({
+        sttPrompt: ""
       })
     ).toEqual({
-      ...DEFAULT_RADIO_SETTINGS,
-      chunkSeconds: 300,
+      ...DEFAULT_VOICE_SETTINGS,
       sttLoadBalancerId: "",
       sttLanguage: "",
-      refineAgentId: "",
       ttsLoadBalancerId: ""
+    });
+  });
+
+  it("migrates legacy radio credential ids into voice load balancers", () => {
+    expect(
+      normalizeVoiceSettings({
+        sttCredentialId: "legacy-stt",
+        ttsCredentialId: "legacy-tts"
+      } as Parameters<typeof normalizeVoiceSettings>[0])
+    ).toMatchObject({
+      sttLoadBalancerId: "legacy-stt",
+      ttsLoadBalancerId: "legacy-tts"
     });
   });
 
@@ -36,11 +44,10 @@ describe("radio runtime helpers", () => {
     expect(joinOrderedTranscriptChunks(chunks)).toBe("one two three");
   });
 
-  it("keeps radio defaults stable", () => {
-    expect(DEFAULT_RADIO_SETTINGS.sttTemperature).toBe(0);
-    expect(DEFAULT_RADIO_SETTINGS.chunkSeconds).toBe(60);
-    expect(DEFAULT_RADIO_SETTINGS.sttPrompt).toBe("");
-    expect(DEFAULT_RADIO_SETTINGS.refinePrompt.length).toBeGreaterThan(0);
+  it("keeps voice defaults stable", () => {
+    expect(DEFAULT_VOICE_SETTINGS.sttTemperature).toBe(0);
+    expect(DEFAULT_VOICE_SETTINGS.sttPrompt).toBe("");
+    expect(DEFAULT_VOICE_SETTINGS.ttsVoice).toBe("Kore");
   });
 
   it("requires explicit STT/TTS models from load balancer instances instead of silently falling back", async () => {
@@ -60,7 +67,7 @@ describe("radio runtime helpers", () => {
       transcribeAudioChunk({
         credential,
         apiKey: "test-key",
-        settings: DEFAULT_RADIO_SETTINGS,
+        settings: DEFAULT_VOICE_SETTINGS,
         blob: new Blob(["demo"], { type: "audio/webm" }),
         chunkIndex: 0,
         modelOverride: ""
@@ -71,7 +78,7 @@ describe("radio runtime helpers", () => {
       synthesizeGeminiSpeech({
         credential,
         apiKey: "test-key",
-        settings: DEFAULT_RADIO_SETTINGS,
+        settings: DEFAULT_VOICE_SETTINGS,
         text: "hello",
         modelOverride: ""
       })
