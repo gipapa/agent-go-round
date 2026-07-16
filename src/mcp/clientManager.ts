@@ -1,9 +1,7 @@
 import { McpServerConfig } from "../types";
-import { McpSseClient } from "./sseClient";
+import { createMcpClient, type McpClient } from "./client";
 
-export type McpClientLike = Pick<McpSseClient, "connect" | "close" | "request"> & {
-  isReusable?: () => boolean;
-};
+export type McpClientLike = McpClient;
 
 type ManagedClient = {
   client: McpClientLike;
@@ -17,7 +15,11 @@ export type McpClientManagerOptions = {
 
 function serverFingerprint(server: McpServerConfig) {
   return [
+    server.transport ?? "sse",
     server.sseUrl.trim(),
+    server.authToken?.trim() ?? "",
+    JSON.stringify(server.customHeaders ?? {}),
+    server.useLocalProxy ? "proxy" : "direct",
     typeof server.toolTimeoutSecond === "number" ? Math.max(1, Math.round(server.toolTimeoutSecond)) : "",
     typeof server.heartbeatSecond === "number" ? Math.max(0, Math.round(server.heartbeatSecond)) : ""
   ].join("\n");
@@ -35,7 +37,7 @@ export class McpClientManager {
 
   constructor(options: McpClientManagerOptions = {}) {
     this.idleMs = options.idleMs ?? 60_000;
-    this.createClient = options.createClient ?? ((server) => new McpSseClient(server));
+    this.createClient = options.createClient ?? createMcpClient;
   }
 
   get(server: McpServerConfig, onLog?: (message: string) => void) {

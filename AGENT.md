@@ -54,7 +54,7 @@ See git history (`git log --grep batch`) for details.
 - **Agents bind a load balancer**, not a model directly. Instances inside the LB hold credential + model.
 - **JSON from model output**: import `extractJsonObject` from `src/utils/safeJson.ts`. For new normalize paths use the Zod schemas in `src/schemas/decisions.ts`.
 - **Errors**: use `errorMessage(e)` from `src/utils/errors.ts` instead of `catch (e: any)` — ESLint will reject the latter.
-- **MCP**: go through `mcpClientManager.run(server, ...)` and `mcpToolCatalogCache.load(server, manager, ...)`. Don't `new McpSseClient()` directly except for the McpPanel test-connection button.
+- **MCP**: go through `mcpClientManager.run(server, ...)` and `mcpToolCatalogCache.load(server, manager, ...)`. Use `createMcpClient(server)` for the McpPanel test-connection button so both Streamable HTTP and legacy SSE remain supported.
 
 ## Things that look broken but are intentional
 

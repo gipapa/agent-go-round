@@ -75,6 +75,23 @@ describe("McpClientManager", () => {
     expect(manager.activeClientCount()).toBe(1);
   });
 
+  it("rebuilds the client when remote transport authentication changes", () => {
+    const created: FakeClient[] = [];
+    const manager = new McpClientManager({
+      createClient: () => {
+        const client = new FakeClient();
+        created.push(client);
+        return client;
+      }
+    });
+
+    manager.get(server({ transport: "streamable_http", authToken: "first" }));
+    manager.get(server({ transport: "streamable_http", authToken: "second" }));
+
+    expect(created).toHaveLength(2);
+    expect(created[0].closeCalls).toBe(1);
+  });
+
   it("closes idle clients after the configured idle timeout", () => {
     vi.useFakeTimers();
     const created: FakeClient[] = [];

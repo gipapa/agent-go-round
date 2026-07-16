@@ -138,6 +138,12 @@ export function loadMcpServers(): McpServerConfig[] {
         id: item.id,
         name: item.name,
         sseUrl: item.sseUrl,
+        transport: item.transport === "streamable_http" ? "streamable_http" : "sse",
+        authToken: typeof item.authToken === "string" ? item.authToken : undefined,
+        customHeaders: isRecord(item.customHeaders)
+          ? Object.fromEntries(Object.entries(item.customHeaders).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+          : undefined,
+        useLocalProxy: item.useLocalProxy === true,
         authHint: typeof item.authHint === "string" ? item.authHint : undefined,
         toolTimeoutSecond:
           typeof item.toolTimeoutSecond === "number" && Number.isFinite(item.toolTimeoutSecond)

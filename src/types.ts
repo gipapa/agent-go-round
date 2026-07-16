@@ -224,7 +224,11 @@ export type DocItem = {
 export type McpServerConfig = {
   id: string;
   name: string;
-  sseUrl: string; // MCP over SSE endpoint
+  sseUrl: string; // MCP endpoint URL; field name is retained for stored SSE configs.
+  transport?: "sse" | "streamable_http";
+  authToken?: string;
+  customHeaders?: Record<string, string>;
+  useLocalProxy?: boolean;
   authHint?: string; // Optional note (EventSource can't set headers)
   toolTimeoutSecond?: number;
   heartbeatSecond?: number;

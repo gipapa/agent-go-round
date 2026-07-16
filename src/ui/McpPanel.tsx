@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from "react";
 import { LogEntry, McpServerConfig, McpTool } from "../types";
 import { type McpClientManager } from "../mcp/clientManager";
-import { McpSseClient } from "../mcp/sseClient";
+import { createMcpClient } from "../mcp/client";
 import { listTools, callTool, type McpRequester } from "../mcp/toolRegistry";
 import { generateId } from "../utils/id";
 import { errorMessage } from "../utils/errors";
 import HelpModal from "./HelpModal";
+import { redactMcpUrl } from "../mcp/url";
 
 export default function McpPanel(props: {
   servers: McpServerConfig[];
@@ -21,6 +22,7 @@ export default function McpPanel(props: {
   const [showHelp, setShowHelp] = useState(false);
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
   const [serverDraft, setServerDraft] = useState<McpServerConfig | null>(null);
+  const [customHeadersDraft, setCustomHeadersDraft] = useState("{}");
   const [draftTools, setDraftTools] = useState<McpTool[]>([]);
   const [draftValidated, setDraftValidated] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -51,15 +53,18 @@ export default function McpPanel(props: {
 
   function hasSameConnectionSettings(saved: McpServerConfig, draft: McpServerConfig) {
     return (
+      (saved.transport ?? "sse") === (draft.transport ?? "sse") &&
       saved.sseUrl === draft.sseUrl &&
+      saved.authToken === draft.authToken &&
+      JSON.stringify(saved.customHeaders ?? {}) === JSON.stringify(draft.customHeaders ?? {}) &&
+      saved.useLocalProxy === draft.useLocalProxy &&
       saved.toolTimeoutSecond === draft.toolTimeoutSecond &&
       saved.heartbeatSecond === draft.heartbeatSecond
     );
   }
 
   async function runWithDraftClient<T>(task: (client: McpRequester) => Promise<T>) {
-    const draft = serverDraft;
-    if (!draft) throw new Error("Missing MCP server draft.");
+    const draft = getValidatedDraft();
     const savedServer = props.servers.find((server) => server.id === draft.id) ?? null;
     if (props.clientManager && savedServer && hasSameConnectionSettings(savedServer, draft)) {
       return await props.clientManager.run(
@@ -69,7 +74,7 @@ export default function McpPanel(props: {
       );
     }
 
-    const client = new McpSseClient(draft);
+    const client = createMcpClient(draft);
     client.connect((text) => props.pushLog({ category: "mcp", agent: draft.name, message: text }));
     try {
       return await task(client);
@@ -82,6 +87,7 @@ export default function McpPanel(props: {
     if (server) {
       setEditingServerId(server.id);
       setServerDraft({ ...server });
+      setCustomHeadersDraft(JSON.stringify(server.customHeaders ?? {}, null, 2));
       setDraftTools(props.toolsByServer[server.id] ?? []);
       setDraftValidated(Object.prototype.hasOwnProperty.call(props.toolsByServer, server.id));
     } else {
@@ -89,11 +95,13 @@ export default function McpPanel(props: {
         id: generateId(),
         name: `MCP ${props.servers.length + 1}`,
         sseUrl: "",
+        transport: "sse",
         toolTimeoutSecond: 30,
         heartbeatSecond: 30
       };
       setEditingServerId(next.id);
       setServerDraft(next);
+      setCustomHeadersDraft("{}");
       setDraftTools([]);
       setDraftValidated(false);
     }
@@ -106,6 +114,7 @@ export default function McpPanel(props: {
   function closeEditor() {
     setEditingServerId(null);
     setServerDraft(null);
+    setCustomHeadersDraft("{}");
     setDraftTools([]);
     setDraftValidated(false);
     setDraftError(null);
@@ -141,7 +150,12 @@ export default function McpPanel(props: {
     setServerDraft((current) => {
       if (!current) return current;
       const next = { ...current, ...patch };
-      if (patch.sseUrl !== undefined && patch.sseUrl !== current.sseUrl) {
+      if (
+        (patch.sseUrl !== undefined && patch.sseUrl !== current.sseUrl) ||
+        (patch.transport !== undefined && patch.transport !== current.transport) ||
+        (patch.authToken !== undefined && patch.authToken !== current.authToken) ||
+        (patch.useLocalProxy !== undefined && patch.useLocalProxy !== current.useLocalProxy)
+      ) {
         setDraftValidated(false);
         setDraftTools([]);
         setToolName("");
@@ -151,26 +165,59 @@ export default function McpPanel(props: {
     });
   }
 
+  function parseCustomHeaders() {
+    const parsed = JSON.parse(customHeadersDraft || "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Custom headers 必須是 JSON object。");
+    }
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(parsed)) {
+      if (typeof value !== "string") throw new Error(`Header ${name} 的值必須是字串。`);
+      if (name.trim() && value.trim()) headers[name.trim()] = value.trim();
+    }
+    return headers;
+  }
+
+  function getValidatedDraft() {
+    if (!serverDraft) throw new Error("Missing MCP server draft.");
+    return { ...serverDraft, customHeaders: parseCustomHeaders() };
+  }
+
+  function applyTavilyPreset() {
+    setServerDraft((current) => current ? {
+      ...current,
+      name: current.name.startsWith("MCP ") ? "Tavily" : current.name,
+      transport: "streamable_http",
+      sseUrl: "https://mcp.tavily.com/mcp/",
+      useLocalProxy: true,
+      heartbeatSecond: 0
+    } : current);
+    setDraftValidated(false);
+    setDraftTools([]);
+    setDraftError(null);
+  }
+
   async function connectAndListDraft() {
     if (!serverDraft?.sseUrl.trim()) {
-      setDraftError("請先輸入 SSE URL。");
+      setDraftError("請先輸入 MCP endpoint URL。");
       return;
     }
     setIsConnecting(true);
     setDraftError(null);
-    const client = new McpSseClient(serverDraft);
-    client.connect((text) => props.pushLog({ category: "mcp", agent: serverDraft.name, message: text }));
+    let client: ReturnType<typeof createMcpClient> | null = null;
     try {
+      const validatedDraft = getValidatedDraft();
+      client = createMcpClient(validatedDraft);
+      client.connect((text) => props.pushLog({ category: "mcp", agent: validatedDraft.name, message: text }));
       const tools = await listTools(client);
       setDraftTools(tools);
       setDraftValidated(true);
-      const rpcUrl = deriveRpcUrl(serverDraft.sseUrl);
       props.pushLog({
         category: "mcp",
         agent: serverDraft.name,
         ok: true,
-        message: "MCP endpoints",
-        details: `SSE: ${serverDraft.sseUrl}\nRPC: ${rpcUrl}`
+        message: "MCP endpoint",
+        details: `${validatedDraft.transport === "streamable_http" ? "Streamable HTTP" : "SSE"}: ${redactMcpUrl(validatedDraft.sseUrl)}`
       });
       props.pushLog({
         category: "mcp",
@@ -192,7 +239,7 @@ export default function McpPanel(props: {
         details: message
       });
     } finally {
-      client.close();
+      client?.close();
       setIsConnecting(false);
     }
   }
@@ -225,15 +272,22 @@ export default function McpPanel(props: {
   function saveDraft() {
     if (!serverDraft) return;
     if (!serverDraft.sseUrl.trim()) {
-      setDraftError("請先輸入 SSE URL。");
+      setDraftError("請先輸入 MCP endpoint URL。");
       return;
     }
     if (!draftValidated) {
       setDraftError("請先完成 Connect & List Tools，再儲存。");
       return;
     }
+    let validatedDraft: McpServerConfig;
+    try {
+      validatedDraft = getValidatedDraft();
+    } catch (error) {
+      setDraftError(errorMessage(error));
+      return;
+    }
     const nextServer: McpServerConfig = {
-      ...serverDraft,
+      ...validatedDraft,
       name: serverDraft.name.trim() || `MCP ${props.servers.length + 1}`,
       sseUrl: serverDraft.sseUrl.trim(),
       toolTimeoutSecond: Math.max(1, Math.round(serverDraft.toolTimeoutSecond ?? 30)),
@@ -261,8 +315,7 @@ export default function McpPanel(props: {
       {showHelp ? (
         <HelpModal title="MCP 使用說明與測試方式" onClose={() => setShowHelp(false)}>
           <div style={helpText}>
-            MCP 工具是從 `Active MCP servers` 這個區塊連進來的。系統會先連到 `/mcp/sse`，再把路徑中的 `/sse`
-            自動換成 `/rpc` 作為工具呼叫端點。
+            MCP 工具從 `Active MCP servers` 連入。Remote MCP 請選 Streamable HTTP；舊式本機 server 可繼續使用 SSE，系統會把 `/sse` 換成 `/rpc`。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
             Tool / skill 相關的 prompt templates 已移到 Chat Config 裡的 `Prompt Templates` 面板集中管理，不再放在 MCP 視窗內單獨設定。
@@ -281,7 +334,7 @@ export default function McpPanel(props: {
             <br />
             1. 新增一個 MCP 項目
             <br />
-            2. 在 Edit 視窗中填入 SSE URL
+            2. 選 transport 並填入 MCP endpoint URL
             <br />
             3. 按下 `Connect & List Tools`
             <br />
@@ -321,7 +374,9 @@ export default function McpPanel(props: {
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <button type="button" onClick={() => props.onSelectActive(server.id)} style={rowButtonStyle}>
                   <div style={{ fontWeight: 700 }}>{server.name}</div>
-                  <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>{server.sseUrl || "尚未設定 SSE URL"}</div>
+                  <div style={{ fontSize: 12, opacity: 0.74, marginTop: 4 }}>
+                    {server.transport === "streamable_http" ? "HTTP" : "SSE"} · {server.sseUrl ? redactMcpUrl(server.sseUrl) : "尚未設定 endpoint"}
+                  </div>
                   <div style={{ fontSize: 11, opacity: 0.64, marginTop: 4 }}>
                     {Object.prototype.hasOwnProperty.call(props.toolsByServer, server.id) ? `已載入 ${rowTools.length} 個 tools` : "尚未連線驗證"}
                   </div>
@@ -355,16 +410,70 @@ export default function McpPanel(props: {
               <input value={serverDraft.name} onChange={(e) => updateDraft({ name: e.target.value })} style={inp} placeholder="MCP name" data-tutorial-id="mcp-name-input" />
             </div>
 
+            <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 700 }}>Connection</div>
+              <button type="button" onClick={applyTavilyPreset} style={btnSmall}>Use Tavily preset</button>
+            </div>
+
             <div>
-              <label style={label}>SSE URL</label>
+              <label style={label}>Transport</label>
+              <select
+                value={serverDraft.transport ?? "sse"}
+                onChange={(e) => updateDraft({ transport: e.target.value as McpServerConfig["transport"] })}
+                style={inp}
+              >
+                <option value="streamable_http">Streamable HTTP (remote MCP)</option>
+                <option value="sse">Legacy SSE</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={label}>MCP endpoint URL</label>
               <input
                 value={serverDraft.sseUrl}
                 onChange={(e) => updateDraft({ sseUrl: e.target.value })}
-                placeholder="https://your-mcp-server/mcp/sse"
+                placeholder={serverDraft.transport === "streamable_http" ? "https://remote-mcp.example.com/mcp" : "https://your-mcp-server/mcp/sse"}
                 style={inp}
                 data-tutorial-id="mcp-sse-url-input"
               />
             </div>
+
+            {serverDraft.transport === "streamable_http" ? (
+              <>
+                <div>
+                  <label style={label}>Bearer token</label>
+                  <input
+                    type="password"
+                    value={serverDraft.authToken ?? ""}
+                    onChange={(e) => updateDraft({ authToken: e.target.value })}
+                    placeholder="API token (optional)"
+                    autoComplete="off"
+                    style={inp}
+                  />
+                </div>
+                <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={serverDraft.useLocalProxy ?? false}
+                    onChange={(e) => updateDraft({ useLocalProxy: e.target.checked })}
+                  />
+                  Use local Vite relay (required by Tavily because its endpoint does not allow browser CORS)
+                </label>
+                <div>
+                  <label style={label}>Custom headers (JSON)</label>
+                  <textarea
+                    value={customHeadersDraft}
+                    onChange={(e) => {
+                      setCustomHeadersDraft(e.target.value);
+                      setDraftValidated(false);
+                    }}
+                    rows={4}
+                    style={inp}
+                    spellCheck={false}
+                  />
+                </div>
+              </>
+            ) : null}
 
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
               <div>
@@ -395,7 +504,7 @@ export default function McpPanel(props: {
               <button type="button" onClick={() => void connectAndListDraft()} style={btnPrimarySmall} disabled={isConnecting || !serverDraft.sseUrl.trim()} data-tutorial-id="mcp-connect-list-tools">
                 {isConnecting ? "Connecting..." : "Connect & List Tools"}
               </button>
-              {serverDraft.sseUrl.trim() ? (
+              {serverDraft.transport !== "streamable_http" && serverDraft.sseUrl.trim() ? (
                 <div style={{ fontSize: 12, opacity: 0.72, alignSelf: "center" }}>RPC: {deriveRpcUrl(serverDraft.sseUrl.trim())}</div>
               ) : null}
             </div>
@@ -446,10 +555,10 @@ export default function McpPanel(props: {
             ) : null}
 
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
-              Note: EventSource cannot set custom headers. If your MCP server needs auth, prefer querystring token or same-site cookies. RPC is derived by replacing `/sse` with `/rpc`.
+              Security: token 與 custom headers 會保存在這個瀏覽器的 localStorage，請勿在共用裝置使用。Local relay 只在 `npm run dev` 可用，靜態部署需自行提供同源 MCP gateway。
             </div>
             <div style={{ fontSize: 12, opacity: 0.7 }}>
-              `toolTimeoutSecond` 會中止卡住的 RPC；`heartbeatSecond` 代表閒置超過多久後，下一次工具呼叫前先做一次 `tools/list` 存活檢查。設為 `0` 可停用 heartbeat。
+              `toolTimeoutSecond` 會中止卡住的 request；舊式 SSE 的 `heartbeatSecond` 代表閒置超過多久後，下一次工具呼叫前先做一次 `tools/list` 存活檢查。設為 `0` 可停用 heartbeat。
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>

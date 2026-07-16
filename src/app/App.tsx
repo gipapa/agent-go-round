@@ -7064,7 +7064,13 @@ export default function App() {
     const removed = prev.filter((s) => !nextIds.has(s.id));
     const urlChanged = next.filter((s) => {
       const prevItem = prev.find((p) => p.id === s.id);
-      return prevItem && prevItem.sseUrl !== s.sseUrl;
+      return prevItem && (
+        prevItem.sseUrl !== s.sseUrl ||
+        prevItem.transport !== s.transport ||
+        prevItem.authToken !== s.authToken ||
+        JSON.stringify(prevItem.customHeaders ?? {}) !== JSON.stringify(s.customHeaders ?? {}) ||
+        prevItem.useLocalProxy !== s.useLocalProxy
+      );
     });
     [...removed, ...urlChanged].forEach((server) => {
       mcpClientManager.invalidate(server.id);
@@ -7542,7 +7548,7 @@ export default function App() {
                 <span className="cc-card-hint">IndexedDB 文件庫</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("mcp")} data-tutorial-id="chat-config-mcp-card">
-                <span className="cc-card-label">MCP (SSE)</span>
+                <span className="cc-card-label">MCP</span>
                 <strong className="cc-card-value">{mcpServers.length}</strong>
                 <span className="cc-card-hint">外部工具伺服器</span>
               </button>
@@ -7928,7 +7934,7 @@ export default function App() {
             )}
 
             {configModal === "mcp" && (
-              <HelpModal title="MCP (SSE)" onClose={() => setConfigModal(null)} width="min(560px, 96vw)">
+              <HelpModal title="MCP" onClose={() => setConfigModal(null)} width="min(560px, 96vw)">
                 <ErrorBoundary onError={(error, info) => logRenderError("McpPanel", error, info)}>
                   <McpPanel
                     servers={mcpServers}

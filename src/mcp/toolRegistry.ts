@@ -1,7 +1,7 @@
 import { McpTool } from "../types";
-import { McpSseClient } from "./sseClient";
+import type { McpClient } from "./client";
 
-export type McpRequester = Pick<McpSseClient, "request">;
+export type McpRequester = Pick<McpClient, "request">;
 
 function isMcpTool(value: unknown): value is McpTool {
   return !!value && typeof value === "object" && typeof (value as { name?: unknown }).name === "string";

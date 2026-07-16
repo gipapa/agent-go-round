@@ -1,4 +1,5 @@
 import React from "react";
+import { redactMcpUrl } from "../mcp/url";
 import { AgentConfig, BuiltInToolConfig, McpServerConfig, McpTool, SkillConfig, SkillDocItem, SkillExecutionMode, SkillFileItem } from "../types";
 import { errorMessage } from "../utils/errors";
 import HelpModal from "./HelpModal";
@@ -418,7 +419,7 @@ Then prefer using the built-in tool \`計算\` to obtain the exact result before
             {props.mcpToolCatalog.map(({ server, tools }) => (
               <div key={server.id} className="card" style={{ padding: 12, display: "grid", gap: 8, background: "rgba(255,255,255,0.02)" }}>
                 <div style={{ fontWeight: 700 }}>{server.name}</div>
-                <div style={{ fontSize: 11, opacity: 0.7 }}>{server.sseUrl}</div>
+                <div style={{ fontSize: 11, opacity: 0.7 }}>{redactMcpUrl(server.sseUrl)}</div>
                 {tools.length === 0 ? (
                   <div style={{ fontSize: 12, opacity: 0.72 }}>尚未載入 tools。請先執行 Connect & List Tools。</div>
                 ) : (

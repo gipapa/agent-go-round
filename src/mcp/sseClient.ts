@@ -1,6 +1,7 @@
 import { McpServerConfig } from "../types";
 import { errorMessage } from "../utils/errors";
 import { generateId } from "../utils/id";
+import { redactMcpUrl } from "./url";
 
 type RpcReq<P = unknown> = { id: string; method: string; params?: P };
 type RpcRes<R = unknown> = { id: string; result?: R; error?: unknown };
@@ -137,7 +138,7 @@ export class McpSseClient {
       this.clearConnectTimeout();
       this.connected = true;
       this.markHealthy();
-      this.onLog?.(`MCP SSE connected: ${this.cfg.sseUrl}`);
+      this.onLog?.(`MCP SSE connected: ${redactMcpUrl(this.cfg.sseUrl)}`);
     };
     es.onerror = () => {
       if (this.es !== es) return;
@@ -237,7 +238,7 @@ export class McpSseClient {
         this.invalidateConnection("MCP heartbeat failed");
         throw new Error(String(probe.error));
       }
-      this.onLog?.(`MCP heartbeat OK: ${this.cfg.sseUrl}`);
+      this.onLog?.(`MCP heartbeat OK: ${redactMcpUrl(this.cfg.sseUrl)}`);
     })().finally(() => {
       this.healthCheckPromise = null;
     });
