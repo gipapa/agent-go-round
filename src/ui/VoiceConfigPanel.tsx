@@ -1,12 +1,7 @@
 import React from "react";
 import type { LoadBalancerConfig, VoiceSettings } from "../types";
 import { VOICE_STT_LANGUAGE_OPTIONS, VOICE_TTS_VOICE_OPTIONS } from "../voice/runtime";
-
-export type VoiceProbeState = {
-  running: boolean;
-  ok?: boolean;
-  message?: string;
-};
+import type { VoiceProbeState } from "../voice/useVoiceController";
 
 type VoiceConfigPanelProps = {
   settings: VoiceSettings;

@@ -18,13 +18,9 @@ import {
   SkillPhase,
   SkillRunState,
   SkillTodoItem,
-  SkillTodoSource,
-  SkillTodoStatus,
   DocItem,
   McpServerConfig,
   McpTool,
-  LogEntry,
-  LogOutcome,
   LoadBalancerConfig,
   SkillConfig,
   SkillDocItem,
@@ -47,15 +43,12 @@ import {
   upsertSkillTextFile
 } from "../storage/skillStore";
 import {
-  loadModelCredentials,
-  ModelCredentialEntry,
   McpPromptTemplates,
   loadLoadBalancers,
   loadMcpPromptTemplates,
   loadMcpServers,
   loadUiState,
   saveLoadBalancers,
-  saveModelCredentials,
   saveMcpPromptTemplates,
   saveMcpServers,
   saveUiState
@@ -70,7 +63,6 @@ import { createInitialState as createMagiRenderState, MAGI_UNIT_LAYOUT, MagiPrep
 import { McpClientManager } from "../mcp/clientManager";
 import { formatMcpServerResolutionFailure, resolveMcpServerId } from "../mcp/serverResolver";
 import { McpToolCatalog } from "../mcp/toolCatalog";
-import { callTool, type McpRequester } from "../mcp/toolRegistry";
 import { createToolDashboardHelpers } from "../utils/toolDashboard";
 
 import AgentsPanel from "../ui/AgentsPanel";
@@ -85,8 +77,16 @@ import SkillsPanel from "../ui/SkillsPanel";
 import TutorialGuide from "../ui/TutorialGuide";
 import LoadBalancersPanel from "../ui/LoadBalancersPanel";
 import PromptTemplatesPanel from "../ui/PromptTemplatesPanel";
-import VoiceConfigPanel, { type VoiceProbeState } from "../ui/VoiceConfigPanel";
+import VoiceConfigPanel from "../ui/VoiceConfigPanel";
+import LogPanel from "../ui/LogPanel";
+import CredentialsPanel from "../ui/CredentialsPanel";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
+import {
+  findTutorialAgentBaseInList,
+  findTutorialAgentInList,
+  normalizeTutorialPrimaryAgentList,
+  usesTutorialLoadBalancer
+} from "../onboarding/agentManagement";
 import {
   applyTutorialStepEntry,
   TUTORIAL_DOC_CONTENT,
@@ -100,9 +100,7 @@ import {
   TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
   TUTORIAL_TIME_TOOL_NAME,
   TUTORIAL_MCP_NAME,
-  TUTORIAL_PRIMARY_LOAD_BALANCER_NAME,
   TUTORIAL_PRIMARY_MODEL,
-  TUTORIAL_SECONDARY_LOAD_BALANCER_NAME,
   TUTORIAL_SECONDARY_MODEL
 } from "../onboarding/runtime";
 import {
@@ -125,6 +123,15 @@ import {
 } from "../onboarding/tutorialSkillTemplate";
 import { TutorialScenarioDefinition, TutorialStepEvaluation, TutorialWorkspaceSnapshot } from "../onboarding/types";
 import { getMagiSkillBundle } from "../magi/magiSkills";
+import {
+  ensureManagedMagiAgents,
+  formatManagedMagiAgentName,
+  formatMagiUnitTitle,
+  isManagedMagiAgent,
+  MAGI_MODE_LABELS,
+  matchesManagedMagiUnit,
+  normalizeManagedMagiAgent
+} from "../magi/managedAgents";
 import {
   buildPromptTemplateRuntime,
   getDefaultPromptTemplate,
@@ -160,7 +167,54 @@ import {
 } from "../runtime/skillPlanner";
 import { runMultiTurnSkillRuntime } from "../runtime/multiTurnSkillRuntime";
 import { extractBrowserObservation, formatBrowserObservationDigest } from "../runtime/browserObservation";
+import {
+  buildBrowserHeuristicCompletion,
+  buildBrowserHeuristicDecision,
+  buildGroundedRepoSummaryAnswer,
+  enrichActionBrowserObservation,
+  goalWantsRepoSummary,
+  hasGroundedRepoSummary,
+  normalizeBrowserWorkflowStartUrl
+} from "../runtime/browserWorkflow";
 import { bootstrapTodoList, summarizeTodo } from "../runtime/skillTodo";
+import {
+  extractFirstUrl,
+  inferExplicitToolDecision,
+  normalizeToolDecisionAgainstAvailableTools,
+  parseToolDecision,
+  resolvePreferredBrowserHeadedMode,
+  type ToolEntry
+} from "../runtime/toolDecision";
+import {
+  buildObservationSignature,
+  buildToolActionSignature,
+  callMcpToolWithTimeout,
+  classifyBuiltInToolIntent,
+  classifyMcpToolIntent,
+  getMcpToolTimeoutMs,
+  type ToolIntent
+} from "../runtime/toolExecution";
+import { runLoadBalancedTask, runLoadBalancedTextTask } from "../runtime/loadBalancerRunner";
+import { buildToolDecisionCatalog, buildToolDecisionPrompt } from "../runtime/toolDecisionPrompt";
+import {
+  buildPromptTemplateApiTestSpec,
+  type PromptTemplateApiTestState
+} from "../runtime/promptTemplateTests";
+import {
+  appendToolPromptSummary,
+  asRecord,
+  confirmedFromToolOutput,
+  getThinkStreamingState,
+  mergeSystemText,
+  msg,
+  normalizeImportedMessage,
+  stringifyAny,
+  stripPreviousToolPromptSummaries
+} from "../runtime/chatMessages";
+import { useAppLog } from "./useAppLog";
+import { createLogRequestId } from "../runtime/logging";
+import { fetchCredentialModels } from "../credentials/runtime";
+import { useCredentialController } from "../credentials/useCredentialController";
 import { generateId } from "../utils/id";
 import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
@@ -171,32 +225,21 @@ import {
   SYSTEM_USER_PROFILE_TOOL_ID
 } from "../utils/systemBuiltInTools";
 import { buildToolResultPromptBlock, ToolPromptDetailMode } from "../utils/toolResultSummary";
-import { normalizeCredentialUrl } from "../utils/credential";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 import type { ExecutionDeadline } from "../utils/deadline";
 import { combineSignals, createDeadline } from "../utils/deadline";
 import {
-  normalizeTranscriptSpacing,
-  normalizeVoiceSettings,
-  synthesizeGeminiSpeech,
-  transcribeAudioChunk
+  normalizeVoiceSettings
 } from "../voice/runtime";
-import {
-  createVoiceProbeWavBlob,
-  getVoiceMicrophoneSupportIssue,
-  MIN_VOICE_STT_BLOB_BYTES
-} from "../voice/helpers";
+import { useVoiceController } from "../voice/useVoiceController";
 import {
   applyInstanceFailure,
   applyInstanceSuccess,
-  createCredentialEntry,
-  createCredentialKeyEntry,
   createLoadBalancer,
   createLoadBalancerInstance,
   DEFAULT_INSTANCE_DELAY_SECOND,
   DEFAULT_INSTANCE_MAX_RETRIES,
   DEFAULT_INSTANCE_RESUME_MINUTE,
-  getLoadBalancerResumeMs,
   migrateAgentsToLoadBalancers,
   resolveLoadBalancerCandidates,
   ResolvedLoadBalancerInstance,
@@ -205,15 +248,13 @@ import {
 import { buildAgentFailureContent, classifyRetryableAgentFailure, detectTerminalAgentFailure } from "../utils/agentFailure";
 import {
   describeLoadBalancerAvailability,
-  describeResolvedLoadBalancerCandidate,
-  formatLoadBalancerDateTime
+  describeResolvedLoadBalancerCandidate
 } from "../utils/loadBalancerDiagnostics";
 import { extractJsonObject } from "../utils/safeJson";
 import { errorMessage } from "../utils/errors";
 import {
   normalizeSkillBootstrapPlan,
   normalizeSkillDecision,
-  normalizeToolDecision,
   type BuiltInToolAction,
   type McpAction,
   type SkillBootstrapPlan,
@@ -235,15 +276,6 @@ function pickAdapter(a: AgentConfig) {
   if (a.type === "chrome_prompt") return ChromePromptAdapter;
   if (a.type === "custom") return CustomAdapter;
   return OpenAICompatAdapter;
-}
-
-function msg(
-  role: ChatMessage["role"],
-  content: string,
-  name?: string,
-  meta?: { displayName?: string; avatarUrl?: string }
-): ChatMessage {
-  return { id: generateId(), role, content, name, displayName: meta?.displayName, avatarUrl: meta?.avatarUrl, ts: Date.now() };
 }
 
 type PreparedSkillExecution = {
@@ -271,422 +303,13 @@ type OneToOneTurnResult = {
   spokenContent?: string;
 };
 
-type ToolEntry =
-  | {
-      kind: "mcp";
-      server: McpServerConfig;
-      tool: McpTool;
-    }
-  | {
-      kind: "builtin";
-      tool: BuiltInToolConfig;
-    };
-
-function normalizeToolDecisionAgainstAvailableTools(args: {
-  decision: ToolDecision;
-  availableBuiltinTools: BuiltInToolConfig[];
-  availableMcpServers: McpServerConfig[];
-  availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-}) {
-  if (args.decision.type === "no_tool" || args.decision.type === "builtin_tool_call") {
-    return args.decision;
-  }
-
-  const decision = args.decision;
-  const resolveMcpToolName = () => {
-    const exactMatch = args.availableMcpTools.some((entry) => entry.tools.some((tool) => tool.name === decision.tool));
-    if (exactMatch) return decision.tool;
-    const normalizedToolName = decision.tool.trim().toLowerCase();
-    const aliases = new Map<string, string>([
-      ["visit", "browser_open"],
-      ["open_url", "browser_open"],
-      ["openurl", "browser_open"],
-      ["open", "browser_open"],
-      ["snapshot", "browser_snapshot"],
-      ["read", "browser_snapshot"]
-    ]);
-    return aliases.get(normalizedToolName) ?? decision.tool;
-  };
-  const resolvedToolName = resolveMcpToolName();
-  const serverResolution = resolveMcpServerId({
-    requestedServerId: decision.serverId,
-    toolName: resolvedToolName,
-    availableMcpTools: args.availableMcpTools
-  });
-  const resolvedServerId = serverResolution.ok ? serverResolution.serverId : undefined;
-  const matchingBuiltIn = args.availableBuiltinTools.find((tool) => tool.name === resolvedToolName) ?? null;
-  if (!matchingBuiltIn) {
-    return {
-      ...decision,
-      tool: resolvedToolName,
-      serverId: resolvedServerId
-    };
-  }
-
-  const matchingServer = resolvedServerId
-    ? args.availableMcpServers.find((server) => server.id === resolvedServerId) ?? null
-    : null;
-  const matchingMcpTool = resolvedServerId
-    ? args.availableMcpTools
-        .find((entry) => entry.server.id === resolvedServerId)
-        ?.tools.find((tool) => tool.name === resolvedToolName) ?? null
-    : null;
-
-  if (matchingServer && matchingMcpTool) {
-    return {
-      ...decision,
-      tool: resolvedToolName,
-      serverId: resolvedServerId
-    };
-  }
-
-  return {
-    type: "builtin_tool_call" as const,
-    tool: resolvedToolName,
-    input: decision.input
-  };
-}
-
-function inferExplicitToolDecision(args: {
-  input: string;
-  availableBuiltinTools: BuiltInToolConfig[];
-  availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-}) {
-  const normalizedInput = String(args.input ?? "").toLowerCase();
-  if (!/(明確使用|使用|呼叫|call|use)/i.test(normalizedInput)) {
-    return null;
-  }
-
-  const findMcpTool = (toolName: string) =>
-    args.availableMcpTools.find((entry) => entry.tools.some((tool) => tool.name === toolName)) ?? null;
-
-  if (normalizedInput.includes("browser_open")) {
-    const match = findMcpTool("browser_open");
-    const url = extractFirstUrl(args.input);
-    if (match && url) {
-      return { type: "mcp_call" as const, serverId: match.server.id, tool: "browser_open", input: { url } };
-    }
-  }
-
-  if (normalizedInput.includes("browser_snapshot")) {
-    const match = findMcpTool("browser_snapshot");
-    if (match) {
-      return { type: "mcp_call" as const, serverId: match.server.id, tool: "browser_snapshot", input: {} };
-    }
-  }
-
-  if (normalizedInput.includes("get_user_profile")) {
-    const builtIn = args.availableBuiltinTools.find((tool) => tool.name === "get_user_profile") ?? null;
-    if (builtIn) {
-      return { type: "builtin_tool_call" as const, tool: "get_user_profile", input: {} };
-    }
-  }
-
-  return null;
-}
 type ExportPayload =
   | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
   | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
 
-function extractPlainTextToolDecision(text: string): ToolDecision | null {
-  const raw = String(text ?? "").trim();
-  if (!raw) return null;
-  if (/^no_tool$/i.test(raw)) return { type: "no_tool" };
-
-  const matchToolCall = (toolName: string) => {
-    const regex = new RegExp(`\\b${toolName}\\s*\\(([^)]*)\\)`, "i");
-    return raw.match(regex);
-  };
-  const extractFirstArgument = (value: string) => {
-    const cleaned = String(value ?? "")
-      .trim()
-      .replace(/^["'`]/, "")
-      .replace(/["'`]$/, "");
-    return cleaned.split(/\s*,\s*/, 1)[0]?.trim() ?? "";
-  };
-
-  const browserOpenCall = matchToolCall("browser_open") ?? matchToolCall("visit");
-  if (browserOpenCall) {
-    const url = extractFirstArgument(browserOpenCall[1]);
-    return {
-      type: "mcp_call",
-      serverId: "",
-      tool: /visit/i.test(browserOpenCall[0]) ? "visit" : "browser_open",
-      input: url ? { url } : {}
-    };
-  }
-
-  const browserSnapshotCall = matchToolCall("browser_snapshot") ?? matchToolCall("snapshot") ?? matchToolCall("read");
-  if (browserSnapshotCall) {
-    return {
-      type: "mcp_call",
-      serverId: "",
-      tool: /browser_snapshot/i.test(browserSnapshotCall[0]) ? "browser_snapshot" : "snapshot",
-      input: {}
-    };
-  }
-
-  return null;
-}
-
-function parseToolDecision(raw: string) {
-  return normalizeToolDecision(extractJsonObject(raw)) ?? extractPlainTextToolDecision(raw);
-}
-
-function extractFirstUrl(text: string) {
-  const direct = String(text ?? "").match(/https?:\/\/[^\s"'`)>]+/i)?.[0];
-  if (direct) return direct;
-  const www = String(text ?? "").match(/\bwww\.[^\s"'`)>]+/i)?.[0];
-  return www ? `https://${www}` : undefined;
-}
-
-function resolvePreferredBrowserHeadedMode(text: string) {
-  const normalized = String(text ?? "").toLowerCase();
-  if (!normalized.trim()) return false;
-
-  const headedPatterns = [
-    /視窗模式/,
-    /有視窗/,
-    /可見瀏覽器/,
-    /顯示瀏覽器/,
-    /headed/,
-    /\bhead mode\b/,
-    /head模式/,
-    /window mode/,
-    /visible browser/
-  ];
-  if (headedPatterns.some((pattern) => pattern.test(normalized))) {
-    return true;
-  }
-
-  const headlessPatterns = [/headless/, /無視窗/, /不要開視窗/, /hidden browser/];
-  if (headlessPatterns.some((pattern) => pattern.test(normalized))) {
-    return false;
-  }
-
-  return false;
-}
-
-const MAGI_MODE_LABELS: Record<MagiMode, string> = {
-  magi_vote: "S.C. Magi System (基本版: 三賢人同時表決)",
-  magi_consensus: "S.C. Magi System (進階版: 三賢人共識)"
-};
-
-const MAGI_RESERVED_PREFIX = "[系統保留]";
-const TUTORIAL_LOAD_BALANCER_NAMES = new Set([TUTORIAL_PRIMARY_LOAD_BALANCER_NAME, TUTORIAL_SECONDARY_LOAD_BALANCER_NAME]);
-
-const MAGI_AGENT_DESCRIPTIONS: Record<MagiUnitId, string> = {
-  Melchior: "S.C. MAGI 科學家單元。偏邏輯、證據、技術可行性與錯誤檢查。",
-  Balthasar: "S.C. MAGI 母親單元。偏安全、人因、照護、營運穩定與使用者影響。",
-  Casper: "S.C. MAGI 女人單元。偏直覺、自保、政治現實、風險與動機判讀。"
-};
-
-function normalizeMagiLookupKey(name: string) {
-  return name.trim().toLowerCase();
-}
-
-function formatManagedMagiAgentName(unitId: MagiUnitId) {
-  return `${MAGI_RESERVED_PREFIX} ${unitId}`;
-}
-
-function formatMagiUnitTitle(unitId: MagiUnitId) {
-  const entry = MAGI_UNIT_LAYOUT.find((item) => item.unitId === unitId);
-  return entry ? `${unitId} · ${entry.unitNumber}` : unitId;
-}
-
-function isManagedMagiAgent(agent: AgentConfig | null | undefined) {
-  return !!agent && agent.managedBy === "magi" && !!agent.managedUnitId;
-}
-
-function matchesManagedMagiUnit(agent: AgentConfig, unitId: MagiUnitId) {
-  if (agent.managedBy !== "magi") return false;
-  if (agent.managedUnitId === unitId) return true;
-  const normalizedName = normalizeMagiLookupKey(agent.name);
-  return normalizedName === normalizeMagiLookupKey(unitId) || normalizedName === normalizeMagiLookupKey(formatManagedMagiAgentName(unitId));
-}
-
-function isTutorialPrimaryAgent(agent: AgentConfig | null | undefined) {
-  return !!agent && agent.tutorialRole === TUTORIAL_AGENT_ROLE && !isManagedMagiAgent(agent);
-}
-
-function usesTutorialLoadBalancer(agent: AgentConfig, loadBalancers: LoadBalancerConfig[]) {
-  if (!agent.loadBalancerId) return false;
-  const loadBalancer = loadBalancers.find((entry) => entry.id === agent.loadBalancerId) ?? null;
-  return !!loadBalancer && TUTORIAL_LOAD_BALANCER_NAMES.has(loadBalancer.name.trim());
-}
-
-function createManagedMagiAgent(unitId: MagiUnitId): AgentConfig {
-  return {
-    id: generateId(),
-    name: formatManagedMagiAgentName(unitId),
-    type: "openai_compat",
-    description: MAGI_AGENT_DESCRIPTIONS[unitId],
-    loadBalancerId: "",
-    managedBy: "magi",
-    managedUnitId: unitId,
-    tutorialRole: undefined,
-    enableDocs: false,
-    enableMcp: false,
-    enableBuiltInTools: false,
-    enableSkills: true,
-    allowedDocIds: [],
-    allowedMcpServerIds: [],
-    allowedBuiltInToolIds: [],
-    allowedSkillIds: [],
-    capabilities: { streaming: true }
-  };
-}
-
-function normalizeManagedMagiAgent(agent: AgentConfig, unitId: MagiUnitId): AgentConfig {
-  return {
-    ...agent,
-    name: formatManagedMagiAgentName(unitId),
-    type: "openai_compat",
-    description: MAGI_AGENT_DESCRIPTIONS[unitId],
-    managedBy: "magi",
-    managedUnitId: unitId,
-    tutorialRole: undefined,
-    enableDocs: false,
-    enableMcp: false,
-    enableBuiltInTools: false,
-    enableSkills: true,
-    allowedDocIds: [],
-    allowedMcpServerIds: [],
-    allowedBuiltInToolIds: [],
-    allowedSkillIds: []
-  };
-}
-
-function stringifyAny(v: unknown): string {
-  if (v === null || v === undefined) return String(v);
-  if (typeof v === "string") return v;
-  try {
-    return JSON.stringify(v, null, 2);
-  } catch {
-    return String(v);
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-}
-
-function confirmedFromToolOutput(value: unknown): boolean | null {
-  const record = asRecord(value);
-  return typeof record?.confirmed === "boolean" ? record.confirmed : null;
-}
-
-function mergeSystemText(...parts: Array<string | undefined>) {
-  return parts
-    .map((part) => String(part ?? "").trim())
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function getThinkStreamingState(buffer: string) {
-  const trimmed = buffer.trimStart();
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith("<think>")) {
-    return {
-      hideWhileStreaming: !lower.includes("</think>"),
-      statusText: lower.includes("</think>") ? undefined : "思考中…"
-    };
-  }
-  if ("<think>".startsWith(lower)) {
-    return {
-      hideWhileStreaming: true,
-      statusText: "思考中…"
-    };
-  }
-  return {
-    hideWhileStreaming: false,
-    statusText: undefined
-  };
-}
-
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
-type LogSortKey = "category" | "agent" | "outcome" | "requestId" | "ts" | "message";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
 type AppEntryMode = "landing" | "workspace";
-const PROMPT_JSON_PLACEHOLDERS = {
-  noToolJson: '{"type":"no_tool"}',
-  userProfileJson: '{"type":"builtin_tool_call","tool":"get_user_profile","input":{}}',
-  builtinToolJson: '{"type":"builtin_tool_call","tool":"your_tool_name","input":{}}',
-  mcpCallJson: '{"type":"mcp_call","serverId":"...","tool":"...","input":{}}'
-} as const;
-
-function inferLogOutcome(entry: Pick<LogEntry, "ok" | "level" | "outcome">): LogOutcome {
-  if (entry.outcome) return entry.outcome;
-  if (entry.ok === true) return "success";
-  if (entry.ok === false) return "failure";
-  if (entry.level === "error") return "failure";
-  if (entry.level === "warn") return "degraded";
-  return "info";
-}
-
-function createLogRequestId(prefix: string) {
-  return `${prefix}-${Date.now().toString(36)}-${generateId().slice(0, 6)}`;
-}
-
-function formatLogOutcomeLabel(outcome: LogOutcome) {
-  switch (outcome) {
-    case "success":
-      return "SUCCESS";
-    case "failure":
-      return "FAILURE";
-    case "degraded":
-      return "DEGRADED";
-    case "info":
-    default:
-      return "INFO";
-  }
-}
-
-function formatLogEntryForClipboard(entry: LogEntry) {
-  const lines = [
-    `request_id=${entry.requestId ?? "-"}`,
-    `category=${entry.category}`,
-    `agent=${entry.agent ?? "-"}`,
-    `stage=${entry.stage ?? "-"}`,
-    `outcome=${entry.outcome ?? inferLogOutcome(entry)}`,
-    `time=${new Date(entry.ts).toISOString()}`,
-    `message=${entry.message}`
-  ];
-  if (entry.details?.trim()) {
-    lines.push("", entry.details.trim());
-  }
-  return lines.join("\n");
-}
-
-async function copyText(value: string) {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value);
-      return true;
-    }
-  } catch {
-    // Fall through to textarea fallback below.
-  }
-
-  try {
-    const area = document.createElement("textarea");
-    area.value = value;
-    area.setAttribute("readonly", "true");
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    area.style.pointerEvents = "none";
-    document.body.appendChild(area);
-    area.focus();
-    area.select();
-    area.setSelectionRange(0, area.value.length);
-    const copied = document.execCommand("copy");
-    area.remove();
-    return copied;
-  } catch {
-    return false;
-  }
-}
-
 function getUserProfileToolPayload(profile: UserProfile) {
   return {
     name: profile.name,
@@ -698,151 +321,6 @@ function getUserProfileToolPayload(profile: UserProfile) {
 function clampHistoryLimit(value: number) {
   if (!Number.isFinite(value)) return 10;
   return Math.max(1, Math.min(200, Math.round(value)));
-}
-
-function findTutorialAgentBaseInList(agents: AgentConfig[], _loadBalancers: LoadBalancerConfig[]) {
-  return agents.find((agent) => isTutorialPrimaryAgent(agent)) ?? null;
-}
-
-function findTutorialAgentInList(agents: AgentConfig[], loadBalancers: LoadBalancerConfig[]) {
-  const agent = findTutorialAgentBaseInList(agents, loadBalancers);
-  if (!agent) return null;
-  if (
-    agent.enableDocs === false &&
-    agent.enableMcp === false &&
-    agent.enableBuiltInTools === false &&
-    agent.enableSkills === false
-  ) {
-    return agent;
-  }
-  return null;
-}
-
-function normalizeTutorialPrimaryAgentList(agents: AgentConfig[], loadBalancers: LoadBalancerConfig[]) {
-  const taggedAgents = agents.filter((agent) => isTutorialPrimaryAgent(agent));
-  const preferredTagged = taggedAgents[0] ?? null;
-  const legacyCandidates = agents.filter((agent) => !isManagedMagiAgent(agent) && usesTutorialLoadBalancer(agent, loadBalancers));
-  const fallbackLegacy = !preferredTagged && legacyCandidates.length === 1 ? legacyCandidates[0] : null;
-  const primaryId = preferredTagged?.id ?? fallbackLegacy?.id ?? null;
-
-  let changed = false;
-  const next = agents.map((agent) => {
-    if (isManagedMagiAgent(agent)) {
-      if (agent.tutorialRole !== undefined) {
-        changed = true;
-        return { ...agent, tutorialRole: undefined };
-      }
-      return agent;
-    }
-
-    const shouldBePrimary = primaryId !== null && agent.id === primaryId;
-    const nextRole: AgentConfig["tutorialRole"] = shouldBePrimary ? TUTORIAL_AGENT_ROLE : undefined;
-    if (agent.tutorialRole !== nextRole) {
-      changed = true;
-      return { ...agent, tutorialRole: nextRole };
-    }
-    return agent;
-  });
-
-  return changed ? next : agents;
-}
-
-function ensureManagedMagiAgents(agents: AgentConfig[]) {
-  let changed = false;
-  const next = [...agents];
-
-  MAGI_UNIT_LAYOUT.forEach(({ unitId }) => {
-    const matches = next.filter((agent) => matchesManagedMagiUnit(agent, unitId));
-    if (matches.length === 0) {
-      next.push(createManagedMagiAgent(unitId));
-      changed = true;
-      return;
-    }
-    const current = matches[0];
-    const normalized = normalizeManagedMagiAgent(current, unitId);
-    if (JSON.stringify(current) !== JSON.stringify(normalized)) {
-      const index = next.findIndex((agent) => agent.id === current.id);
-      if (index >= 0) {
-        next[index] = normalized;
-        changed = true;
-      }
-    }
-  });
-
-  return changed ? next : agents;
-}
-
-function normalizeImportedMessage(input: unknown): ChatMessage | null {
-  const record = asRecord(input);
-  if (!record) return null;
-  if (typeof record.role !== "string" || typeof record.content !== "string") return null;
-  if (!["system", "user", "assistant", "tool"].includes(record.role)) return null;
-  const isTraceEntry = (entry: unknown): entry is Record<string, unknown> => {
-    const item = asRecord(entry);
-    return !!item && typeof item.label === "string" && typeof item.content === "string";
-  };
-  const isTodoItem = (entry: unknown): entry is Record<string, unknown> => {
-    const item = asRecord(entry);
-    return (
-      !!item &&
-      typeof item.id === "string" &&
-      typeof item.label === "string" &&
-      ["pending", "in_progress", "completed", "blocked"].includes(String(item.status)) &&
-      ["skill", "planner", "system"].includes(String(item.source))
-    );
-  };
-  const skillTrace = Array.isArray(record.skillTrace)
-    ? record.skillTrace
-        .filter(isTraceEntry)
-        .map((entry) => ({ label: String(entry.label), content: String(entry.content) } satisfies ChatTraceEntry))
-    : undefined;
-  const skillTodo = Array.isArray(record.skillTodo)
-    ? record.skillTodo
-        .filter(isTodoItem)
-        .map(
-          (item) =>
-            ({
-              id: String(item.id),
-              label: String(item.label),
-              status: item.status as SkillTodoStatus,
-              source: item.source as SkillTodoSource,
-              reason: typeof item.reason === "string" ? item.reason : undefined,
-              updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now()
-            }) satisfies SkillTodoItem
-        )
-    : undefined;
-  const skillPhase =
-    typeof record.skillPhase === "string" &&
-    [
-      "skill_load",
-      "bootstrap_plan",
-      "observe",
-      "plan_next_step",
-      "act",
-      "sync_state",
-      "completion_gate",
-      "manual_gate",
-      "final_answer",
-      "verify_refine"
-    ].includes(record.skillPhase)
-      ? (record.skillPhase as SkillPhase)
-      : undefined;
-  return {
-    id: typeof record.id === "string" ? record.id : generateId(),
-    role: record.role as ChatMessage["role"],
-    content: record.content,
-    name: typeof record.name === "string" ? record.name : undefined,
-    displayName: typeof record.displayName === "string" ? record.displayName : undefined,
-    avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl : undefined,
-    statusText: typeof record.statusText === "string" ? record.statusText : undefined,
-    isStreaming: record.isStreaming === true,
-    hideWhileStreaming: record.hideWhileStreaming === true,
-    skillTrace: skillTrace?.length ? skillTrace : undefined,
-    skillGoal: typeof record.skillGoal === "string" && record.skillGoal.trim() ? record.skillGoal : undefined,
-    skillTodo: skillTodo?.length ? skillTodo : undefined,
-    skillPhase,
-    ts: typeof record.ts === "number" ? record.ts : Date.now()
-  };
 }
 
 function downloadBlob(filename: string, content: string, type: string) {
@@ -871,26 +349,6 @@ function downloadFileBlob(filename: string, blob: Blob) {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-const TOOL_SUMMARY_MARKERS = ["\n\n請根據以下工具摘要完成回答：\n", "\n\n請將以下工具資訊一起納入回答：\n"];
-
-function stripPreviousToolPromptSummaries(input: string) {
-  let next = input;
-  for (const marker of TOOL_SUMMARY_MARKERS) {
-    const index = next.indexOf(marker);
-    if (index !== -1) {
-      next = next.slice(0, index).trimEnd();
-    }
-  }
-  return next;
-}
-
-function appendToolPromptSummary(input: string, summaryBlock: string) {
-  const base = stripPreviousToolPromptSummaries(input);
-  return `${base}\n\n請根據以下工具摘要完成回答：\n${summaryBlock}\n\n請從目前已建立的頁面、session、工具結果或上下文繼續下一步，不要無理由重複上一個工具動作。若已成功打開頁面，優先觀察、讀取、填寫、點擊或等待，而不是再次打開同一個網址。`;
-}
-
-type ToolIntent = "observe" | "state_change" | "control";
 
 function compactSupportText(text: string, maxChars: number) {
   const normalized = text.replace(/\r/g, "").trim();
@@ -1002,136 +460,6 @@ type ToolAugmentationResult = {
   browserObservation?: BrowserObservationDigest | null;
   serverId?: string;
 };
-
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  return `{${Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`)
-    .join(",")}}`;
-}
-
-function normalizeToolInputForSignature(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeToolInputForSignature(item));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  const normalizedEntries = Object.entries(value as Record<string, unknown>)
-    .filter(([key, entryValue]) => {
-      if (entryValue === undefined || entryValue === null || entryValue === "" || entryValue === false) return false;
-      if (key === "session" || key === "timestamp" || key === "requestId") return false;
-      return true;
-    })
-    .map(([key, entryValue]) => [key, normalizeToolInputForSignature(entryValue)]);
-
-  return Object.fromEntries(normalizedEntries);
-}
-
-function buildToolActionSignature(args: {
-  kind: "builtin" | "mcp";
-  toolName: string;
-  serverId?: string;
-  input?: unknown;
-}) {
-  return `${args.kind}:${args.serverId ?? ""}:${args.toolName}:${stableStringify(normalizeToolInputForSignature(args.input ?? {}))}`;
-}
-
-const DEFAULT_MCP_TOOL_TIMEOUT_MS = 30000;
-
-function getMcpToolTimeoutMs(server: McpServerConfig, toolName: string) {
-  if (typeof server.toolTimeoutSecond === "number" && Number.isFinite(server.toolTimeoutSecond)) {
-    return Math.max(1000, Math.round(server.toolTimeoutSecond) * 1000);
-  }
-  const normalized = String(toolName ?? "").trim().toLowerCase();
-  if (!normalized) return DEFAULT_MCP_TOOL_TIMEOUT_MS;
-  if (normalized.includes("open")) return 45000;
-  if (normalized.includes("wait")) return 45000;
-  if (normalized.includes("snapshot") || normalized.includes("screenshot")) return 30000;
-  return DEFAULT_MCP_TOOL_TIMEOUT_MS;
-}
-
-async function callMcpToolWithTimeout(client: McpRequester, name: string, input: unknown, timeoutMs: number) {
-  let timeoutId: number | null = null;
-  try {
-    return await Promise.race([
-      callTool(client, name, input ?? {}),
-      new Promise<never>((_, reject) => {
-        timeoutId = window.setTimeout(() => {
-          reject(new Error(`MCP tool timed out after ${Math.round(timeoutMs / 1000)}s`));
-        }, timeoutMs);
-      })
-    ]);
-  } finally {
-    if (timeoutId !== null) {
-      window.clearTimeout(timeoutId);
-    }
-  }
-}
-
-function hashString(value: string) {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
-}
-
-function buildObservationSignature(output: unknown) {
-  return hashString(stableStringify(normalizeToolInputForSignature(output ?? {})));
-}
-
-function goalWantsFirstRankedTarget(text: string) {
-  const normalized = String(text ?? "").toLowerCase();
-  return /(第一名|第一個|首個|top|first)/i.test(normalized) && /(repo|repository|專案|trend|trending|熱門|排行)/i.test(normalized);
-}
-
-function goalWantsRepoSummary(text: string) {
-  return /(內容|摘要|summary|介紹|readme|repo|repository|專案)/i.test(String(text ?? ""));
-}
-
-function normalizeRepoLabel(value: string) {
-  return String(value ?? "").replace(/\s*\/\s*/g, "/").replace(/\.git$/i, "").trim();
-}
-
-function getMeaningfulContentHints(observation?: BrowserObservationDigest | null) {
-  if (!observation) return [];
-  return observation.contentHints
-    .map((hint) => String(hint ?? "").trim())
-    .filter(Boolean)
-    .filter((hint) => !/^(homepage|platform|solutions|resources|open source|enterprise)$/i.test(hint))
-    .filter((hint) => !/^(sign in|sign up|登入|註冊)$/i.test(hint))
-    .filter((hint) => !/^(issues \d+|pull requests \d+|fork \d+|actions|projects|security|insights)$/i.test(hint))
-    .filter((hint) => !/^permalink:/i.test(hint));
-}
-
-function hasGroundedRepoSummary(observation?: BrowserObservationDigest | null) {
-  if (!observation || observation.pageKind !== "repo_page") return false;
-  return !!observation.repoName || getMeaningfulContentHints(observation).length > 0;
-}
-
-function buildGroundedRepoSummaryAnswer(observation?: BrowserObservationDigest | null) {
-  if (!hasGroundedRepoSummary(observation)) return null;
-  const repoName = observation?.repoName ? normalizeRepoLabel(observation.repoName) : "目前頁面上的目標 repository";
-  const hints = getMeaningfulContentHints(observation).slice(0, 6);
-
-  return [
-    "【目前狀態】",
-    `已成功進入目標 repository 頁面：${repoName}。`,
-    "",
-    "【頁面內容摘要】",
-    `專案名稱：${repoName}`,
-    hints.length ? `可見重點：\n- ${hints.join("\n- ")}` : "這一輪已確認進入 repo 頁面，但沒有擷取到足夠的 README 文字重點。",
-    "",
-    "【說明】",
-    "以上摘要直接根據目前頁面可見內容整理，避免引用未觀察到的 README 細節。"
-  ].join("\n");
-}
 
 function isSequentialThinkingSkill(skill?: SkillConfig | null) {
   if (!skill) return false;
@@ -1258,709 +586,8 @@ function buildEmptyResponseFallbackContent(task: string, toolResult?: ToolAugmen
   return buildAgentFailureContent("模型沒有回傳任何內容。", task);
 }
 
-function normalizeBrowserWorkflowStartUrl(userInput: string, startUrl: string) {
-  const raw = String(startUrl ?? "").trim();
-  if (!raw) return raw;
-  try {
-    const url = new URL(raw);
-    const isGitHubTrending = /(^|\.)github\.com$/i.test(url.hostname) && url.pathname === "/trending";
-    if (isGitHubTrending && goalWantsFirstRankedTarget(userInput)) {
-      url.searchParams.delete("language");
-      url.searchParams.delete("spoken_language_code");
-      url.searchParams.delete("spokenLanguage");
-      url.searchParams.delete("dateRange");
-      url.searchParams.set("since", "daily");
-    }
-    return url.toString();
-  } catch {
-    return raw;
-  }
-}
-
-function buildBrowserHeuristicDecision(args: {
-  state: SkillRunState;
-  userInput: string;
-  resolveMcpServerId: (toolName: string) => string | null;
-}) {
-  const observation = args.state.lastBrowserObservation;
-  if (!observation) return null;
-
-  if (
-    goalWantsFirstRankedTarget(args.userInput) &&
-    observation.pageKind === "ranked_list" &&
-    observation.sourceTool !== "browser_click" &&
-    observation.rankedTargets.length
-  ) {
-    const browserClickServerId = args.resolveMcpServerId("browser_click");
-    if (browserClickServerId) {
-      const topTarget = observation.rankedTargets[0];
-      return {
-        type: "act" as const,
-        reason: `Structured browser observation identified the top ranked target ${topTarget.label}; click it directly to advance the workflow.`,
-        toolKind: "mcp" as const,
-        toolName: "browser_click",
-        input: {
-          selector: topTarget.ref
-        }
-      };
-    }
-  }
-
-  if (goalWantsRepoSummary(args.userInput) && hasGroundedRepoSummary(observation)) {
-    return {
-      type: "finish" as const,
-      reason:
-        observation.repoName && getMeaningfulContentHints(observation).length
-          ? `Structured browser observation confirms the workflow is already on repo page ${observation.repoName} with grounded content hints collected.`
-          : "Structured browser observation confirms the workflow reached the target repository page."
-    };
-  }
-
-  return null;
-}
-
-function buildBrowserHeuristicCompletion(args: {
-  state: SkillRunState;
-  userInput: string;
-}) {
-  const observation = args.state.lastBrowserObservation;
-  if (!observation) return null;
-  if (observation.blockedReason) {
-    return {
-      type: "complete" as const,
-      reason: observation.blockedReason,
-      todoIds: args.state.todo.map((item) => item.id)
-    };
-  }
-  if (goalWantsRepoSummary(args.userInput) && hasGroundedRepoSummary(observation)) {
-    return {
-      type: "complete" as const,
-      reason:
-        observation.repoName && getMeaningfulContentHints(observation).length
-          ? `Reached repository page ${observation.repoName} and collected grounded page content hints for final summarization.`
-          : "Reached the requested repository page and observed its main content."
-    };
-  }
-  return null;
-}
-
-function enrichActionBrowserObservation(args: {
-  state: SkillRunState;
-  decision: Extract<SkillStepDecision, { type: "act" }>;
-  browserObservation?: BrowserObservationDigest | null;
-}) {
-  const observation = args.browserObservation ? { ...args.browserObservation } : null;
-  if (!observation) return observation;
-
-  const decisionInput =
-    args.decision.input && typeof args.decision.input === "object" ? (args.decision.input as Record<string, unknown>) : {};
-  if (args.decision.toolName === "browser_click" && typeof decisionInput.selector === "string") {
-    const selector = decisionInput.selector.trim();
-    const clickedTarget = args.state.lastBrowserObservation?.rankedTargets.find((target) => target.ref === selector) ?? null;
-    if (clickedTarget && !observation.repoName) {
-      observation.repoName = normalizeRepoLabel(clickedTarget.label);
-    }
-    if (/^done$/i.test(String(observation.title ?? "").trim())) {
-      observation.title = undefined;
-    }
-    if (observation.pageKind === "ranked_list" && !observation.rankedTargets.length && !observation.url) {
-      observation.pageKind = "unknown";
-      observation.contentHints = [];
-    }
-  }
-
-  return observation;
-}
-
-function classifyToolIntentFromText(name: string, description?: string): ToolIntent {
-  const haystack = `${name} ${description ?? ""}`.toLowerCase();
-  const controlHints = ["confirm", "approval", "consent", "request", "ask user", "prompt user", "manual"];
-  const observeHints = ["snapshot", "get ", "get_", "read", "inspect", "list", "query", "text", "content", "url", "status", "state", "screenshot"];
-  const stateChangeHints = ["open", "click", "fill", "type", "write", "submit", "wait", "close", "navigate", "press"];
-
-  if (controlHints.some((hint) => haystack.includes(hint))) return "control";
-  if (observeHints.some((hint) => haystack.includes(hint))) return "observe";
-  if (stateChangeHints.some((hint) => haystack.includes(hint))) return "state_change";
-  return "state_change";
-}
-
-function classifyBuiltInToolIntent(tool: BuiltInToolConfig): ToolIntent {
-  return classifyToolIntentFromText(tool.name, tool.description);
-}
-
-function classifyMcpToolIntent(tool: McpTool): ToolIntent {
-  return classifyToolIntentFromText(tool.name, tool.description);
-}
-
-type CredentialTestState = {
-  ok: boolean;
-  message: string;
-};
-
-async function testCredentialConnection(slot: ModelCredentialEntry, apiKey: string): Promise<CredentialTestState> {
-  const endpoint = normalizeCredentialUrl(slot.endpoint);
-  if (!endpoint) {
-    throw new Error("請先設定 endpoint。");
-  }
-  if (slot.preset === "chrome_prompt") {
-    return { ok: true, message: "Chrome Prompt provider 不需要遠端連線測試。" };
-  }
-
-  if (slot.preset === "gemini") {
-    const res = await fetch(`${endpoint}/models`, {
-      headers: apiKey.trim() ? { "x-goog-api-key": apiKey.trim() } : undefined
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      if (res.status === 401 || res.status === 403) {
-        throw new Error("已連到 Gemini provider，但 API key 無效或沒有權限。");
-      }
-      if (res.status === 404) {
-        throw new Error("已連到 endpoint，但找不到 /models。請確認這是不是 Gemini API endpoint。");
-      }
-      throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
-    }
-
-    const json = asRecord(await res.json().catch(() => null));
-    const count = Array.isArray(json?.models) ? json.models.length : undefined;
-    return {
-      ok: true,
-      message: count === undefined ? "測試成功：provider 有回應。" : `測試成功：可用模型 ${count} 個。`
-    };
-  }
-
-  const res = await fetch(`${endpoint}/models`, {
-    headers: apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : undefined
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    if (res.status === 401 || res.status === 403) {
-      throw new Error("已連到 provider，但 API key 無效或沒有權限。");
-    }
-    if (res.status === 404) {
-      throw new Error("已連到 endpoint，但找不到 /models。請確認這是不是 OpenAI-compatible endpoint。");
-    }
-    throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
-  }
-
-  const json = asRecord(await res.json().catch(() => null));
-  const data = Array.isArray(json?.data) ? json.data : null;
-  const count = data ? data.filter((item) => asRecord(item)?.active !== false).length : undefined;
-  return {
-    ok: true,
-    message: count === undefined ? "測試成功：provider 有回應。" : `測試成功：可用模型 ${count} 個。`
-  };
-}
-
-async function fetchCredentialModels(slot: ModelCredentialEntry, apiKey: string): Promise<string[]> {
-  if (slot.preset === "chrome_prompt") {
-    return ["chrome_prompt"];
-  }
-  const endpoint = normalizeCredentialUrl(slot.endpoint);
-  if (!endpoint) {
-    throw new Error("請先設定 endpoint。");
-  }
-
-  if (slot.preset === "gemini") {
-    const res = await fetch(`${endpoint}/models`, {
-      headers: apiKey.trim() ? { "x-goog-api-key": apiKey.trim() } : undefined
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
-    }
-
-    const json = asRecord(await res.json().catch(() => null));
-    const models = Array.isArray(json?.models)
-      ? json.models
-          .map((item) => String(asRecord(item)?.name ?? "").trim())
-          .map((name: string) => name.replace(/^models\//, ""))
-          .filter(Boolean)
-      : [];
-
-    if (!models.length) {
-      throw new Error("這個 endpoint 沒有回傳可用模型。");
-    }
-
-    return models;
-  }
-
-  const res = await fetch(`${endpoint}/models`, {
-    headers: apiKey.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : undefined
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
-  }
-
-  const json = asRecord(await res.json().catch(() => null));
-  const models = Array.isArray(json?.data)
-    ? json.data
-        .map((item) => String(asRecord(item)?.id ?? "").trim())
-        .filter(Boolean)
-    : [];
-
-  if (!models.length) {
-    throw new Error("這個 endpoint 沒有回傳可用模型。");
-  }
-
-  return models;
-}
-
-function EyeIcon(props: { open: boolean }) {
-  return props.open ? (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M2 8s2.2-3.5 6-3.5S14 8 14 8s-2.2 3.5-6 3.5S2 8 2 8Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M8 9.7a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4Z" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  ) : (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M2 8s2.2-3.5 6-3.5S14 8 14 8s-2.2 3.5-6 3.5S2 8 2 8Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="m3 13 10-10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function isCategoryEnabled(flag: boolean | undefined) {
   return flag !== false;
-}
-
-function buildToolDecisionPrompt(template: string, fallbackTemplate: string, userInput: string, toolListJson: string) {
-  const baseTemplate = template.trim() || fallbackTemplate;
-  const replacements: Record<string, string> = {
-    "{{userInput}}": userInput,
-    "{{toolListJson}}": toolListJson,
-    "{{noToolJson}}": PROMPT_JSON_PLACEHOLDERS.noToolJson,
-    "{{userProfileJson}}": PROMPT_JSON_PLACEHOLDERS.userProfileJson,
-    "{{builtinToolJson}}": PROMPT_JSON_PLACEHOLDERS.builtinToolJson,
-    "{{mcpCallJson}}": PROMPT_JSON_PLACEHOLDERS.mcpCallJson
-  };
-
-  let prompt = baseTemplate;
-  Object.entries(replacements).forEach(([placeholder, value]) => {
-    prompt = prompt.split(placeholder).join(value);
-  });
-
-  if (!baseTemplate.includes("{{userInput}}")) {
-    prompt += `\n\nUser request:\n${userInput}`;
-  }
-  if (!baseTemplate.includes("{{toolListJson}}")) {
-    prompt += `\n\nAvailable tools:\n${toolListJson}`;
-  }
-  if (!baseTemplate.includes("{{noToolJson}}")) {
-    prompt += `\n\nIf no tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.noToolJson}`;
-  }
-  if (!baseTemplate.includes("{{userProfileJson}}")) {
-    prompt += `\n\nIf the user profile tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.userProfileJson}`;
-  }
-  if (!baseTemplate.includes("{{builtinToolJson}}")) {
-    prompt += `\n\nIf a built-in browser tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.builtinToolJson}`;
-  }
-  if (!baseTemplate.includes("{{mcpCallJson}}")) {
-    prompt += `\n\nIf an MCP tool is needed, return:\n${PROMPT_JSON_PLACEHOLDERS.mcpCallJson}`;
-  }
-
-  return prompt;
-}
-
-function compactDecisionCatalogText(value: string | undefined, maxChars: number) {
-  const normalized = String(value ?? "").replace(/\s+/g, " ").trim();
-  if (!normalized) return "";
-  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function buildToolDecisionCatalog(toolEntries: ToolEntry[]) {
-  return toolEntries.map((entry) =>
-    entry.kind === "mcp"
-      ? {
-          kind: "mcp",
-          server: entry.server.name,
-          tool: entry.tool.name,
-          summary: compactDecisionCatalogText(entry.tool.description ?? "", 180)
-        }
-      : {
-          kind: "builtin",
-          tool: entry.tool.name,
-          summary: compactDecisionCatalogText(entry.tool.description ?? "", 180)
-        }
-  );
-}
-
-type PromptTemplateApiTestState = {
-  status: "idle" | "running" | "success" | "failure";
-  summary?: string;
-  expected?: string;
-  requestId?: string;
-  agentName?: string;
-  prompt?: string;
-  system?: string;
-  rawOutput?: string;
-  parsedOutput?: string;
-  updatedAt?: number;
-};
-
-type PromptTemplateApiTestValidation = {
-  pass: boolean;
-  summary: string;
-  parsed?: unknown;
-};
-
-type PromptTemplateApiTestSpec = {
-  title: string;
-  description: string;
-  expected: string;
-  prompt: string;
-  system?: string;
-  validate: (raw: string) => PromptTemplateApiTestValidation;
-};
-
-function buildPromptTemplateTestSkill(args: { id: string; name: string; description: string; instructions: string }): {
-  skill: SkillConfig;
-  runtime: LoadedSkillRuntime;
-} {
-  const skill: SkillConfig = {
-    id: args.id,
-    name: args.name,
-    version: "1.0.0",
-    description: args.description,
-    decisionHint: args.description,
-    workflow: {
-      instructions: args.instructions
-    },
-    skillMarkdown: `# ${args.name}`,
-    rootPath: `/prompt-template-tests/${args.id}`,
-    fileCount: 1,
-    docCount: 0,
-    scriptCount: 0,
-    assetCount: 0,
-    updatedAt: 0
-  };
-  const runtime: LoadedSkillRuntime = {
-    skillId: skill.id,
-    name: skill.name,
-    description: skill.description,
-    instructions: args.instructions,
-    referencedPaths: [],
-    loadedReferences: [],
-    assetPaths: [],
-    loadedAssets: [],
-    allowMcp: false,
-    allowBuiltInTools: false
-  };
-  return { skill, runtime };
-}
-
-function renderPromptTemplate(template: string, replacements: Record<string, string>) {
-  let prompt = template;
-  Object.entries(replacements).forEach(([placeholder, value]) => {
-    prompt = prompt.split(placeholder).join(value);
-  });
-  return prompt;
-}
-
-function buildPromptTemplateApiTestSpec(args: {
-  baseId: PromptTemplateBaseId;
-  language: "zh" | "en";
-  template: string;
-}): PromptTemplateApiTestSpec {
-  const isEn = args.language === "en";
-  const sequential = buildPromptTemplateTestSkill({
-    id: "sequential-thinking-test",
-    name: "sequential-thinking",
-    description: isEn ? "Calm, structured, step-by-step explanations." : "冷靜、有條理、逐步說明。",
-    instructions: isEn
-      ? "Give calm, structured answers. Break the answer into small stable steps."
-      : "請冷靜、有條理地回答，並拆成穩定的小步驟。"
-  });
-  const browserWorkflow = buildPromptTemplateTestSkill({
-    id: "browser-workflow-multiturn-test",
-    name: "browser-workflow-multiturn",
-    description: isEn ? "Open pages, click targets, and summarize results." : "打開頁面、點擊目標並整理結果。",
-    instructions: isEn
-      ? "Use the browser session step by step and summarize what you observed."
-      : "逐步使用瀏覽器 session，並整理觀察結果。"
-  });
-
-  switch (args.baseId) {
-    case "tool-decision": {
-      const expectedToolName =
-        SYSTEM_BUILT_IN_TOOLS.find((tool) => tool.id === SYSTEM_USER_PROFILE_TOOL_ID)?.name ?? "get_user_profile";
-      const userInput = isEn ? "Read my personal profile before answering." : "在回答前先讀取我的個人資訊。";
-      const toolListJson = JSON.stringify(
-        [
-          { kind: "builtin", tool: expectedToolName, summary: isEn ? "Read the current user's profile." : "讀取目前使用者個人資訊。" },
-          { kind: "builtin", tool: "clock_dashboard_demo", summary: isEn ? "Open a live clock dashboard in the page." : "在頁面中打開即時時鐘 dashboard。" },
-          { kind: "mcp", server: "Browser", tool: "browser_open", summary: isEn ? "Open a URL in a browser session." : "在瀏覽器 session 中打開網址。" }
-        ],
-        null,
-        2
-      );
-      return {
-        title: isEn ? "Tool decision chooses get_user_profile" : "Tool decision 會選 get_user_profile",
-        description: isEn
-          ? "Uses a fake tool catalog and expects a builtin tool decision for the current user profile."
-          : "使用假的工具清單，預期會回傳讀取使用者個人資訊的 builtin tool decision。",
-        expected: isEn
-          ? 'Expected JSON: {"type":"builtin_tool_call","tool":"get_user_profile","input":{}}'
-          : '預期 JSON：{"type":"builtin_tool_call","tool":"get_user_profile","input":{}}',
-        prompt: buildToolDecisionPrompt(
-          args.template,
-          getDefaultPromptTemplate(`tool-decision.${args.language}`),
-          userInput,
-          toolListJson
-        ),
-        validate: (raw) => {
-          const parsed = normalizeToolDecision(extractJsonObject(raw));
-          if (!parsed) return { pass: false, summary: isEn ? "Output is not valid tool-decision JSON." : "輸出不是有效的 tool-decision JSON。" };
-          if (parsed.type !== "builtin_tool_call" || parsed.tool !== expectedToolName) {
-            return {
-              pass: false,
-              summary: isEn
-                ? `Expected ${expectedToolName}, got ${JSON.stringify(parsed)}.`
-                : `預期 ${expectedToolName}，實際得到 ${JSON.stringify(parsed)}。`,
-              parsed
-            };
-          }
-          return {
-            pass: true,
-            summary: isEn
-              ? `Parsed a valid ${expectedToolName} tool decision.`
-              : `已解析成正確的 ${expectedToolName} tool decision。`,
-            parsed
-          };
-        }
-      };
-    }
-    case "skill-decision": {
-      const userInput = isEn
-        ? "I am anxious. Please explain calmly and step by step why 1+1=2."
-        : "我有點慌，請冷靜又有條理地逐步解釋為什麼 1+1=2。";
-      const skillListJson = JSON.stringify(
-        [
-          { id: sequential.skill.id, name: sequential.skill.name, summary: sequential.skill.description },
-          { id: browserWorkflow.skill.id, name: browserWorkflow.skill.name, summary: browserWorkflow.skill.description }
-        ],
-        null,
-        2
-      );
-      return {
-        title: isEn ? "Skill decision chooses sequential-thinking" : "Skill decision 會選 sequential-thinking",
-        description: isEn
-          ? "Uses a fake skill catalog and expects a skill_call for calm structured reasoning."
-          : "使用假的 skill 清單，預期會對冷靜有條理的需求選擇 sequential-thinking。",
-        expected: isEn
-          ? `Expected JSON: {"type":"skill_call","skillId":"${sequential.skill.id}","input":{}}`
-          : `預期 JSON：{"type":"skill_call","skillId":"${sequential.skill.id}","input":{}}`,
-        prompt: buildSkillDecisionPrompt(userInput, skillListJson, args.language, args.template),
-        validate: (raw) => {
-          const parsed = normalizeSkillDecision(extractJsonObject(raw));
-          if (!parsed) return { pass: false, summary: isEn ? "Output is not valid skill-decision JSON." : "輸出不是有效的 skill-decision JSON。" };
-          if (parsed.type !== "skill_call" || parsed.skillId !== sequential.skill.id) {
-            return {
-              pass: false,
-              summary: isEn ? `Expected ${sequential.skill.id}, got ${JSON.stringify(parsed)}.` : `預期 ${sequential.skill.id}，實際得到 ${JSON.stringify(parsed)}。`,
-              parsed
-            };
-          }
-          return { pass: true, summary: isEn ? "Parsed a valid sequential-thinking skill decision." : "已解析成正確的 sequential-thinking skill decision。", parsed };
-        }
-      };
-    }
-    case "skill-runtime-system": {
-      const system = renderPromptTemplate(args.template, {
-        "{{skillName}}": sequential.skill.name,
-        "{{skillId}}": sequential.skill.id
-      });
-      return {
-        title: isEn ? "Skill runtime system prompt preserves direct answers" : "Skill runtime system prompt 不會妨礙直接回答",
-        description: isEn
-          ? "Applies the selected system prompt and checks that the model can still follow a strict direct instruction."
-          : "套用目前的 system prompt，確認模型仍然能遵守明確的直接指令。",
-        expected: isEn ? 'Expected text containing: READY_ONLY' : "預期文字包含：READY_ONLY",
-        system,
-        prompt: isEn ? "Reply with exactly READY_ONLY. No markdown." : "請只回覆 READY_ONLY，不要加 markdown。",
-        validate: (raw) => {
-          if (!String(raw ?? "").trim()) return { pass: false, summary: isEn ? "Model returned empty output." : "模型回傳空內容。" };
-          const pass = String(raw).includes("READY_ONLY");
-          return {
-            pass,
-            summary: pass
-              ? isEn
-                ? "Model followed the direct instruction under the current runtime system prompt."
-                : "模型在目前 runtime system prompt 下仍能遵守直接指令。"
-              : isEn
-                ? "Output did not contain READY_ONLY."
-                : "輸出未包含 READY_ONLY。",
-            parsed: raw.trim()
-          };
-        }
-      };
-    }
-    case "skill-verify": {
-      const prompt = buildSkillVerifyPrompt({
-        skill: sequential.skill,
-        runtime: sequential.runtime,
-        userInput: isEn
-          ? "Please explain calmly and step by step why 1+1=2."
-          : "請冷靜又有條理地逐步解釋為什麼 1+1=2。",
-        currentInput: isEn
-          ? "Give a calm, structured, step-by-step answer."
-          : "請給出冷靜、有條理、逐步的回答。",
-        answer: isEn
-          ? "1. One unit plus one more unit makes two units. 2. Counting the combined units gives 2."
-          : "1. 一個單位再加上一個單位，總數會變成兩個單位。2. 把它們一起計數，就會得到 2。",
-        round: 1,
-        template: args.template
-      });
-      return {
-        title: isEn ? "Skill verify returns pass for a good answer" : "Skill verify 對良好答案回傳 pass",
-        description: isEn
-          ? "Uses a clearly acceptable structured answer and expects a pass decision."
-          : "提供一個明顯可接受的結構化回答，預期回傳 pass。",
-        expected: isEn ? 'Expected JSON: {"type":"pass","reason":"..."}' : '預期 JSON：{"type":"pass","reason":"..."}',
-        prompt,
-        validate: (raw) => {
-          const parsed = normalizeSkillVerifyDecision(extractJsonObject(raw));
-          if (!parsed) return { pass: false, summary: isEn ? "Output is not valid skill-verify JSON." : "輸出不是有效的 skill-verify JSON。" };
-          if (parsed.type !== "pass") {
-            return {
-              pass: false,
-              summary: isEn ? `Expected pass, got ${JSON.stringify(parsed)}.` : `預期 pass，實際得到 ${JSON.stringify(parsed)}。`,
-              parsed
-            };
-          }
-          return { pass: true, summary: isEn ? "Parsed a valid pass decision." : "已解析成正確的 pass decision。", parsed };
-        }
-      };
-    }
-    case "skill-bootstrap-plan": {
-      const prompt = buildBootstrapPlanPrompt({
-        skill: browserWorkflow.skill,
-        runtime: browserWorkflow.runtime,
-        userInput: isEn
-          ? "Open https://github.com/trending?since=daily, click the first repository, then summarize the README."
-          : "打開 https://github.com/trending?since=daily，點進第一名的 repository，然後整理 README 摘要。",
-        template: args.template
-      });
-      return {
-        title: isEn ? "Bootstrap plan returns todo + startUrl" : "Bootstrap plan 會回傳 todo 與 startUrl",
-        description: isEn
-          ? "Checks that the bootstrap prompt returns a valid task summary and non-empty todo list."
-          : "確認 bootstrap prompt 會回傳有效的 task summary 與非空 todo 清單。",
-        expected: isEn
-          ? 'Expected JSON with taskSummary, todo[3+], and startUrl close to https://github.com/trending?since=daily'
-          : "預期 JSON 具有 taskSummary、至少 3 個 todo，且 startUrl 接近 https://github.com/trending?since=daily",
-        prompt,
-        validate: (raw) => {
-          const parsed = normalizeSkillBootstrapPlan(extractJsonObject(raw));
-          if (!parsed) return { pass: false, summary: isEn ? "Output is not valid bootstrap-plan JSON." : "輸出不是有效的 bootstrap-plan JSON。" };
-          const hasStartUrl = String(parsed.startUrl ?? "").includes("github.com/trending");
-          const pass = parsed.todo.length >= 3 && !!parsed.taskSummary && hasStartUrl;
-          return {
-            pass,
-            summary: pass
-              ? isEn
-                ? "Parsed a valid bootstrap plan with todo and direct startUrl."
-                : "已解析成有效的 bootstrap plan，包含 todo 與直接 startUrl。"
-              : isEn
-                ? `Bootstrap plan parsed but missing required fields: ${JSON.stringify(parsed)}`
-                : `已解析 bootstrap plan，但缺少必要欄位：${JSON.stringify(parsed)}`,
-            parsed
-          };
-        }
-      };
-    }
-    case "skill-planner-step": {
-      const prompt = buildPlannerStepPrompt({
-        skill: browserWorkflow.skill,
-        runtime: browserWorkflow.runtime,
-        userInput: isEn
-          ? "Open GitHub Trending, click the first repo, and summarize it."
-          : "打開 GitHub Trending，點進第一名 repo，然後整理摘要。",
-        currentContext: isEn
-          ? "The previous action changed state. The page is already open. A fresh observation is required before clicking anything."
-          : "上一個動作已改變狀態，頁面已打開。在點擊任何目標前，必須先重新 observe。",
-        currentPhaseHint: isEn ? "The previous action changed state; observe next." : "上一個動作已改變狀態，下一步請先 observe。",
-        toolScopeSummary: isEn
-          ? "MCP:Browser/browser_snapshot [observe]\nMCP:Browser/browser_click [state_change]"
-          : "MCP:Browser/browser_snapshot [observe]\nMCP:Browser/browser_click [state_change]",
-        todoSummary: isEn
-          ? "1. [in_progress] Open GitHub Trending\n2. [pending] Click the first repository"
-          : "1. [in_progress] 打開 GitHub Trending\n2. [pending] 點擊第一個 repository",
-        mustObserve: true,
-        mustAct: false,
-        template: args.template
-      });
-      return {
-        title: isEn ? "Planner step chooses observe after state change" : "Planner step 會在狀態改變後選 observe",
-        description: isEn
-          ? "Checks the mustObserve path and expects an observe decision."
-          : "驗證 mustObserve 路徑，預期回傳 observe。",
-        expected: isEn ? 'Expected JSON: {"type":"observe","reason":"..."}' : '預期 JSON：{"type":"observe","reason":"..."}',
-        prompt,
-        validate: (raw) => {
-          const parsed = normalizeSkillStepDecision(extractJsonObject(raw));
-          if (!parsed) return { pass: false, summary: isEn ? "Output is not valid planner-step JSON." : "輸出不是有效的 planner-step JSON。" };
-          if (parsed.type !== "observe") {
-            return {
-              pass: false,
-              summary: isEn ? `Expected observe, got ${JSON.stringify(parsed)}.` : `預期 observe，實際得到 ${JSON.stringify(parsed)}。`,
-              parsed
-            };
-          }
-          return { pass: true, summary: isEn ? "Parsed a valid observe decision." : "已解析成正確的 observe decision。", parsed };
-        }
-      };
-    }
-    case "skill-completion-gate": {
-      const prompt = buildCompletionGatePrompt({
-        skill: browserWorkflow.skill,
-        runtime: browserWorkflow.runtime,
-        userInput: isEn
-          ? "Open GitHub Trending, click the first repo, and summarize it."
-          : "打開 GitHub Trending，點進第一名 repo，然後整理摘要。",
-        todoSummary: isEn
-          ? "1. [completed] Open GitHub Trending\n2. [completed] Click the first repo\n3. [completed] Summarize the README"
-          : "1. [completed] 打開 GitHub Trending\n2. [completed] 點擊第一名 repo\n3. [completed] 整理 README 摘要",
-        currentContext: isEn
-          ? "Reached repository page mvanhorn/last30days-skill and collected grounded page content hints for final summarization."
-          : "已到達 repository 頁面 mvanhorn/last30days-skill，並擷取足夠的 grounded page content hints，可直接整理最終摘要。",
-        template: args.template
-      });
-      return {
-        title: isEn ? "Completion gate recognizes a finished workflow" : "Completion gate 能辨識已完成的 workflow",
-        description: isEn
-          ? "Checks a clearly finished browser workflow and expects complete."
-          : "驗證明顯已完成的 browser workflow，預期回傳 complete。",
-        expected: isEn ? 'Expected JSON: {"type":"complete","reason":"..."}' : '預期 JSON：{"type":"complete","reason":"..."}',
-        prompt,
-        validate: (raw) => {
-          const parsed = normalizeSkillCompletionDecision(extractJsonObject(raw));
-          if (!parsed) return { pass: false, summary: isEn ? "Output is not valid completion-gate JSON." : "輸出不是有效的 completion-gate JSON。" };
-          if (parsed.type !== "complete") {
-            return {
-              pass: false,
-              summary: isEn ? `Expected complete, got ${JSON.stringify(parsed)}.` : `預期 complete，實際得到 ${JSON.stringify(parsed)}。`,
-              parsed
-            };
-          }
-          return { pass: true, summary: isEn ? "Parsed a valid complete decision." : "已解析成正確的 complete decision。", parsed };
-        }
-      };
-    }
-    default:
-      return {
-        title: isEn ? "Prompt template test" : "Prompt template 測試",
-        description: isEn ? "No test definition is available." : "沒有可用的測試定義。",
-        expected: isEn ? "No expected output defined." : "未定義預期輸出。",
-        prompt: "",
-        validate: () => ({ pass: false, summary: isEn ? "No validator defined." : "未定義驗證器。" })
-      };
-  }
 }
 
 export default function App() {
@@ -2020,13 +647,6 @@ export default function App() {
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(() => normalizeVoiceSettings(initialUi.voiceSettings ?? initialUi.radioSettings));
-  const [voiceDictationStatus, setVoiceDictationStatus] = useState<"idle" | "recording" | "transcribing">("idle");
-  const [voicePlaybackMessageId, setVoicePlaybackMessageId] = useState<string | null>(null);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [voiceProbeState, setVoiceProbeState] = useState<{ stt: VoiceProbeState; tts: VoiceProbeState }>({
-    stt: { running: false },
-    tts: { running: false }
-  });
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
 
   type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | "voice" | null;
@@ -2042,7 +662,6 @@ export default function App() {
   const [skillPanelDocs, setSkillPanelDocs] = useState<SkillDocItem[]>([]);
   const [skillPanelFiles, setSkillPanelFiles] = useState<SkillFileItem[]>([]);
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
-  const [modelCredentials, setModelCredentials] = useState<ModelCredentialEntry[]>(() => loadModelCredentials());
   const [loadBalancers, setLoadBalancers] = useState<LoadBalancerConfig[]>(() => loadLoadBalancers());
   const [loadBalancerPanelSelectedId, setLoadBalancerPanelSelectedId] = useState<string | null>(null);
   const systemBuiltInTools = useMemo(() => SYSTEM_BUILT_IN_TOOLS, []);
@@ -2068,11 +687,16 @@ export default function App() {
       })),
     [mcpServers, mcpToolsByServer]
   );
-  const [log, setLog] = useState<LogEntry[]>([]);
-  const [visibleCredentialIds, setVisibleCredentialIds] = useState<Record<string, boolean>>({});
-  const [credentialTestResults, setCredentialTestResults] = useState<Record<string, CredentialTestState | undefined>>({});
+  const { entries: log, pushLog, clearLog } = useAppLog();
+  const credentialController = useCredentialController({ pushLog });
+  const {
+    modelCredentials,
+    setModelCredentials,
+    credentialSlots,
+    configuredCredentialCount,
+    credentialTestResults
+  } = credentialController;
   const promptTemplateRuntime = useMemo(() => buildPromptTemplateRuntime(promptTemplateFiles), [promptTemplateFiles]);
-  const [testingCredentialIds, setTestingCredentialIds] = useState<Record<string, boolean>>({});
   const [tutorialScenario, setTutorialScenario] = useState<TutorialScenarioDefinition | null>(null);
   const [tutorialScenarioIndex, setTutorialScenarioIndex] = useState<number | null>(null);
   const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
@@ -2080,48 +704,7 @@ export default function App() {
   const [tutorialUnavailableMessage, setTutorialUnavailableMessage] = useState<string | null>(null);
   const [tutorialComposerSeed, setTutorialComposerSeed] = useState<{ value: string; token: number } | null>(null);
   const [tutorialOpenedToolResultMessageIds, setTutorialOpenedToolResultMessageIds] = useState<string[]>([]);
-  const [logCollapsed, setLogCollapsed] = useState(true);
-  const [logHeight, setLogHeight] = useState(160);
-  const [logSort, setLogSort] = useState<{ key: LogSortKey; dir: "asc" | "desc" }>({ key: "ts", dir: "desc" });
-  const pushLog = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => {
-    const normalized: LogEntry = {
-      id: generateId(),
-      ts: entry.ts ?? Date.now(),
-      category: entry.category || "general",
-      agent: entry.agent,
-      ok: entry.ok,
-      message: entry.message,
-      level: entry.level,
-      outcome: inferLogOutcome(entry),
-      requestId: entry.requestId?.trim() || undefined,
-      stage: entry.stage?.trim() || undefined,
-      details: entry.details
-    };
-    setLog((x) => [normalized, ...x].slice(0, 200));
-  };
-  const logResizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
-  const logNow = (entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) => pushLog(entry);
-  const sortedLogEntries = useMemo(() => {
-    return log
-      .map((item, index) => ({ item, index }))
-      .sort((a, b) => {
-        const key = logSort.key;
-        let cmp = 0;
-        if (key === "ts") cmp = a.item.ts - b.item.ts;
-        if (key === "outcome") cmp = formatLogOutcomeLabel(a.item.outcome ?? inferLogOutcome(a.item)).localeCompare(formatLogOutcomeLabel(b.item.outcome ?? inferLogOutcome(b.item)));
-        if (key === "requestId") cmp = (a.item.requestId || "").toLowerCase().localeCompare((b.item.requestId || "").toLowerCase());
-        if (key === "category") cmp = (a.item.category || "").toLowerCase().localeCompare((b.item.category || "").toLowerCase());
-        if (key === "agent") cmp = (a.item.agent || "").toLowerCase().localeCompare((b.item.agent || "").toLowerCase());
-        if (key === "message") cmp = (a.item.message || "").toLowerCase().localeCompare((b.item.message || "").toLowerCase());
-        if (cmp === 0) cmp = a.index - b.index;
-        return logSort.dir === "asc" ? cmp : -cmp;
-      })
-      .map(({ item }) => item);
-  }, [log, logSort]);
-  const visibleLogText = useMemo(
-    () => sortedLogEntries.map((item) => formatLogEntryForClipboard(item)).join("\n\n---\n\n"),
-    [sortedLogEntries]
-  );
+  const logNow = pushLog;
   const mcpCountRef = React.useRef(mcpServers.length);
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
@@ -2130,11 +713,6 @@ export default function App() {
   const activeChatAbortRef = React.useRef<AbortController | null>(null);
   const skillExecutionLocksRef = React.useRef<Map<string, AbortController>>(new Map());
   const tutorialRestoringRef = React.useRef(false);
-  const voiceMediaStreamRef = React.useRef<MediaStream | null>(null);
-  const voiceRecorderRef = React.useRef<MediaRecorder | null>(null);
-  const voiceRecordedChunksRef = React.useRef<Blob[]>([]);
-  const voiceAudioRef = React.useRef<HTMLAudioElement | null>(null);
-  const voiceAudioUrlRef = React.useRef<string | null>(null);
   const tutorialRuntimeState = useMemo(
     () => ({
       scenarioId: tutorialScenario?.id,
@@ -2206,27 +784,6 @@ export default function App() {
   const tutorialPreviewLocked = tutorialActive && tutorialStepIndex === 0;
   const tutorialShowLandingPreview = tutorialPreviewLocked && tutorialScenarioIndex === 0;
   const tutorialKeepChangesHint = "即使選擇保留這次教學變更，系統仍會刪除「教學用DOC」，避免之後的問答持續被案例 2 的人格設定影響。";
-
-  React.useEffect(() => {
-    function onMove(e: MouseEvent) {
-      if (!logResizeRef.current) return;
-      const delta = logResizeRef.current.startY - e.clientY;
-      const next = Math.min(360, Math.max(80, logResizeRef.current.startHeight + delta));
-      setLogHeight(next);
-    }
-
-    function onUp() {
-      logResizeRef.current = null;
-      document.body.style.userSelect = "";
-    }
-
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, []);
 
   React.useEffect(() => {
     (async () => {
@@ -2407,19 +964,8 @@ export default function App() {
   }, [builtInTools]);
 
   React.useEffect(() => {
-    saveModelCredentials(modelCredentials);
-  }, [modelCredentials]);
-
-  React.useEffect(() => {
     saveLoadBalancers(loadBalancers);
   }, [loadBalancers]);
-
-  React.useEffect(() => {
-    return () => {
-      stopVoicePlayback();
-      stopVoiceCapture();
-    };
-  }, []);
 
   React.useEffect(() => {
     if (!historyLoaded) return;
@@ -2691,14 +1237,6 @@ export default function App() {
     [agents, skillVerifierAgentId]
   );
 
-  const credentialSlots = useMemo(() => modelCredentials.slice().sort((a, b) => a.label.localeCompare(b.label)), [modelCredentials]);
-  const configuredCredentialCount = useMemo(
-    () =>
-      credentialSlots.filter(
-        (slot) => slot.preset === "chrome_prompt" || slot.keys.some((key) => key.apiKey.trim())
-      ).length,
-    [credentialSlots]
-  );
   const loadBalancerSlots = useMemo(() => loadBalancers.slice().sort((a, b) => a.name.localeCompare(b.name)), [loadBalancers]);
   const configuredLoadBalancerCount = useMemo(
     () => loadBalancerSlots.filter((entry) => entry.instances.length > 0).length,
@@ -2712,6 +1250,29 @@ export default function App() {
     () => loadBalancerSlots.find((entry) => entry.id === voiceSettings.ttsLoadBalancerId) ?? null,
     [loadBalancerSlots, voiceSettings.ttsLoadBalancerId]
   );
+  const {
+    dictationStatus: voiceDictationStatus,
+    playbackMessageId: voicePlaybackMessageId,
+    error: voiceError,
+    probeState: voiceProbeState,
+    toggleDictation: toggleVoiceDictation,
+    playMessage: playMessageTts,
+    testStt: testVoiceSttLoadBalancer,
+    testTts: testVoiceTtsLoadBalancer
+  } = useVoiceController({
+    settings: voiceSettings,
+    sttLoadBalancerId: voiceSttLoadBalancer?.id,
+    ttsLoadBalancerId: voiceTtsLoadBalancer?.id,
+    activeAgentName: activeAgent?.name,
+    runTask: runVoiceTaskWithLoadBalancer,
+    pushLog,
+    onTranscript: (transcript) => {
+      const current = chatComposerDraft.trimEnd();
+      const next = current ? `${current} ${transcript}` : transcript;
+      setChatComposerDraft(next);
+      setTutorialComposerSeed({ value: next, token: Date.now() });
+    }
+  });
 
   function resolveLoadBalancerPlanForAgent(agent: AgentConfig, now?: number) {
     return resolveLoadBalancerCandidates({
@@ -3140,115 +1701,32 @@ export default function App() {
       loadBalancerId: args.loadBalancerId
     };
     const candidates = resolveLoadBalancerPlanForAgent(logicalAgent);
-    if (!candidates.length) {
-      logNow({
-        category: "load_balancer",
-        agent: agentName,
-        ok: false,
-        requestId: args.requestId,
-        stage: args.stage,
-        message: `LB no available instance [${args.stage}]`,
-        details: describeLoadBalancerAvailability({
-          agent: logicalAgent,
-          loadBalancers,
-          credentials: modelCredentials
-        })
-      });
-      throw new Error(`No available load balancer instance for ${args.stage}.`);
-    }
-
-    let lastError: unknown = new Error(`No available load balancer instance for ${args.stage}.`);
-    let lastFailureDetails = String((lastError as Error).message);
-    for (const [candidateIndex, candidate] of candidates.entries()) {
-      logNow({
-        category: "load_balancer",
-        agent: agentName,
-        requestId: args.requestId,
-        stage: args.stage,
-        message: `LB selected [${args.stage}]`,
-        details: [describeResolvedLoadBalancerCandidate(candidate), `voice_model=${args.voiceModel}`].join("\n\n")
-      });
-      try {
-        const result = await args.execute(candidate);
-        setLoadBalancers((prev) =>
-          applyInstanceSuccess({
-            loadBalancers: prev,
-            loadBalancerId: candidate.loadBalancer.id,
-            instanceId: candidate.instance.id
-          })
-        );
-        logNow({
-          category: "load_balancer",
-          agent: agentName,
-          ok: true,
-          requestId: args.requestId,
-          stage: args.stage,
-          message: `LB success [${args.stage}]`,
-          details: [
-            describeResolvedLoadBalancerCandidate(candidate),
-            `voice_model=${args.voiceModel}`,
-            args.describeSuccess ? args.describeSuccess(result) : ""
-          ]
-            .filter(Boolean)
-            .join("\n\n")
-        });
-        return result;
-      } catch (error) {
-        lastError = error;
-        const errorText = errorMessage(error);
-        lastFailureDetails = errorText;
-        const failure = classifyRetryableAgentFailure(errorText);
-        if (failure?.retryable) {
-          const nextCandidate = candidates[candidateIndex + 1] ?? null;
-          if (failure.markFailure) {
-            setLoadBalancers((prev) =>
-              applyInstanceFailure({
-                loadBalancers: prev,
-                loadBalancerId: candidate.loadBalancer.id,
-                instanceId: candidate.instance.id
-              })
-            );
-          }
-          logNow({
-            category: "load_balancer",
-            agent: agentName,
-            ok: false,
-            requestId: args.requestId,
-            stage: args.stage,
-            message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${args.stage}]`,
-            details: [
-              describeResolvedLoadBalancerCandidate(candidate),
-              `voice_model=${args.voiceModel}`,
-              `error=${errorText}`,
-              `marked_failure=${failure.markFailure}`,
-              nextCandidate ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}` : "next_candidate: none"
-            ].join("\n\n")
-          });
-          continue;
-        }
-        logNow({
-          category: "load_balancer",
-          agent: agentName,
-          ok: false,
-          requestId: args.requestId,
-          stage: args.stage,
-          message: `LB terminal error [${args.stage}]`,
-          details: [describeResolvedLoadBalancerCandidate(candidate), `voice_model=${args.voiceModel}`, `error=${errorText}`].join("\n\n")
-        });
-        throw error;
-      }
-    }
-
-    logNow({
-      category: "load_balancer",
-      agent: agentName,
-      ok: false,
+    const candidateDetails = (candidate: ResolvedLoadBalancerInstance) =>
+      [describeResolvedLoadBalancerCandidate(candidate), `voice_model=${args.voiceModel}`].join("\n\n");
+    return await runLoadBalancedTask({
+      agentName,
       requestId: args.requestId,
       stage: args.stage,
-      message: `LB final failure [${args.stage}]`,
-      details: lastFailureDetails
+      candidates,
+      noCandidateDetails: describeLoadBalancerAvailability({ agent: logicalAgent, loadBalancers, credentials: modelCredentials }),
+      noCandidateError: `No available load balancer instance for ${args.stage}.`,
+      unknownFailureError: "Unknown voice load balancer failure.",
+      pushLog: logNow,
+      execute: args.execute,
+      selectionDetails: candidateDetails,
+      errorDetails: candidateDetails,
+      successDetails: (candidate, result) => [candidateDetails(candidate), args.describeSuccess?.(result) ?? ""].filter(Boolean).join("\n\n"),
+      markSuccess: (candidate) => setLoadBalancers((prev) => applyInstanceSuccess({
+        loadBalancers: prev,
+        loadBalancerId: candidate.loadBalancer.id,
+        instanceId: candidate.instance.id
+      })),
+      markFailure: (candidate) => setLoadBalancers((prev) => applyInstanceFailure({
+        loadBalancers: prev,
+        loadBalancerId: candidate.loadBalancer.id,
+        instanceId: candidate.instance.id
+      }))
     });
-    throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "Unknown voice load balancer failure."));
   }
 
   async function runOneToOneWithLoadBalancer(args: {
@@ -3268,182 +1746,47 @@ export default function App() {
     const requestSignal = args.deadline ? combineSignals(args.signal, args.deadline.signal) : args.signal;
     const requestTimeoutMs = args.timeoutMs ?? (args.deadline ? Math.max(1, args.deadline.remainingMs()) : undefined);
     const requestLabel = args.requestLabel ?? "chat response";
-    let candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
-    if (!candidates.length) {
-      logNow({
-        category: "load_balancer",
-        agent: args.logicalAgent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: requestLabel,
-        message: `LB no available instance [${requestLabel}]`,
-        details: describeLoadBalancerAvailability({
-          agent: args.logicalAgent,
-          loadBalancers,
-          credentials: modelCredentials
-        })
-      });
-      const fallbackAgent = hydrateAgentCredentials(args.logicalAgent);
-      return runOneToOne({
-        adapter: pickAdapter(fallbackAgent),
-        agent: fallbackAgent,
-        input: args.input,
-        history: args.history,
-        system: args.system,
-        onDelta: args.onDelta,
-        retry: getRetryPolicyForAgent(args.logicalAgent),
-        onLog: args.onLog,
-        signal: requestSignal,
-        timeoutMs: requestTimeoutMs,
-        deadline: args.deadline
-      });
-    }
-
-    let lastFailureText = "No available load balancer instance.";
-    let lastFailureDetails = lastFailureText;
-    let shouldReturnEmptyResponse = false;
-    for (const [candidateIndex, candidate] of candidates.entries()) {
-      args.deadline?.throwIfExpired(`${requestLabel} failover`);
-      logNow({
-        category: "load_balancer",
-        agent: args.logicalAgent.name,
-        requestId: args.requestId,
-        stage: requestLabel,
-        message: `LB selected [${requestLabel}]`,
-        details: describeResolvedLoadBalancerCandidate(candidate)
-      });
-      const retry = {
-        delaySec: Math.max(0, candidate.instance.delaySecond),
-        max: Math.max(0, candidate.instance.maxRetries)
-      };
-      const text = await runOneToOne({
-        adapter: pickAdapter(candidate.hydratedAgent),
-        agent: candidate.hydratedAgent,
-        input: args.input,
-        history: args.history,
-        system: args.system,
-        onDelta: args.onDelta,
-        retry,
-        onLog: args.onLog,
-        signal: requestSignal,
-        timeoutMs: requestTimeoutMs,
-        deadline: args.deadline
-      });
-      const trimmedText = String(text ?? "").trim();
-      if (!trimmedText) {
-        shouldReturnEmptyResponse = true;
-        lastFailureText = "";
-        lastFailureDetails = "模型沒有回傳任何內容。";
-        const nextCandidate = candidates[candidateIndex + 1] ?? null;
-        logNow({
-          category: "load_balancer",
-          agent: args.logicalAgent.name,
-          ok: false,
-          outcome: "degraded",
-          requestId: args.requestId,
-          stage: requestLabel,
-          message: `${nextCandidate ? "LB empty response failover" : "LB empty response exhausted"} [${requestLabel}]`,
-          details: [
-            describeResolvedLoadBalancerCandidate(candidate),
-            "response_length=0",
-            "marked_failure=false",
-            nextCandidate
-              ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}`
-              : "next_candidate: none"
-          ].join("\n\n")
-        });
-        if (nextCandidate) {
-          continue;
-        }
-        break;
-      }
-      const failure = classifyRetryableAgentFailure(text);
-      if (failure?.retryable) {
-        shouldReturnEmptyResponse = false;
-        lastFailureText = text;
-        lastFailureDetails = text;
-        const nextCandidate = candidates[candidateIndex + 1] ?? null;
-        const failureUpdateDetails = failure.markFailure
-          ? `updated_failure_count=${candidate.instance.failureCount + 1}\nupdated_next_check_time=${formatLoadBalancerDateTime(
-              Date.now() + getLoadBalancerResumeMs(candidate.instance)
-            )}`
-          : "";
-        if (failure.markFailure) {
-          setLoadBalancers((prev) =>
-            applyInstanceFailure({
-              loadBalancers: prev,
-              loadBalancerId: candidate.loadBalancer.id,
-              instanceId: candidate.instance.id
-            })
-          );
-        }
-        logNow({
-          category: "load_balancer",
-          agent: args.logicalAgent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: requestLabel,
-          message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${requestLabel}]`,
-          details: [
-            describeResolvedLoadBalancerCandidate(candidate),
-            `error=${text}`,
-            `marked_failure=${failure.markFailure}`,
-            failureUpdateDetails,
-            nextCandidate
-              ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}`
-              : "next_candidate: none"
-          ]
-            .filter(Boolean)
-            .join("\n\n")
-        });
-        continue;
-      }
-
-      if (failure && !failure.retryable) {
-        logNow({
-          category: "load_balancer",
-          agent: args.logicalAgent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: requestLabel,
-          message: `LB terminal error [${requestLabel}]`,
-          details: [describeResolvedLoadBalancerCandidate(candidate), `error=${text}`].join("\n\n")
-        });
-        return text;
-      }
-
-      setLoadBalancers((prev) =>
-        applyInstanceSuccess({
-          loadBalancers: prev,
-          loadBalancerId: candidate.loadBalancer.id,
-          instanceId: candidate.instance.id
-        })
-      );
-      shouldReturnEmptyResponse = false;
-      const responseLength = String(text ?? "").length;
-      logNow({
-        category: "load_balancer",
-        agent: args.logicalAgent.name,
-        ok: responseLength > 0,
-        outcome: responseLength > 0 ? "success" : "degraded",
-        requestId: args.requestId,
-        stage: requestLabel,
-        message: responseLength > 0 ? `LB success [${requestLabel}]` : `LB empty response [${requestLabel}]`,
-        details: [describeResolvedLoadBalancerCandidate(candidate), `response_length=${responseLength}`].join("\n\n")
-      });
-      return text;
-    }
-
-    logNow({
-      category: "load_balancer",
-      agent: args.logicalAgent.name,
-      ok: false,
+    const candidates = resolveLoadBalancerPlanForAgent(args.logicalAgent);
+    const executeForAgent = (agent: AgentConfig, retry: { delaySec: number; max: number }) => runOneToOne({
+      adapter: pickAdapter(agent),
+      agent,
+      input: args.input,
+      history: args.history,
+      system: args.system,
+      onDelta: args.onDelta,
+      retry,
+      onLog: args.onLog,
+      signal: requestSignal,
+      timeoutMs: requestTimeoutMs,
+      deadline: args.deadline
+    });
+    return await runLoadBalancedTextTask({
+      agentName: args.logicalAgent.name,
       requestId: args.requestId,
       stage: requestLabel,
-      message: `LB final failure [${requestLabel}]`,
-      details: lastFailureDetails
+      candidates,
+      noCandidateDetails: describeLoadBalancerAvailability({ agent: args.logicalAgent, loadBalancers, credentials: modelCredentials }),
+      pushLog: logNow,
+      deadline: args.deadline,
+      fallback: () => {
+        const fallbackAgent = hydrateAgentCredentials(args.logicalAgent);
+        return executeForAgent(fallbackAgent, getRetryPolicyForAgent(args.logicalAgent));
+      },
+      execute: (candidate) => executeForAgent(candidate.hydratedAgent, {
+        delaySec: Math.max(0, candidate.instance.delaySecond),
+        max: Math.max(0, candidate.instance.maxRetries)
+      }),
+      markSuccess: (candidate) => setLoadBalancers((prev) => applyInstanceSuccess({
+        loadBalancers: prev,
+        loadBalancerId: candidate.loadBalancer.id,
+        instanceId: candidate.instance.id
+      })),
+      markFailure: (candidate) => setLoadBalancers((prev) => applyInstanceFailure({
+        loadBalancers: prev,
+        loadBalancerId: candidate.loadBalancer.id,
+        instanceId: candidate.instance.id
+      }))
     });
-    return shouldReturnEmptyResponse ? "" : lastFailureText;
   }
 
   async function detectWithLoadBalancer(agent: AgentConfig): Promise<DetectResult> {
@@ -3600,164 +1943,6 @@ export default function App() {
         tools: loadedMap[server.id] ?? mcpToolsByServer[server.id] ?? []
       }))
       .filter((entry) => entry.tools.length > 0);
-  }
-
-  function addCredential(preset: "openai" | "groq" | "gemini" | "custom" | "chrome_prompt") {
-    setModelCredentials((prev) => {
-      if (preset === "openai" && prev.some((entry) => entry.preset === "openai")) return prev;
-      if (preset === "groq" && prev.some((entry) => entry.preset === "groq")) return prev;
-      if (preset === "gemini" && prev.some((entry) => entry.preset === "gemini")) return prev;
-      if (preset === "chrome_prompt" && prev.some((entry) => entry.preset === "chrome_prompt")) return prev;
-      const customCount = prev.filter((entry) => entry.preset === "custom").length;
-      return [...prev, createCredentialEntry(preset, customCount + 1)];
-    });
-  }
-
-  function updateCredential(id: string, patch: Partial<ModelCredentialEntry>) {
-    setModelCredentials((prev) =>
-      prev.map((entry) =>
-        entry.id === id
-          ? {
-              ...entry,
-              ...patch,
-              updatedAt: Date.now()
-            }
-          : entry
-      )
-    );
-    if (patch.endpoint !== undefined) {
-      setCredentialTestResults((prev) => {
-        if (!(id in prev)) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    }
-  }
-
-  function removeCredential(id: string) {
-    setModelCredentials((prev) => prev.filter((entry) => entry.id !== id));
-    setVisibleCredentialIds((prev) => {
-      const next = { ...prev };
-      const credential = modelCredentials.find((entry) => entry.id === id);
-      credential?.keys.forEach((key) => delete next[key.id]);
-      return next;
-    });
-    setCredentialTestResults((prev) => {
-      const next = { ...prev };
-      const credential = modelCredentials.find((entry) => entry.id === id);
-      credential?.keys.forEach((key) => delete next[key.id]);
-      return next;
-    });
-    setTestingCredentialIds((prev) => {
-      const next = { ...prev };
-      const credential = modelCredentials.find((entry) => entry.id === id);
-      credential?.keys.forEach((key) => delete next[key.id]);
-      return next;
-    });
-  }
-
-  function addCredentialKey(credentialId: string) {
-    setModelCredentials((prev) =>
-      prev.map((entry) =>
-        entry.id === credentialId
-          ? {
-              ...entry,
-              keys: [...entry.keys, createCredentialKeyEntry("")],
-              updatedAt: Date.now()
-            }
-          : entry
-      )
-    );
-  }
-
-  function updateCredentialKey(credentialId: string, keyId: string, apiKey: string) {
-    setModelCredentials((prev) =>
-      prev.map((entry) =>
-        entry.id === credentialId
-          ? {
-              ...entry,
-              keys: entry.keys.map((key) =>
-                key.id === keyId
-                  ? {
-                      ...key,
-                      apiKey,
-                      updatedAt: Date.now()
-                    }
-                  : key
-              ),
-              updatedAt: Date.now()
-            }
-          : entry
-      )
-    );
-    setCredentialTestResults((prev) => {
-      const next = { ...prev };
-      delete next[keyId];
-      return next;
-    });
-  }
-
-  function removeCredentialKey(credentialId: string, keyId: string) {
-    setModelCredentials((prev) =>
-      prev.map((entry) =>
-        entry.id === credentialId
-          ? {
-              ...entry,
-              keys: entry.keys.filter((key) => key.id !== keyId),
-              updatedAt: Date.now()
-            }
-          : entry
-      )
-    );
-    setVisibleCredentialIds((prev) => {
-      const next = { ...prev };
-      delete next[keyId];
-      return next;
-    });
-    setCredentialTestResults((prev) => {
-      const next = { ...prev };
-      delete next[keyId];
-      return next;
-    });
-    setTestingCredentialIds((prev) => {
-      const next = { ...prev };
-      delete next[keyId];
-      return next;
-    });
-  }
-
-  async function runCredentialTest(slot: ModelCredentialEntry, keyId: string) {
-    const key = slot.keys.find((entry) => entry.id === keyId);
-    if (!key) return;
-    setTestingCredentialIds((prev) => ({ ...prev, [key.id]: true }));
-    setCredentialTestResults((prev) => ({ ...prev, [key.id]: undefined }));
-    try {
-      const result = await testCredentialConnection(slot, key.apiKey);
-      setCredentialTestResults((prev) => ({ ...prev, [key.id]: result }));
-      logNow({
-        category: "credentials",
-        agent: slot.label,
-        ok: true,
-        message: "Credential test passed",
-        details: `${slot.endpoint}\nKey ${slot.keys.findIndex((entry) => entry.id === keyId) + 1}\n${result.message}`
-      });
-    } catch (e) {
-      const message = errorMessage(e);
-      setCredentialTestResults((prev) => ({
-        ...prev,
-        [key.id]: { ok: false, message }
-      }));
-      logNow({
-        category: "credentials",
-        agent: slot.label,
-        ok: false,
-        message: "Credential test failed",
-        details: `${slot.endpoint}\nKey ${slot.keys.findIndex((entry) => entry.id === keyId) + 1}\n${message}`
-      });
-    } finally {
-      setTestingCredentialIds((prev) => ({ ...prev, [key.id]: false }));
-    }
   }
 
   async function reloadSkillsFromStore(preferredId?: string | null) {
@@ -6230,389 +4415,6 @@ export default function App() {
     };
   }
 
-  function getCredentialApiKey(
-    credential: ModelCredentialEntry | null,
-    key?: ModelCredentialEntry["keys"][number]
-  ) {
-    if (!credential) return "";
-    const target = key && key.apiKey.trim() ? key : credential.keys.find((entry) => entry.apiKey.trim());
-    return target?.apiKey.trim() ?? "";
-  }
-
-  function stopVoicePlayback() {
-    const audio = voiceAudioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.src = "";
-    }
-    voiceAudioRef.current = null;
-    if (voiceAudioUrlRef.current) {
-      URL.revokeObjectURL(voiceAudioUrlRef.current);
-      voiceAudioUrlRef.current = null;
-    }
-    setVoicePlaybackMessageId(null);
-  }
-
-  function stopVoiceCapture() {
-    const recorder = voiceRecorderRef.current;
-    voiceRecorderRef.current = null;
-    if (recorder && recorder.state !== "inactive") {
-      try {
-        recorder.stop();
-      } catch {
-        // Ignore recorder stop races.
-      }
-    }
-
-    const stream = voiceMediaStreamRef.current;
-    voiceMediaStreamRef.current = null;
-    if (stream) {
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-    }
-  }
-
-  function getVoiceRecorderOptions() {
-    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
-    for (const candidate of candidates) {
-      if (typeof MediaRecorder.isTypeSupported === "function" && MediaRecorder.isTypeSupported(candidate)) {
-        return { mimeType: candidate };
-      }
-    }
-    return undefined;
-  }
-
-  function appendVoiceTranscriptToComposer(transcript: string) {
-    const normalized = normalizeTranscriptSpacing(transcript);
-    if (!normalized) return;
-    const current = chatComposerDraft.trimEnd();
-    const next = current ? `${current} ${normalized}` : normalized;
-    setChatComposerDraft(next);
-    setTutorialComposerSeed({ value: next, token: Date.now() });
-  }
-
-  async function transcribeVoiceBlob(blob: Blob, requestId: string) {
-    if (!voiceSttLoadBalancer?.id) {
-      throw new Error("請先在 Chat Config > Voice 設定可用的 STT load balancer。");
-    }
-    return await runVoiceTaskWithLoadBalancer({
-      loadBalancerId: voiceSttLoadBalancer.id,
-      requestId,
-      stage: "voice stt",
-      voiceModel: "(from load balancer)",
-      execute: async (candidate) => {
-        const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-        if (!apiKey) {
-          throw new Error("STT load balancer instance is missing API key.");
-        }
-        return transcribeAudioChunk({
-          credential: candidate.credential,
-          apiKey,
-          settings: voiceSettings,
-          blob,
-          chunkIndex: 0,
-          modelOverride: candidate.instance.model
-        });
-      },
-      describeSuccess: (text) => `response_length=${String(text ?? "").length}`
-    });
-  }
-
-  async function startVoiceDictation() {
-    setVoiceError(null);
-    if (!voiceSttLoadBalancer?.id) {
-      setVoiceError("請先在 Chat Config > Voice 設定可用的 STT load balancer。");
-      return;
-    }
-    const microphoneIssue = getVoiceMicrophoneSupportIssue();
-    if (microphoneIssue) {
-      setVoiceError(microphoneIssue);
-      return;
-    }
-
-    const requestId = createLogRequestId("voice");
-    logNow({
-      category: "voice",
-      agent: activeAgent?.name ?? "Voice",
-      requestId,
-      stage: "dictation",
-      message: "Voice dictation started"
-    });
-
-    try {
-      stopVoiceCapture();
-      voiceRecordedChunksRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      voiceMediaStreamRef.current = stream;
-      const recorderOptions = getVoiceRecorderOptions();
-      const recorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
-      voiceRecorderRef.current = recorder;
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          voiceRecordedChunksRef.current.push(event.data);
-        }
-      };
-      recorder.onerror = () => {
-        setVoiceError("語音錄音失敗。");
-        setVoiceDictationStatus("idle");
-        stopVoiceCapture();
-      };
-      recorder.start();
-      setVoiceDictationStatus("recording");
-    } catch (error) {
-      stopVoiceCapture();
-      setVoiceDictationStatus("idle");
-      const message = errorMessage(error);
-      setVoiceError(message);
-      logNow({
-        category: "voice",
-        agent: activeAgent?.name ?? "Voice",
-        ok: false,
-        requestId,
-        stage: "dictation",
-        message: "Voice dictation failed to start",
-        details: message
-      });
-    }
-  }
-
-  async function stopVoiceDictationAndTranscribe() {
-    const recorder = voiceRecorderRef.current;
-    if (!recorder) {
-      setVoiceDictationStatus("idle");
-      stopVoiceCapture();
-      return;
-    }
-
-    const requestId = createLogRequestId("voice");
-    setVoiceError(null);
-    setVoiceDictationStatus("transcribing");
-
-    const stopped = new Promise<void>((resolve) => {
-      const previousOnStop = recorder.onstop;
-      recorder.onstop = (event) => {
-        if (typeof previousOnStop === "function") previousOnStop.call(recorder, event);
-        resolve();
-      };
-    });
-
-    try {
-      if (recorder.state !== "inactive") {
-        recorder.stop();
-      }
-      await stopped;
-      const mimeType = voiceRecordedChunksRef.current.find((chunk) => chunk.type)?.type || recorder.mimeType || "audio/webm";
-      const blob = new Blob(voiceRecordedChunksRef.current, { type: mimeType });
-      stopVoiceCapture();
-      voiceRecordedChunksRef.current = [];
-      if (blob.size < MIN_VOICE_STT_BLOB_BYTES) {
-        throw new Error("錄音太短，沒有送出轉寫。");
-      }
-      const transcript = await transcribeVoiceBlob(blob, requestId);
-      appendVoiceTranscriptToComposer(transcript);
-      logNow({
-        category: "voice",
-        agent: activeAgent?.name ?? "Voice",
-        ok: true,
-        requestId,
-        stage: "stt",
-        message: "Voice dictation transcribed",
-        details: transcript
-      });
-    } catch (error) {
-      const message = errorMessage(error);
-      setVoiceError(message);
-      logNow({
-        category: "voice",
-        agent: activeAgent?.name ?? "Voice",
-        ok: false,
-        requestId,
-        stage: "stt",
-        message: "Voice dictation transcription failed",
-        details: message
-      });
-    } finally {
-      stopVoiceCapture();
-      setVoiceDictationStatus("idle");
-    }
-  }
-
-  async function toggleVoiceDictation() {
-    if (voiceDictationStatus === "recording") {
-      await stopVoiceDictationAndTranscribe();
-      return;
-    }
-    if (voiceDictationStatus === "idle") {
-      await startVoiceDictation();
-    }
-  }
-
-  async function playMessageTts(messageId: string, text: string) {
-    const trimmed = String(text ?? "").trim();
-    if (!trimmed) return;
-    if (voicePlaybackMessageId === messageId) {
-      stopVoicePlayback();
-      return;
-    }
-    if (!voiceTtsLoadBalancer?.id) {
-      setVoiceError("請先在 Chat Config > Voice 設定可用的 TTS load balancer。");
-      return;
-    }
-
-    const requestId = createLogRequestId("voice");
-    setVoiceError(null);
-    stopVoicePlayback();
-    setVoicePlaybackMessageId(messageId);
-    try {
-      const audioBlob = await runVoiceTaskWithLoadBalancer({
-        loadBalancerId: voiceTtsLoadBalancer.id,
-        requestId,
-        stage: "voice tts",
-        voiceModel: "(from load balancer)",
-        execute: async (candidate) => {
-          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-          if (!apiKey) {
-            throw new Error("TTS load balancer instance is missing API key.");
-          }
-          return synthesizeGeminiSpeech({
-            credential: candidate.credential,
-            apiKey,
-            settings: voiceSettings,
-            text: trimmed,
-            modelOverride: candidate.instance.model
-          });
-        },
-        describeSuccess: (blob) => `audio_bytes=${blob.size}`
-      });
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
-      voiceAudioRef.current = audio;
-      voiceAudioUrlRef.current = audioUrl;
-      audio.onended = () => {
-        if (voiceAudioRef.current === audio) stopVoicePlayback();
-      };
-      audio.onerror = () => {
-        if (voiceAudioRef.current === audio) stopVoicePlayback();
-        setVoiceError("語音播放失敗。");
-      };
-      await audio.play();
-      logNow({
-        category: "voice",
-        agent: activeAgent?.name ?? "Voice",
-        ok: true,
-        requestId,
-        stage: "tts",
-        message: "Voice playback started",
-        details: `message_id=${messageId}`
-      });
-    } catch (error) {
-      const message = errorMessage(error);
-      stopVoicePlayback();
-      setVoiceError(message);
-      logNow({
-        category: "voice",
-        agent: activeAgent?.name ?? "Voice",
-        ok: false,
-        requestId,
-        stage: "tts",
-        message: "Voice playback failed",
-        details: message
-      });
-    }
-  }
-
-  async function testVoiceSttLoadBalancer() {
-    const requestId = createLogRequestId("voice");
-    if (!voiceSttLoadBalancer?.id) {
-      setVoiceProbeState((prev) => ({
-        ...prev,
-        stt: { running: false, ok: false, message: "請先選擇 STT load balancer。" }
-      }));
-      return;
-    }
-    setVoiceProbeState((prev) => ({ ...prev, stt: { running: true } }));
-    try {
-      const transcript = await runVoiceTaskWithLoadBalancer({
-        loadBalancerId: voiceSttLoadBalancer.id,
-        requestId,
-        stage: "voice stt probe",
-        voiceModel: "(from load balancer)",
-        execute: async (candidate) => {
-          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-          if (!apiKey) {
-            throw new Error("STT load balancer instance is missing API key.");
-          }
-          return transcribeAudioChunk({
-            credential: candidate.credential,
-            apiKey,
-            settings: voiceSettings,
-            blob: createVoiceProbeWavBlob(),
-            chunkIndex: 0,
-            modelOverride: candidate.instance.model,
-            allowEmptyTranscript: true
-          });
-        },
-        describeSuccess: (text) => `response_length=${String(text ?? "").length}`
-      });
-      const message = `STT probe OK${transcript ? `，transcript=${transcript}` : "，provider accepted probe audio"}`;
-      setVoiceProbeState((prev) => ({
-        ...prev,
-        stt: { running: false, ok: true, message }
-      }));
-    } catch (error) {
-      const message = errorMessage(error);
-      setVoiceProbeState((prev) => ({
-        ...prev,
-        stt: { running: false, ok: false, message }
-      }));
-    }
-  }
-
-  async function testVoiceTtsLoadBalancer() {
-    const requestId = createLogRequestId("voice");
-    if (!voiceTtsLoadBalancer?.id) {
-      setVoiceProbeState((prev) => ({
-        ...prev,
-        tts: { running: false, ok: false, message: "請先選擇 TTS load balancer。" }
-      }));
-      return;
-    }
-    setVoiceProbeState((prev) => ({ ...prev, tts: { running: true } }));
-    try {
-      const audioBlob = await runVoiceTaskWithLoadBalancer({
-        loadBalancerId: voiceTtsLoadBalancer.id,
-        requestId,
-        stage: "voice tts probe",
-        voiceModel: "(from load balancer)",
-        execute: async (candidate) => {
-          const apiKey = getCredentialApiKey(candidate.credential, candidate.key);
-          if (!apiKey) {
-            throw new Error("TTS load balancer instance is missing API key.");
-          }
-          return synthesizeGeminiSpeech({
-            credential: candidate.credential,
-            apiKey,
-            settings: voiceSettings,
-            text: "Voice TTS test.",
-            modelOverride: candidate.instance.model
-          });
-        },
-        describeSuccess: (blob) => `audio_bytes=${blob.size}`
-      });
-      setVoiceProbeState((prev) => ({
-        ...prev,
-        tts: { running: false, ok: true, message: `TTS probe OK，audio_bytes=${audioBlob.size}` }
-      }));
-    } catch (error) {
-      const message = errorMessage(error);
-      setVoiceProbeState((prev) => ({
-        ...prev,
-        tts: { running: false, ok: false, message }
-      }));
-    }
-  }
-
   async function onSend(input: string) {
     if (tutorialRestoringRef.current) {
       logNow({ category: "tutorial", ok: false, message: "Send skipped: tutorial restore in progress", details: input });
@@ -7600,192 +5402,7 @@ export default function App() {
             )}
 
             {configModal === "credentials" && (
-              <HelpModal title="Credentials" onClose={() => setConfigModal(null)} width="min(680px, 96vw)">
-                <div style={{ display: "grid", gap: 14 }} data-tutorial-id="credentials-modal">
-                  <div style={{ fontSize: 12, opacity: 0.78, lineHeight: 1.7 }}>
-                    這裡集中管理 provider / endpoint 與多把 API keys。Load Balancer 的 instance 會選擇其中一筆 credential，再綁定某一把 key 來執行。
-                  </div>
-                  <div
-                    style={{
-                      padding: 12,
-                      borderRadius: 8,
-                      border: "1px solid rgba(245, 158, 11, 0.42)",
-                      background: "rgba(245, 158, 11, 0.10)",
-                      color: "var(--text)",
-                      fontSize: 12,
-                      lineHeight: 1.7
-                    }}
-                  >
-                    安全提醒：目前 API keys 仍會存於本機瀏覽器 storage 的獨立 credential key。請避免在公用電腦或不信任的瀏覽器擴充環境使用；匯入第三方 built-in tool 前也請先檢查程式碼。
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button type="button" onClick={() => addCredential("openai")} style={iconActionBtn}>
-                      + OpenAI
-                    </button>
-                    <button type="button" onClick={() => addCredential("groq")} style={iconActionBtn} data-tutorial-id="credential-add-groq">
-                      + Groq
-                    </button>
-                    <button type="button" onClick={() => addCredential("gemini")} style={iconActionBtn}>
-                      + Gemini
-                    </button>
-                    <button type="button" onClick={() => addCredential("custom")} style={iconActionBtn}>
-                      + Custom
-                    </button>
-                    <button type="button" onClick={() => addCredential("chrome_prompt")} style={iconActionBtn}>
-                      + Chrome Prompt
-                    </button>
-                  </div>
-                  {credentialSlots.length === 0 ? (
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>目前還沒有 credential。可先新增 OpenAI、Groq、Custom 或 Chrome Prompt。</div>
-                  ) : (
-                    credentialSlots.map((slot) => (
-                      <div
-                        key={slot.id}
-                        className="card"
-                        style={{ padding: 14, display: "grid", gap: 10 }}
-                        data-tutorial-id={slot.preset === "groq" ? "credential-groq-card" : undefined}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                          <div>
-                            <div style={{ fontWeight: 800 }}>{slot.label}</div>
-                            <div style={{ fontSize: 12, opacity: 0.72 }}>{slot.endpoint || "尚未設定 endpoint"}</div>
-                          </div>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                            <div style={{ fontSize: 12, opacity: 0.72 }}>
-                              {slot.preset === "chrome_prompt"
-                                ? "不需要 API key"
-                                : `已設定 ${slot.keys.filter((key) => key.apiKey.trim()).length}/${slot.keys.length} keys`}
-                            </div>
-                            <button type="button" onClick={() => removeCredential(slot.id)} style={dangerMiniBtn}>
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{ display: "grid", gap: 6 }}>
-                          <label style={label}>Credential Name</label>
-                          <input
-                            value={slot.label}
-                            onChange={(e) => updateCredential(slot.id, { label: e.target.value })}
-                            style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
-                            placeholder="Credential label"
-                            data-tutorial-id={slot.preset === "groq" ? "credential-groq-label-input" : undefined}
-                          />
-                        </div>
-
-                        <div style={{ display: "grid", gap: 6 }}>
-                          <label style={label}>Endpoint</label>
-                          <input
-                            value={slot.endpoint}
-                            onChange={(e) => updateCredential(slot.id, { endpoint: e.target.value })}
-                            disabled={slot.preset === "openai" || slot.preset === "groq" || slot.preset === "gemini"}
-                            style={{
-                              width: "100%",
-                              marginTop: 0,
-                              boxSizing: "border-box",
-                              opacity: slot.preset === "openai" || slot.preset === "groq" || slot.preset === "gemini" ? 0.72 : 1,
-                              ...selectStyle
-                            }}
-                            placeholder="https://api.example.com/v1"
-                            data-tutorial-id={slot.preset === "groq" ? "credential-groq-endpoint-input" : undefined}
-                          />
-                        </div>
-
-                        {slot.preset !== "chrome_prompt" ? (
-                          <div style={{ display: "grid", gap: 10 }}>
-                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              <label style={label}>Model API Keys</label>
-                              <button
-                                type="button"
-                                onClick={() => addCredentialKey(slot.id)}
-                                style={{ ...iconActionBtn, marginLeft: "auto" }}
-                                data-tutorial-id={slot.preset === "groq" ? "credential-groq-add-key" : undefined}
-                              >
-                                + Key
-                              </button>
-                            </div>
-                            {slot.keys.map((key, keyIndex) => (
-                              <div
-                                key={key.id}
-                                style={{
-                                  display: "grid",
-                                  gap: 8,
-                                  padding: 12,
-                                  borderRadius: 12,
-                                  border: "1px solid var(--border)",
-                                  background: "var(--bg-2)"
-                                }}
-                              >
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                                  <div style={{ fontSize: 12, fontWeight: 700 }}>Key {keyIndex + 1}</div>
-                                  <button type="button" onClick={() => removeCredentialKey(slot.id, key.id)} style={dangerMiniBtn} disabled={slot.keys.length <= 1}>
-                                    Remove
-                                  </button>
-                                </div>
-                                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                  <input
-                                    type={visibleCredentialIds[key.id] ? "text" : "password"}
-                                    value={key.apiKey}
-                                    onChange={(e) => updateCredentialKey(slot.id, key.id, e.target.value)}
-                                    style={{ width: "100%", marginTop: 0, boxSizing: "border-box", ...selectStyle }}
-                                    placeholder="Enter API key"
-                                    data-tutorial-id={
-                                      slot.preset === "groq"
-                                        ? keyIndex === 0
-                                          ? "credential-groq-api-key"
-                                          : `credential-groq-api-key-${keyIndex + 1}`
-                                        : undefined
-                                    }
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => setVisibleCredentialIds((prev) => ({ ...prev, [key.id]: !prev[key.id] }))}
-                                    style={iconBtn}
-                                    title={visibleCredentialIds[key.id] ? "Hide API key" : "Show API key"}
-                                    aria-label={visibleCredentialIds[key.id] ? "Hide API key" : "Show API key"}
-                                  >
-                                    <EyeIcon open={!!visibleCredentialIds[key.id]} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => void runCredentialTest(slot, key.id)}
-                                    disabled={testingCredentialIds[key.id] || !slot.endpoint.trim()}
-                                    data-tutorial-id={slot.preset === "groq" && keyIndex === 0 ? "credential-groq-test" : undefined}
-                                    style={{
-                                      ...iconActionBtn,
-                                      whiteSpace: "nowrap",
-                                      opacity: testingCredentialIds[key.id] || !slot.endpoint.trim() ? 0.64 : 1,
-                                      cursor: testingCredentialIds[key.id] || !slot.endpoint.trim() ? "not-allowed" : "pointer"
-                                    }}
-                                  >
-                                    {testingCredentialIds[key.id] ? "測試中..." : "測試 Provider 連線"}
-                                  </button>
-                                </div>
-                                {credentialTestResults[key.id] ? (
-                                  <div
-                                    style={{
-                                      fontSize: 12,
-                                      lineHeight: 1.6,
-                                      color: credentialTestResults[key.id]?.ok ? "var(--ok)" : "var(--danger)",
-                                      opacity: 0.92
-                                    }}
-                                  >
-                                    {credentialTestResults[key.id]?.message}
-                                  </div>
-                                ) : null}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: 12, opacity: 0.72, lineHeight: 1.6 }}>
-                            Chrome Prompt 是 pseudo provider，不需要 API key；可直接給 load balancer instance 使用。
-                          </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </HelpModal>
+              <CredentialsPanel controller={credentialController} onClose={() => setConfigModal(null)} />
             )}
 
             {configModal === "load_balancers" && (
@@ -8176,99 +5793,7 @@ export default function App() {
         </HelpModal>
       )}
 
-      <div className="log-shell card">
-        <div className="log-header">
-          <div className="log-title">Log</div>
-          <div className="log-actions">
-            <button
-              className="log-toggle"
-              onClick={async () => {
-                if (!visibleLogText.trim()) return;
-                await copyText(visibleLogText);
-              }}
-            >
-              Copy Visible
-            </button>
-            <button className="log-toggle" onClick={() => setLog([])}>
-              Clear
-            </button>
-            <button className="log-toggle" onClick={() => setLogCollapsed((c) => !c)}>
-              {logCollapsed ? "Expand" : "Collapse"}
-            </button>
-          </div>
-        </div>
-        {!logCollapsed && (
-          <div className="log-body" style={{ height: logHeight }}>
-            <div
-              className="log-resize-handle"
-              onMouseDown={(e) => {
-                logResizeRef.current = { startY: e.clientY, startHeight: logHeight };
-                document.body.style.userSelect = "none";
-              }}
-            />
-            {log.length === 0 && <div className="log-empty">No logs yet.</div>}
-            {log.length > 0 && (
-              <div className="log-table">
-                <div className="log-row log-row-head">
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "category", dir: s.key === "category" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    Category{logSort.key === "category" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
-                  </button>
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "agent", dir: s.key === "agent" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    Agent{logSort.key === "agent" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
-                  </button>
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "outcome", dir: s.key === "outcome" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    Outcome{logSort.key === "outcome" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
-                  </button>
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "requestId", dir: s.key === "requestId" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    Req{logSort.key === "requestId" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
-                  </button>
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "ts", dir: s.key === "ts" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    Time{logSort.key === "ts" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
-                  </button>
-                  <button className="log-sort" onClick={() => setLogSort((s) => ({ key: "message", dir: s.key === "message" && s.dir === "asc" ? "desc" : "asc" }))}>
-                    Log{logSort.key === "message" ? (logSort.dir === "asc" ? " ^" : " v") : ""}
-                  </button>
-                </div>
-                {sortedLogEntries.map((item) => {
-                    const outcome = item.outcome ?? inferLogOutcome(item);
-                    const outcomeLabel = formatLogOutcomeLabel(outcome);
-                    const tsLabel = new Date(item.ts).toLocaleString();
-                    const detailsText = formatLogEntryForClipboard(item);
-                    return (
-                      <details key={item.id} className="log-row log-entry">
-                        <summary className="log-summary">
-                          <div className="log-cell log-category">{item.category}</div>
-                          <div className="log-cell log-agent">{item.agent ?? "-"}</div>
-                          <div className={`log-cell log-outcome ${outcome}`}>{outcomeLabel}</div>
-                          <div className="log-cell log-request-id">{item.requestId ?? "-"}</div>
-                          <div className="log-cell log-time">{tsLabel}</div>
-                          <div className="log-cell log-message">{item.message}</div>
-                        </summary>
-                        <div className="log-details">
-                          <div className="log-details-head">
-                            <div className="log-details-label">Log</div>
-                            <button
-                              type="button"
-                              className="log-copy-btn"
-                              onClick={async (event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                await copyText(detailsText);
-                              }}
-                            >
-                              Copy
-                            </button>
-                          </div>
-                          <pre className="log-details-body">{detailsText}</pre>
-                        </div>
-                      </details>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <LogPanel entries={log} onClear={clearLog} />
 
       </div>
       )}
@@ -8328,19 +5853,6 @@ const selectStyle: React.CSSProperties = {
   border: "1px solid var(--border)",
   background: "var(--bg-2)",
   color: "var(--text)"
-};
-
-const iconBtn: React.CSSProperties = {
-  width: 40,
-  height: 40,
-  borderRadius: 12,
-  border: "1px solid var(--border)",
-  background: "var(--bg-2)",
-  color: "var(--text)",
-  display: "grid",
-  placeItems: "center",
-  cursor: "pointer",
-  flex: "0 0 auto"
 };
 
 const iconActionBtn: React.CSSProperties = {
