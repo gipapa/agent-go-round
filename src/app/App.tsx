@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
   AgentConfig,
-  BrowserObservationDigest,
   BuiltInToolConfig,
   ChatTraceEntry,
   ChatMessage,
@@ -14,28 +13,19 @@ import {
   VoiceSettings,
   SkillExecutionMode,
   SkillStepDecision,
-  SkillCompletionDecision,
   SkillPhase,
-  SkillRunState,
   SkillTodoItem,
   DocItem,
   McpServerConfig,
   McpTool,
   LoadBalancerConfig,
-  SkillConfig,
-  SkillDocItem,
-  SkillFileItem
+  SkillConfig
 } from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
-import { loadChatHistory, saveChatHistory } from "../storage/chatStore";
 import { loadBuiltInTools, saveBuiltInTools } from "../storage/builtInToolStore";
 import { listDocs, upsertDoc, deleteDoc } from "../storage/docStore";
 import {
   createEmptySkill,
-  deleteSkill,
-  deleteSkillTextFile,
-  exportSkillZip,
-  importSkillZip,
   listSkillDocs,
   listSkillFiles,
   listSkills,
@@ -61,9 +51,8 @@ import { CustomAdapter } from "../adapters/custom";
 import { runOneToOne } from "../orchestrators/oneToOne";
 import { createInitialState as createMagiRenderState, MAGI_UNIT_LAYOUT, MagiPreparedUnit, runMagi } from "../orchestrators/magi";
 import { McpClientManager } from "../mcp/clientManager";
-import { formatMcpServerResolutionFailure, resolveMcpServerId } from "../mcp/serverResolver";
+import { resolveMcpServerId } from "../mcp/serverResolver";
 import { McpToolCatalog } from "../mcp/toolCatalog";
-import { createToolDashboardHelpers } from "../utils/toolDashboard";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
@@ -82,8 +71,6 @@ import LogPanel from "../ui/LogPanel";
 import CredentialsPanel from "../ui/CredentialsPanel";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
-  findTutorialAgentBaseInList,
-  findTutorialAgentInList,
   normalizeTutorialPrimaryAgentList,
   usesTutorialLoadBalancer
 } from "../onboarding/agentManagement";
@@ -92,7 +79,6 @@ import {
   TUTORIAL_DOC_CONTENT,
   TUTORIAL_AGENT_ROLE,
   captureTutorialWorkspaceSnapshot,
-  evaluateTutorialStep,
   restoreTutorialWorkspaceSnapshot,
   TUTORIAL_DOC_NAME,
   TUTORIAL_TIME_TOOL_CODE,
@@ -121,7 +107,8 @@ import {
   TUTORIAL_SEQUENTIAL_SKILL_NAME,
   TUTORIAL_SEQUENTIAL_SKILL_ROOT
 } from "../onboarding/tutorialSkillTemplate";
-import { TutorialScenarioDefinition, TutorialStepEvaluation, TutorialWorkspaceSnapshot } from "../onboarding/types";
+import { TutorialScenarioDefinition, TutorialWorkspaceSnapshot } from "../onboarding/types";
+import { useTutorialSession } from "../onboarding/useTutorialSession";
 import { getMagiSkillBundle } from "../magi/magiSkills";
 import {
   ensureManagedMagiAgents,
@@ -143,8 +130,6 @@ import {
   savePromptTemplateFiles
 } from "../promptTemplates/store";
 import {
-  buildSkillDecisionCatalog,
-  buildSkillDecisionPrompt,
   buildSkillSessionSnapshot,
   getAllowedSkillsFromSnapshot,
   loadSkillRuntime,
@@ -152,21 +137,12 @@ import {
 } from "../runtime/skillRuntime";
 import {
   buildSkillRefinementInput,
-  buildSkillVerifyPrompt,
   clampSkillToolLoopMax,
   clampSkillVerifyMax,
-  normalizeSkillVerifyDecision,
   pushSkillExecutionModeTrace
 } from "../runtime/skillExecutor";
-import {
-  buildBootstrapPlanPrompt,
-  buildCompletionGatePrompt,
-  buildPlannerStepPrompt,
-  normalizeSkillCompletionDecision,
-  normalizeSkillStepDecision
-} from "../runtime/skillPlanner";
 import { runMultiTurnSkillRuntime } from "../runtime/multiTurnSkillRuntime";
-import { extractBrowserObservation, formatBrowserObservationDigest } from "../runtime/browserObservation";
+import { formatBrowserObservationDigest } from "../runtime/browserObservation";
 import {
   buildBrowserHeuristicCompletion,
   buildBrowserHeuristicDecision,
@@ -176,55 +152,52 @@ import {
   hasGroundedRepoSummary,
   normalizeBrowserWorkflowStartUrl
 } from "../runtime/browserWorkflow";
-import { bootstrapTodoList, summarizeTodo } from "../runtime/skillTodo";
+import { bootstrapTodoList } from "../runtime/skillTodo";
 import {
-  extractFirstUrl,
   inferExplicitToolDecision,
   normalizeToolDecisionAgainstAvailableTools,
-  parseToolDecision,
   resolvePreferredBrowserHeadedMode,
   type ToolEntry
 } from "../runtime/toolDecision";
 import {
-  buildObservationSignature,
-  buildToolActionSignature,
-  callMcpToolWithTimeout,
   classifyBuiltInToolIntent,
   classifyMcpToolIntent,
-  getMcpToolTimeoutMs,
   type ToolIntent
 } from "../runtime/toolExecution";
 import { runLoadBalancedTask, runLoadBalancedTextTask } from "../runtime/loadBalancerRunner";
-import { buildToolDecisionCatalog, buildToolDecisionPrompt } from "../runtime/toolDecisionPrompt";
+import { createDecisionRunners } from "../runtime/decisionRunners";
+import {
+  createToolSelectionExecutor,
+  type ToolAugmentationResult
+} from "../runtime/toolSelectionExecutor";
 import {
   buildPromptTemplateApiTestSpec,
   type PromptTemplateApiTestState
 } from "../runtime/promptTemplateTests";
 import {
   appendToolPromptSummary,
-  asRecord,
   confirmedFromToolOutput,
   getThinkStreamingState,
   mergeSystemText,
   msg,
-  normalizeImportedMessage,
   stringifyAny,
   stripPreviousToolPromptSummaries
 } from "../runtime/chatMessages";
 import { useAppLog } from "./useAppLog";
+import { useChatHistoryController } from "../chat/useChatHistoryController";
+import { useDocsController } from "../resources/useDocsController";
+import { useSkillsController } from "../resources/useSkillsController";
 import { createLogRequestId } from "../runtime/logging";
 import { fetchCredentialModels } from "../credentials/runtime";
 import { useCredentialController } from "../credentials/useCredentialController";
 import { generateId } from "../utils/id";
-import { runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
-import { pickBestAgentNameForQuestion, loadSavedAgentsFromStorage } from "../utils/agentDirectoryTool";
 import {
   SYSTEM_AGENT_DIRECTORY_TOOL_ID,
   SYSTEM_BUILT_IN_TOOLS,
   SYSTEM_REQUEST_CONFIRMATION_TOOL_ID,
   SYSTEM_USER_PROFILE_TOOL_ID
 } from "../utils/systemBuiltInTools";
-import { buildToolResultPromptBlock, ToolPromptDetailMode } from "../utils/toolResultSummary";
+import type { ToolPromptDetailMode } from "../utils/toolResultSummary";
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 import type { ExecutionDeadline } from "../utils/deadline";
 import { combineSignals, createDeadline } from "../utils/deadline";
@@ -250,16 +223,11 @@ import {
   describeLoadBalancerAvailability,
   describeResolvedLoadBalancerCandidate
 } from "../utils/loadBalancerDiagnostics";
-import { extractJsonObject } from "../utils/safeJson";
 import { errorMessage } from "../utils/errors";
 import {
-  normalizeSkillBootstrapPlan,
-  normalizeSkillDecision,
   type BuiltInToolAction,
   type McpAction,
-  type SkillBootstrapPlan,
-  type SkillDecision,
-  type ToolDecision
+  type SkillBootstrapPlan
 } from "../schemas/decisions";
 
 const DEFAULT_EXECUTION_DEADLINE_MS = 5 * 60 * 1000;
@@ -303,10 +271,6 @@ type OneToOneTurnResult = {
   spokenContent?: string;
 };
 
-type ExportPayload =
-  | { kind: "raw_history"; exportedAt: number; history: ChatMessage[] }
-  | { kind: "summary_history"; exportedAt: number; summary: string; agent?: { id?: string; name?: string; model?: string } };
-
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
 type AppEntryMode = "landing" | "workspace";
@@ -321,33 +285,6 @@ function getUserProfileToolPayload(profile: UserProfile) {
 function clampHistoryLimit(value: number) {
   if (!Number.isFinite(value)) return 10;
   return Math.max(1, Math.min(200, Math.round(value)));
-}
-
-function downloadBlob(filename: string, content: string, type: string) {
-  const blob = new Blob([content], { type });
-  const href = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(href);
-}
-
-function downloadFileBlob(filename: string, blob: Blob) {
-  const href = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(href);
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function compactSupportText(text: string, maxChars: number) {
@@ -445,21 +382,6 @@ function formatSkillPhaseStatus(phase: SkillPhase) {
       return "正在整理最終回覆…";
   }
 }
-
-type ToolAugmentationResult = {
-  input: string;
-  status: "no_entries" | "decision_failed" | "no_tool" | "tool_called";
-  ok?: boolean;
-  toolLabel?: string;
-  detail?: string;
-  actionSignature?: string;
-  toolIntent?: ToolIntent;
-  observationSignature?: string;
-  decisionSummary?: string;
-  toolOutput?: unknown;
-  browserObservation?: BrowserObservationDigest | null;
-  serverId?: string;
-};
 
 function isSequentialThinkingSkill(skill?: SkillConfig | null) {
   if (!skill) return false;
@@ -637,30 +559,15 @@ export default function App() {
   const [skillVerifyMax, setSkillVerifyMax] = useState<number>(() => clampSkillVerifyMax(initialUi.skillVerifyMax ?? 1));
   const [skillToolLoopMax, setSkillToolLoopMax] = useState<number>(() => clampSkillToolLoopMax(initialUi.skillToolLoopMax ?? 6));
   const [skillVerifierAgentId, setSkillVerifierAgentId] = useState<string>(() => initialUi.skillVerifierAgentId ?? "");
-  const [history, setHistory] = useState<ChatMessage[]>([]);
-  const [chatComposerDraft, setChatComposerDraft] = useState("");
-  const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [isChatFullscreen, setIsChatFullscreen] = useState(false);
-
   const [historyMessageLimit, setHistoryMessageLimit] = useState<number>(() => clampHistoryLimit(initialUi.historyMessageLimit ?? 10));
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(() => normalizeVoiceSettings(initialUi.voiceSettings ?? initialUi.radioSettings));
-  const [isSummaryExporting, setIsSummaryExporting] = useState(false);
-
   type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | "voice" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
   const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
-  const [docs, setDocs] = useState<DocItem[]>([]);
-  const [docsLoaded, setDocsLoaded] = useState(false);
-  const [docEditorId, setDocEditorId] = useState<string | null>(null);
-  const [skills, setSkills] = useState<SkillConfig[]>([]);
-  const [skillsLoaded, setSkillsLoaded] = useState(false);
-  const [skillPanelSelectedId, setSkillPanelSelectedId] = useState<string | null>(null);
-  const [skillPanelDocs, setSkillPanelDocs] = useState<SkillDocItem[]>([]);
-  const [skillPanelFiles, setSkillPanelFiles] = useState<SkillFileItem[]>([]);
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
   const [loadBalancers, setLoadBalancers] = useState<LoadBalancerConfig[]>(() => loadLoadBalancers());
   const [loadBalancerPanelSelectedId, setLoadBalancerPanelSelectedId] = useState<string | null>(null);
@@ -688,6 +595,73 @@ export default function App() {
     [mcpServers, mcpToolsByServer]
   );
   const { entries: log, pushLog, clearLog } = useAppLog();
+  const {
+    docs,
+    docsLoaded,
+    docEditorId,
+    setDocEditorId,
+    reloadDocs,
+    createDoc: onCreateDoc,
+    saveDoc: onSaveDoc,
+    removeDoc: onDeleteDoc
+  } = useDocsController({ pushLog });
+  const {
+    skills,
+    skillsLoaded,
+    skillPanelSelectedId,
+    setSkillPanelSelectedId,
+    skillPanelDocs,
+    skillPanelFiles,
+    reloadSkillsFromStore,
+    importSkill: onImportSkill,
+    createEmpty: onCreateEmptySkill,
+    removeSkill: onDeleteSkill,
+    updateMarkdown: onUpdateSkillMarkdown,
+    upsertTextFile: onUpsertSkillTextFile,
+    removeTextFile: onDeleteSkillTextFile,
+    exportSkill: onExportSkill
+  } = useSkillsController({ pushLog });
+  const chatHistoryController = useChatHistoryController({
+    activeTab,
+    historyMessageLimit,
+    pushLog,
+    summarizeHistory: activeAgent
+      ? async ({ history: summaryHistory, requestId }) => {
+          const summary = await runOneToOneWithLoadBalancer({
+            logicalAgent: activeAgent,
+            input:
+              "Please compress this conversation into a concise reusable summary for future continuation. Keep key facts, decisions, unresolved items, user preferences, and open tasks. Output plain text only.",
+            history: summaryHistory,
+            system:
+              "You are preparing a conversation carry-over note. Write in Traditional Chinese when possible. Do not include markdown code fences.",
+            requestId,
+            requestLabel: "summary export",
+            onDelta: () => {},
+            onLog: (text) => pushLog({ category: "retry", agent: activeAgent.name, requestId, stage: "summary export", message: text })
+          });
+          return {
+            summary,
+            agent: { id: activeAgent.id, name: activeAgent.name, model: activeAgent.model }
+          };
+        }
+      : undefined
+  });
+  const {
+    history,
+    setHistory,
+    chatComposerDraft,
+    setChatComposerDraft,
+    isChatFullscreen,
+    setIsChatFullscreen,
+    isSummaryExporting,
+    append,
+    patchMessage,
+    clearHistory,
+    limitHistory,
+    exportRawHistory,
+    exportSummaryHistory,
+    importHistoryFile
+  } = chatHistoryController;
   const credentialController = useCredentialController({ pushLog });
   const {
     modelCredentials,
@@ -697,25 +671,8 @@ export default function App() {
     credentialTestResults
   } = credentialController;
   const promptTemplateRuntime = useMemo(() => buildPromptTemplateRuntime(promptTemplateFiles), [promptTemplateFiles]);
-  const [tutorialScenario, setTutorialScenario] = useState<TutorialScenarioDefinition | null>(null);
-  const [tutorialScenarioIndex, setTutorialScenarioIndex] = useState<number | null>(null);
-  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
-  const [showTutorialExitPrompt, setShowTutorialExitPrompt] = useState(false);
-  const [tutorialUnavailableMessage, setTutorialUnavailableMessage] = useState<string | null>(null);
-  const [tutorialComposerSeed, setTutorialComposerSeed] = useState<{ value: string; token: number } | null>(null);
-  const [tutorialOpenedToolResultMessageIds, setTutorialOpenedToolResultMessageIds] = useState<string[]>([]);
-  const logNow = pushLog;
-  const mcpCountRef = React.useRef(mcpServers.length);
-  const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
-  const tutorialStepKeyRef = React.useRef("");
-  const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
-  const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
-  const activeChatAbortRef = React.useRef<AbortController | null>(null);
-  const skillExecutionLocksRef = React.useRef<Map<string, AbortController>>(new Map());
-  const tutorialRestoringRef = React.useRef(false);
-  const tutorialRuntimeState = useMemo(
+  const tutorialRuntimeBase = useMemo(
     () => ({
-      scenarioId: tutorialScenario?.id,
       agents,
       skills,
       activeAgentId,
@@ -733,131 +690,73 @@ export default function App() {
         name: userName,
         description: userDescription,
         hasAvatar: !!userAvatarUrl
-      },
-      openedToolResultMessageIds: tutorialOpenedToolResultMessageIds
+      }
     }),
     [
-      agents,
-      skills,
       activeAgentId,
-      modelCredentials,
-      credentialTestResults,
-      history,
-      chatComposerDraft,
-      historyMessageLimit,
+      agents,
       builtInTools,
+      chatComposerDraft,
+      credentialTestResults,
       docs,
+      history,
+      historyMessageLimit,
       loadBalancers,
       mcpServers,
       mcpToolsByServer,
-      userName,
-      userDescription,
+      modelCredentials,
+      skills,
       userAvatarUrl,
-      tutorialOpenedToolResultMessageIds,
-      tutorialScenario?.id
+      userDescription,
+      userName
     ]
   );
-  const tutorialEvaluations = useMemo<TutorialStepEvaluation[]>(
-    () => (tutorialScenario ? tutorialScenario.steps.map((step) => evaluateTutorialStep(step, tutorialRuntimeState)) : []),
-    [tutorialScenario, tutorialRuntimeState]
+  const {
+    tutorialScenario,
+    setTutorialScenario,
+    tutorialScenarioIndex,
+    setTutorialScenarioIndex,
+    tutorialStepIndex,
+    setTutorialStepIndex,
+    showTutorialExitPrompt,
+    setShowTutorialExitPrompt,
+    tutorialUnavailableMessage,
+    setTutorialUnavailableMessage,
+    tutorialComposerSeed,
+    setTutorialComposerSeed,
+    setTutorialOpenedToolResultMessageIds,
+    tutorialRuntimeState,
+    tutorialEvaluations,
+    currentTutorialStep,
+    currentTutorialEvaluation,
+    tutorialActiveAgentHint,
+    tutorialActiveAgentWarning,
+    tutorialActive,
+    tutorialPreviewLocked,
+    tutorialShowLandingPreview,
+    markToolResultOpened,
+    resetTutorialSession
+  } = useTutorialSession({ runtimeBase: tutorialRuntimeBase, agents, loadBalancers });
+  const logNow = pushLog;
+  const userProfile = React.useMemo<UserProfile>(
+    () => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl, description: userDescription.trim() }),
+    [userName, userAvatarUrl, userDescription]
   );
-  const currentTutorialStep = tutorialScenario?.steps[tutorialStepIndex] ?? null;
-  const currentTutorialEvaluation = tutorialScenario ? tutorialEvaluations[tutorialStepIndex] ?? null : null;
-  const tutorialExpectedAgent = useMemo(() => {
-    const preset = currentTutorialStep?.automation?.activeAgentPreset;
-    if (preset === "tutorial_agent") return findTutorialAgentInList(agents, loadBalancers);
-    if (preset === "tutorial_agent_base") return findTutorialAgentBaseInList(agents, loadBalancers);
-    return null;
-  }, [currentTutorialStep, agents, loadBalancers]);
-  const tutorialActiveAgentHint = useMemo(() => {
-    const preset = currentTutorialStep?.automation?.activeAgentPreset;
-    if (!preset) return null;
-    if (tutorialExpectedAgent) return `案例鎖定：${tutorialExpectedAgent.name}`;
-    return "案例鎖定：尚未找到教學用主要 Agent";
-  }, [currentTutorialStep, tutorialExpectedAgent]);
-  const tutorialActiveAgentWarning = useMemo(() => {
-    const preset = currentTutorialStep?.automation?.activeAgentPreset;
-    if (!preset || tutorialExpectedAgent) return null;
-    return "目前找不到這個案例需要的主要 Agent。若你略過案例 1 的建立 Agent，後續案例將無法完成。";
-  }, [currentTutorialStep, tutorialExpectedAgent]);
-  const tutorialActive = !!tutorialScenario;
-  const tutorialPreviewLocked = tutorialActive && tutorialStepIndex === 0;
-  const tutorialShowLandingPreview = tutorialPreviewLocked && tutorialScenarioIndex === 0;
+  const executeResolvedToolSelection = createToolSelectionExecutor({
+    appendMessage: append,
+    pushLog: logNow,
+    mcpClientManager,
+    getUserProfilePayload: () => getUserProfileToolPayload(userProfile)
+  });
+  const mcpCountRef = React.useRef(mcpServers.length);
+  const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
+  const tutorialStepKeyRef = React.useRef("");
+  const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
+  const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
+  const activeChatAbortRef = React.useRef<AbortController | null>(null);
+  const skillExecutionLocksRef = React.useRef<Map<string, AbortController>>(new Map());
+  const tutorialRestoringRef = React.useRef(false);
   const tutorialKeepChangesHint = "即使選擇保留這次教學變更，系統仍會刪除「教學用DOC」，避免之後的問答持續被案例 2 的人格設定影響。";
-
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const list = await listDocs();
-        setDocs(list);
-        setDocsLoaded(true);
-        logNow({ category: "docs", ok: true, message: `Docs loaded: ${list.length}` });
-      } catch (e) {
-        logNow({ category: "docs", ok: false, message: "Docs load failed", details: errorMessage(e) });
-      }
-    })();
-  }, []);
-
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const list = await listSkills();
-        setSkills(list);
-        setSkillsLoaded(true);
-        setSkillPanelSelectedId((current) => current ?? list[0]?.id ?? null);
-        logNow({ category: "skills", ok: true, message: `Skills loaded: ${list.length}` });
-      } catch (e) {
-        logNow({ category: "skills", ok: false, message: "Skills load failed", details: errorMessage(e) });
-      }
-    })();
-  }, []);
-
-  React.useEffect(() => {
-    if (!skillPanelSelectedId) {
-      setSkillPanelDocs([]);
-      setSkillPanelFiles([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const [docs, files] = await Promise.all([listSkillDocs(skillPanelSelectedId), listSkillFiles(skillPanelSelectedId)]);
-        if (!cancelled) {
-          setSkillPanelDocs(docs);
-          setSkillPanelFiles(files);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setSkillPanelDocs([]);
-          setSkillPanelFiles([]);
-          logNow({ category: "skills", ok: false, message: "Skill docs load failed", details: errorMessage(e) });
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [skillPanelSelectedId]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const restored = (await loadChatHistory()).map(normalizeImportedMessage).filter(Boolean) as ChatMessage[];
-        if (cancelled) return;
-        setHistory((current) => (current.length === 0 ? restored : current));
-        logNow({ category: "chat", ok: true, message: `History restored (${restored.length})` });
-      } catch (e) {
-        if (cancelled) return;
-        logNow({ category: "chat", ok: false, message: "History restore failed", details: errorMessage(e) });
-      } finally {
-        if (!cancelled) setHistoryLoaded(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   React.useEffect(() => {
     saveAgents(agents);
@@ -968,22 +867,6 @@ export default function App() {
   }, [loadBalancers]);
 
   React.useEffect(() => {
-    if (!historyLoaded) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        await saveChatHistory(history);
-      } catch (e) {
-        if (cancelled) return;
-        logNow({ category: "chat", ok: false, message: "History persist failed", details: errorMessage(e) });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [history, historyLoaded]);
-
-  React.useEffect(() => {
     logNow({ category: "ui", message: `Tab -> ${activeTab}` });
   }, [activeTab]);
 
@@ -1004,30 +887,10 @@ export default function App() {
   }, [mcpServers.length]);
 
   React.useEffect(() => {
-    if (!docsLoaded) return;
-    if (docEditorId && !docs.some((d) => d.id === docEditorId)) {
-      setDocEditorId(null);
-    }
-  }, [docs, docEditorId, docsLoaded]);
-
-  React.useEffect(() => {
-    if (!skillsLoaded) return;
-    if (skillPanelSelectedId && !skills.some((skill) => skill.id === skillPanelSelectedId)) {
-      setSkillPanelSelectedId(skills[0]?.id ?? null);
-    }
-  }, [skills, skillPanelSelectedId, skillsLoaded]);
-
-  React.useEffect(() => {
     if (mcpPanelActiveId && !mcpServers.some((s) => s.id === mcpPanelActiveId)) {
       setMcpPanelActiveId(null);
     }
   }, [mcpPanelActiveId, mcpServers]);
-
-  React.useEffect(() => {
-    if (activeTab !== "chat" && isChatFullscreen) {
-      setIsChatFullscreen(false);
-    }
-  }, [activeTab, isChatFullscreen]);
 
   React.useEffect(() => {
     if (!tutorialScenario || !currentTutorialStep) return;
@@ -1945,21 +1808,6 @@ export default function App() {
       .filter((entry) => entry.tools.length > 0);
   }
 
-  async function reloadSkillsFromStore(preferredId?: string | null) {
-    const next = await listSkills();
-    setSkills(next);
-    const nextSelectedId = preferredId && next.some((skill) => skill.id === preferredId) ? preferredId : next[0]?.id ?? null;
-    setSkillPanelSelectedId(nextSelectedId);
-    if (nextSelectedId) {
-      const [docs, files] = await Promise.all([listSkillDocs(nextSelectedId), listSkillFiles(nextSelectedId)]);
-      setSkillPanelDocs(docs);
-      setSkillPanelFiles(files);
-    } else {
-      setSkillPanelDocs([]);
-      setSkillPanelFiles([]);
-    }
-  }
-
   function scenarioRequiresHistoryLimitOne(scenario: TutorialScenarioDefinition | null | undefined) {
     return !!scenario?.steps.some((step) => step.behavior === "set_history_limit_to_one");
   }
@@ -2014,7 +1862,7 @@ export default function App() {
     const tutorialDocs = (await listDocs()).filter((doc) => doc.title === TUTORIAL_DOC_NAME);
     if (tutorialDocs.length === 0) return false;
     await Promise.all(tutorialDocs.map((doc) => deleteDoc(doc.id)));
-    setDocs(await listDocs());
+    await reloadDocs();
     logNow({ category: "tutorial", ok: true, message: `Tutorial doc removed: ${reason}` });
     return true;
   }
@@ -2086,7 +1934,7 @@ export default function App() {
       const tutorialDocs = (await listDocs()).filter((doc) => doc.title === TUTORIAL_DOC_NAME);
       if (tutorialDocs.length) {
         await Promise.all(tutorialDocs.map((doc) => deleteDoc(doc.id)));
-        setDocs(await listDocs());
+        await reloadDocs();
       }
       setMcpServers((prev) => prev.filter((server) => server.name !== TUTORIAL_MCP_NAME));
       logNow({ category: "tutorial", ok: true, message: "Tutorial changes discarded for docs, MCP, tools, and skills" });
@@ -2099,12 +1947,7 @@ export default function App() {
     tutorialHistoryLimitRestoreRef.current = null;
     tutorialLoadBalancerRetryRestoreRef.current = null;
     tutorialStepKeyRef.current = "";
-    setTutorialScenario(null);
-    setTutorialScenarioIndex(null);
-    setTutorialStepIndex(0);
-    setTutorialComposerSeed(null);
-    setTutorialOpenedToolResultMessageIds([]);
-    setShowTutorialExitPrompt(false);
+    resetTutorialSession();
     setConfigModal(null);
   }
 
@@ -2164,14 +2007,6 @@ export default function App() {
     }
   }
 
-  function append(m: ChatMessage) {
-    setHistory((h) => [...h, m]);
-  }
-
-  function patchMessage(id: string, patch: Partial<ChatMessage>) {
-    setHistory((h) => h.map((m) => (m.id === id ? { ...m, ...patch } : m)));
-  }
-
   function stopActiveChatExecution() {
     const controller = activeChatAbortRef.current;
     if (!controller || controller.signal.aborted) return;
@@ -2179,523 +2014,26 @@ export default function App() {
     logNow({ category: "chat", ok: false, outcome: "degraded", message: "Active chat execution aborted by user" });
   }
 
-  async function runToolDecision(args: {
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    userInput: string;
-    retry: { delaySec: number; max: number };
-    toolEntries: ToolEntry[];
-    promptTemplate: string;
-    fallbackPromptTemplate: string;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }): Promise<ToolDecision | null> {
-    const toolList = buildToolDecisionCatalog(args.toolEntries);
-
-    const decisionPrompt = buildToolDecisionPrompt(
-      args.promptTemplate,
-      args.fallbackPromptTemplate,
-      args.userInput,
-      JSON.stringify(toolList, null, 2)
-    );
-
-    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.agent,
-        input: decisionPrompt,
-        history: [],
-        requestId: args.requestId,
-        requestLabel: "tool decision",
-        deadline: args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: t })
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        logNow({
-          category: "mcp",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: "tool decision",
-          message: "Tool decision failed after model retries",
-          details: terminalFailure
-        });
-        return null;
-      }
-
-      const decision = parseToolDecision(raw);
-      if (decision) {
-        logNow({
-          category: "mcp",
-          agent: args.agent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: "tool decision",
-          message: `Tool decision: ${decision.type}`,
-          details: raw
-        });
-        return decision;
-      }
-
-      logNow({
-        category: "mcp",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "tool decision",
-        message: `Tool decision invalid schema (${attempt + 1}/${args.retry.max + 1})`,
-        details: raw
-      });
-
-      if (attempt < args.retry.max) {
-        await sleep(args.retry.delaySec * 1000);
-      }
-    }
-
-    return null;
-  }
-
-  async function runSkillDecision(args: {
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    userInput: string;
-    retry: { delaySec: number; max: number };
-    skills: SkillConfig[];
-    language: "zh" | "en";
-    promptTemplate?: string;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }): Promise<SkillDecision | null> {
-    const skillList = buildSkillDecisionCatalog(args.skills);
-    const prompt = buildSkillDecisionPrompt(args.userInput, JSON.stringify(skillList, null, 2), args.language, args.promptTemplate);
-
-    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.agent,
-        input: prompt,
-        history: [],
-        requestId: args.requestId,
-        requestLabel: "skill decision",
-        deadline: args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill decision", message: t })
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: "skill decision",
-          message: "Skill decision failed after model retries",
-          details: terminalFailure
-        });
-        return null;
-      }
-
-      const decision = normalizeSkillDecision(extractJsonObject(raw));
-      if (decision) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: "skill decision",
-          message: `Skill decision: ${decision.type}`,
-          details: raw
-        });
-        return decision;
-      }
-
-      logNow({
-        category: "skills",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "skill decision",
-        message: `Skill decision invalid schema (${attempt + 1}/${args.retry.max + 1})`,
-        details: raw
-      });
-
-      if (attempt < args.retry.max) {
-        await sleep(args.retry.delaySec * 1000);
-      }
-    }
-
-    return null;
-  }
-
-  async function runSkillVerifyDecision(args: {
-    answeringAgent: AgentConfig;
-    verifierAgent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    userInput: string;
-    currentInput: string;
-    answer: string;
-    skill: SkillConfig;
-    runtime: LoadedSkillRuntime;
-    round: number;
-    retry: { delaySec: number; max: number };
-    promptTemplate?: string;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }) {
-    const prompt = buildSkillVerifyPrompt({
-      skill: args.skill,
-      runtime: args.runtime,
-      userInput: args.userInput,
-      currentInput: args.currentInput,
-      answer: args.answer,
-      round: args.round,
-      template: args.promptTemplate
-    });
-
-    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.verifierAgent,
-        input: prompt,
-        history: [],
-        requestId: args.requestId,
-        requestLabel: `skill verify round ${args.round}`,
-        deadline: args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.verifierAgent.name, requestId: args.requestId, stage: `skill verify round ${args.round}`, message: t })
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        logNow({
-          category: "skills",
-          agent: args.answeringAgent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: `skill verify round ${args.round}`,
-          message: `Skill verify round ${args.round} failed after model retries`,
-          details: terminalFailure
-        });
-        return null;
-      }
-
-      const decision = normalizeSkillVerifyDecision(extractJsonObject(raw));
-      if (decision) {
-        logNow({
-          category: "skills",
-          agent: args.answeringAgent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: `skill verify round ${args.round}`,
-          message: `Skill verify round ${args.round}: ${decision.type}`,
-          details: raw
-        });
-        return decision;
-      }
-
-      logNow({
-        category: "skills",
-        agent: args.answeringAgent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: `skill verify round ${args.round}`,
-        message: `Skill verify invalid schema (${attempt + 1}/${args.retry.max + 1})`,
-        details: raw
-      });
-
-      if (attempt < args.retry.max) {
-        await sleep(args.retry.delaySec * 1000);
-      }
-    }
-
-    return null;
-  }
-
-  async function runSkillBootstrapPlan(args: {
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    retry: { delaySec: number; max: number };
-    skill: SkillConfig;
-    runtime: LoadedSkillRuntime;
-    userInput: string;
-    promptTemplate?: string;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-    onTrace?: (label: string, content: string) => void;
-  }): Promise<SkillBootstrapPlan> {
-    const prompt = buildBootstrapPlanPrompt({
-      skill: args.skill,
-      runtime: args.runtime,
-      userInput: args.userInput,
-      template: args.promptTemplate
-    });
-
-    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.agent,
-        input: prompt,
-        history: [],
-        requestId: args.requestId,
-        requestLabel: "skill bootstrap plan",
-        deadline: args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill bootstrap plan", message: t })
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: "skill bootstrap plan",
-          message: "Skill bootstrap plan failed after model retries",
-          details: terminalFailure
-        });
-        args.onTrace?.("Bootstrap raw", raw);
-        break;
-      }
-
-      const parsed = normalizeSkillBootstrapPlan(extractJsonObject(raw));
-      if (parsed?.todo.length) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: "skill bootstrap plan",
-          message: "Skill bootstrap plan created",
-          details: raw
-        });
-        args.onTrace?.("Bootstrap raw", raw);
-        args.onTrace?.(
-          "Bootstrap parsed",
-          [
-            parsed.taskSummary ? `Task summary: ${parsed.taskSummary}` : "",
-            parsed.startUrl ? `Start URL: ${parsed.startUrl}` : "Start URL: (none)",
-            parsed.notes?.length ? `Notes:\n- ${parsed.notes.join("\n- ")}` : "",
-            `Todo:\n${bootstrapTodoList(parsed.todo)
-              .map((item, index) => `${index + 1}. ${item.label}`)
-              .join("\n")}`
-          ]
-            .filter(Boolean)
-            .join("\n")
-        );
-        return parsed;
-      }
-
-      logNow({
-        category: "skills",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "skill bootstrap plan",
-        message: `Skill bootstrap plan invalid schema (${attempt + 1}/${args.retry.max + 1})`,
-        details: raw
-      });
-      args.onTrace?.("Bootstrap raw", raw);
-
-      if (attempt < args.retry.max) {
-        await sleep(args.retry.delaySec * 1000);
-      }
-    }
-
-    return {
-      todo: [
-        "載入 skill 與必要資源",
-        "觀察目前狀態",
-        "執行下一個工具操作",
-        "確認任務是否完成",
-        "整理最終回覆"
-      ],
-      startUrl: extractFirstUrl(args.userInput)
-    };
-  }
-
-  async function runSkillStepPlanner(args: {
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    retry: { delaySec: number; max: number };
-    state: SkillRunState;
-    skill: SkillConfig;
-    runtime: LoadedSkillRuntime;
-    userInput: string;
-    currentContext: string;
-    toolScopeSummary: string;
-    mustObserve: boolean;
-    mustAct: boolean;
-    phaseHint?: string;
-    promptTemplate?: string;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-    onTrace?: (label: string, content: string) => void;
-  }): Promise<SkillStepDecision | null> {
-    const prompt = buildPlannerStepPrompt({
-      skill: args.skill,
-      runtime: args.runtime,
-      userInput: args.userInput,
-      currentContext: args.currentContext,
-      currentPhaseHint: args.phaseHint,
-      toolScopeSummary: args.toolScopeSummary,
-      todoSummary: summarizeTodo(args.state.todo),
-      mustObserve: args.mustObserve,
-      mustAct: args.mustAct,
-      template: args.promptTemplate
-    });
-
-    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.agent,
-        input: prompt,
-        history: [],
-        requestId: args.requestId,
-        requestLabel: `skill planner step ${args.state.stepIndex + 1}`,
-        deadline: args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill planner step ${args.state.stepIndex + 1}`, message: t })
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: `skill planner step ${args.state.stepIndex + 1}`,
-          message: `Skill planner step ${args.state.stepIndex + 1} failed after model retries`,
-          details: terminalFailure
-        });
-        args.onTrace?.(`Planner raw ${args.state.stepIndex + 1}`, [`Raw:\n${raw}`, "", "Normalized: invalid (terminal failure)"].join("\n"));
-        return null;
-      }
-
-      const decision = normalizeSkillStepDecision(extractJsonObject(raw));
-      if (decision) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: `skill planner step ${args.state.stepIndex + 1}`,
-          message: `Skill planner step: ${decision.type}`,
-          details: raw
-        });
-        args.onTrace?.(
-          `Planner raw ${args.state.stepIndex + 1}`,
-          [`Raw:\n${raw}`, "", `Normalized: ${JSON.stringify(decision, null, 2)}`].join("\n")
-        );
-        return decision;
-      }
-
-      logNow({
-        category: "skills",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: `skill planner step ${args.state.stepIndex + 1}`,
-        message: `Skill planner step invalid schema (${attempt + 1}/${args.retry.max + 1})`,
-        details: raw
-      });
-      args.onTrace?.(`Planner raw ${args.state.stepIndex + 1}`, [`Raw:\n${raw}`, "", "Normalized: invalid"].join("\n"));
-
-      if (attempt < args.retry.max) {
-        await sleep(args.retry.delaySec * 1000);
-      }
-    }
-
-    return null;
-  }
-
-  async function runSkillCompletionGate(args: {
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    retry: { delaySec: number; max: number };
-    state: SkillRunState;
-    skill: SkillConfig;
-    runtime: LoadedSkillRuntime;
-    userInput: string;
-    currentContext: string;
-    toolScopeSummary: string;
-    promptTemplate?: string;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-    onTrace?: (label: string, content: string) => void;
-  }): Promise<SkillCompletionDecision | null> {
-    const prompt = buildCompletionGatePrompt({
-      skill: args.skill,
-      runtime: args.runtime,
-      userInput: args.userInput,
-      currentContext: args.currentContext,
-      todoSummary: summarizeTodo(args.state.todo),
-      template: args.promptTemplate
-    });
-
-    for (let attempt = 0; attempt <= args.retry.max; attempt++) {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.agent,
-        input: prompt,
-        history: [],
-        requestId: args.requestId,
-        requestLabel: `skill completion gate ${args.state.stepIndex}`,
-        deadline: args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill completion gate ${args.state.stepIndex}`, message: t })
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: `skill completion gate ${args.state.stepIndex}`,
-          message: `Skill completion gate step ${args.state.stepIndex} failed after model retries`,
-          details: terminalFailure
-        });
-        args.onTrace?.(`Completion raw ${args.state.stepIndex}`, [`Raw:\n${raw}`, "", "Normalized: invalid (terminal failure)"].join("\n"));
-        return null;
-      }
-
-      const decision = normalizeSkillCompletionDecision(extractJsonObject(raw));
-      if (decision) {
-        logNow({
-          category: "skills",
-          agent: args.agent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: `skill completion gate ${args.state.stepIndex}`,
-          message: `Skill completion gate: ${decision.type}`,
-          details: raw
-        });
-        args.onTrace?.(
-          `Completion raw ${args.state.stepIndex}`,
-          [`Raw:\n${raw}`, "", `Normalized: ${JSON.stringify(decision, null, 2)}`].join("\n")
-        );
-        return decision;
-      }
-
-      logNow({
-        category: "skills",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: `skill completion gate ${args.state.stepIndex}`,
-        message: `Skill completion gate invalid schema (${attempt + 1}/${args.retry.max + 1})`,
-        details: raw
-      });
-      args.onTrace?.(`Completion raw ${args.state.stepIndex}`, [`Raw:\n${raw}`, "", "Normalized: invalid"].join("\n"));
-
-      if (attempt < args.retry.max) {
-        await sleep(args.retry.delaySec * 1000);
-      }
-    }
-
-    return null;
-  }
+  const {
+    runToolDecision,
+    runSkillDecision,
+    runSkillVerifyDecision,
+    runSkillBootstrapPlan,
+    runSkillStepPlanner,
+    runSkillCompletionGate
+  } = createDecisionRunners({
+    invoke: (args) => runOneToOneWithLoadBalancer({
+      logicalAgent: args.agent,
+      input: args.input,
+      history: [],
+      requestId: args.requestId,
+      requestLabel: args.requestLabel,
+      deadline: args.deadline,
+      onDelta: () => {},
+      onLog: args.onLog
+    }),
+    pushLog: logNow
+  });
 
   async function resolveToolAugmentedInputDetailed(args: {
     input: string;
@@ -2754,7 +2092,6 @@ export default function App() {
     args.onStatus?.("正在判斷是否需要呼叫工具中…");
     const decision = await runToolDecision({
       agent: args.agent,
-      adapter: args.adapter,
       userInput: args.decisionContext ? `${args.input}\n\nCurrent loaded skill context (internal only):\n${args.decisionContext}` : args.input,
       retry: getRetryPolicyForAgent(args.agent),
       toolEntries: args.toolEntries,
@@ -2805,349 +2142,6 @@ export default function App() {
       requestId: args.requestId,
       deadline: args.deadline
     });
-  }
-
-  async function executeResolvedToolSelection(args: {
-    selection: BuiltInToolAction | McpAction;
-    input: string;
-    agent: AgentConfig;
-    availableBuiltinTools: BuiltInToolConfig[];
-    availableMcpServers: McpServerConfig[];
-    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-    onStatus?: (text: string) => void;
-    promptDetail: ToolPromptDetailMode;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }): Promise<ToolAugmentationResult> {
-    const normalizedDecision = args.selection;
-
-    if (normalizedDecision.type === "builtin_tool_call") {
-      const actionSignature = buildToolActionSignature({
-        kind: "builtin",
-        toolName: normalizedDecision.tool,
-        input: normalizedDecision.input
-      });
-      args.onStatus?.(`正在呼叫內建工具「${normalizedDecision.tool}」中…`);
-      const targetTool = args.availableBuiltinTools.find((tool) => tool.name === normalizedDecision.tool) ?? null;
-      if (!targetTool) {
-        const toolSummaryForQuestion = `工具執行失敗：找不到名稱為 ${normalizedDecision.tool} 的 built-in tool。`;
-        append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
-        logNow({
-          category: "tool",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: "tool execution",
-          message: `Built-in tool not found: ${normalizedDecision.tool}`,
-          details: JSON.stringify(normalizedDecision)
-        });
-        return {
-          input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
-          ok: false,
-          status: "tool_called",
-          toolLabel: `Built-in ${normalizedDecision.tool}`,
-          detail: toolSummaryForQuestion,
-          actionSignature
-        };
-      }
-
-      try {
-        const allowed =
-          !targetTool.requireConfirmation ||
-          window.confirm(
-            `允許 agent ${args.agent.name} 執行工具「${targetTool.displayLabel ?? targetTool.name}」嗎？\n\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`
-          );
-
-        if (!allowed) {
-          const toolSummaryForQuestion = `工具執行已被使用者阻止：${normalizedDecision.tool}`;
-          append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
-          logNow({
-            category: "tool",
-            agent: args.agent.name,
-            ok: false,
-            requestId: args.requestId,
-            stage: "tool execution",
-            message: `Built-in tool blocked by user: ${normalizedDecision.tool}`,
-            details: stringifyAny(normalizedDecision.input ?? {})
-          });
-          return {
-            input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
-            ok: false,
-            status: "tool_called",
-            toolLabel: `Built-in ${normalizedDecision.tool}`,
-            detail: toolSummaryForQuestion,
-            actionSignature
-          };
-        }
-
-        const allowedSystemHelpers: NonNullable<Parameters<typeof runBuiltInScriptTool>[2]>["system"] = {};
-        if (args.availableBuiltinTools.some((tool) => tool.id === SYSTEM_USER_PROFILE_TOOL_ID)) {
-          allowedSystemHelpers.get_user_profile = () => getUserProfileToolPayload(userProfile);
-        }
-        if (args.availableBuiltinTools.some((tool) => tool.id === SYSTEM_AGENT_DIRECTORY_TOOL_ID)) {
-          allowedSystemHelpers.pick_best_agent_for_question = async (question: string) =>
-            pickBestAgentNameForQuestion(question, loadSavedAgentsFromStorage(), args.agent.name);
-        }
-        if (args.availableBuiltinTools.some((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID)) {
-          allowedSystemHelpers.request_user_confirmation = async (message: string) => {
-            const confirmed = window.confirm(String(message ?? "").trim() || "是否繼續？");
-            return { confirmed };
-          };
-        }
-
-        const toolOutput = await runBuiltInScriptTool(
-          targetTool,
-          normalizedDecision.input ?? {},
-          {
-            system: allowedSystemHelpers,
-            ui: {
-              dashboard: createToolDashboardHelpers()
-            }
-          },
-          {
-            signal: args.deadline?.signal
-          }
-        );
-        const toolIntent = classifyBuiltInToolIntent(targetTool);
-        const toolOutputText = stringifyAny(toolOutput);
-        const browserObservation = extractBrowserObservation({
-          toolName: normalizedDecision.tool,
-          output: toolOutput
-        });
-        const toolSummaryForQuestion = buildToolResultPromptBlock({
-          kind: "builtin",
-          toolName: normalizedDecision.tool,
-          input: normalizedDecision.input ?? {},
-          output: toolOutput
-        }, args.promptDetail ?? "default");
-        append(
-          msg(
-            "tool",
-            `Built-in tool -> ${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}\noutput:\n${toolOutputText}`,
-            "builtin_tool",
-            { displayName: "Built-in Tool" }
-          )
-        );
-        logNow({
-          category: "tool",
-          agent: args.agent.name,
-          ok: true,
-          requestId: args.requestId,
-          stage: "tool execution",
-          message: `Built-in tool call OK: ${normalizedDecision.tool}`,
-          details: toolOutputText
-        });
-        return {
-          input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-          ok: true,
-          status: "tool_called",
-          toolLabel: `Built-in ${normalizedDecision.tool}`,
-          detail: toolSummaryForQuestion,
-          actionSignature,
-          toolIntent,
-          observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
-          decisionSummary: `builtin:${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
-          toolOutput,
-          browserObservation
-        };
-      } catch (e) {
-        const briefError = errorMessage(e);
-        const toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 執行失敗（${briefError}）。`;
-        append(msg("tool", toolSummaryForQuestion, "builtin_tool", { displayName: "Built-in Tool" }));
-        logNow({
-          category: "tool",
-          agent: args.agent.name,
-          ok: false,
-          requestId: args.requestId,
-          stage: "tool execution",
-          message: `Built-in tool call failed: ${normalizedDecision.tool}`,
-          details: briefError
-        });
-        return {
-          input: `${args.input}\n\n請將以下工具資訊一起納入回答：\n${toolSummaryForQuestion}`,
-          ok: false,
-          status: "tool_called",
-          toolLabel: `Built-in ${normalizedDecision.tool}`,
-          detail: toolSummaryForQuestion,
-          actionSignature
-        };
-      }
-    }
-
-    const serverResolution = resolveMcpServerId({
-      requestedServerId: normalizedDecision.serverId,
-      toolName: normalizedDecision.tool,
-      availableMcpTools: args.availableMcpTools
-    });
-    const resolvedMcpServerId = serverResolution.ok ? serverResolution.serverId : normalizedDecision.serverId;
-    const actionSignature = buildToolActionSignature({
-      kind: "mcp",
-      serverId: resolvedMcpServerId,
-      toolName: normalizedDecision.tool,
-      input: normalizedDecision.input
-    });
-    const targetServer = args.availableMcpServers.find((server) => server.id === resolvedMcpServerId) ?? null;
-    const targetTool =
-      args.availableMcpTools.find((entry) => entry.server.id === resolvedMcpServerId)?.tools.find((tool) => tool.name === normalizedDecision.tool) ?? null;
-    let toolSummaryForQuestion = "";
-    args.onStatus?.(`正在呼叫 MCP 工具「${normalizedDecision.tool}」中…`);
-
-    if (!serverResolution.ok) {
-      const resolutionDetail = formatMcpServerResolutionFailure(serverResolution);
-      toolSummaryForQuestion = `工具執行失敗：無法解析 MCP server（tool=${normalizedDecision.tool}, serverId=${normalizedDecision.serverId ?? "(none)"}, ${resolutionDetail}）。`;
-      logNow({
-        category: "mcp",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "mcp_routing_fallback",
-        message: `MCP server resolution failed: ${normalizedDecision.tool}`,
-        details: JSON.stringify({ decision: normalizedDecision, resolution: serverResolution }, null, 2)
-      });
-      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-      return {
-        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-        ok: false,
-        status: "tool_called",
-        toolLabel: `MCP ${normalizedDecision.serverId ?? "unknown"} -> ${normalizedDecision.tool}`,
-        detail: toolSummaryForQuestion,
-        actionSignature
-      };
-    }
-
-    const requestedServerId = String(normalizedDecision.serverId ?? "").trim();
-    if (requestedServerId && requestedServerId !== serverResolution.serverId) {
-      logNow({
-        category: "mcp",
-        agent: args.agent.name,
-        ok: true,
-        requestId: args.requestId,
-        stage: "mcp_routing_fallback",
-        message: `MCP serverId corrected: ${requestedServerId} -> ${serverResolution.serverId}`,
-        details: JSON.stringify({ decision: normalizedDecision, resolution: serverResolution }, null, 2)
-      });
-    }
-
-    if (!targetServer) {
-      toolSummaryForQuestion = `工具執行失敗：找不到 serverId=${resolvedMcpServerId} 的可用 MCP server。`;
-      logNow({
-        category: "mcp",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "tool execution",
-        message: `Tool decision selected unavailable server: ${resolvedMcpServerId}`,
-        details: JSON.stringify(normalizedDecision)
-      });
-      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-      return {
-        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-        ok: false,
-        status: "tool_called",
-        toolLabel: `MCP ${resolvedMcpServerId ?? "unknown"} -> ${normalizedDecision.tool}`,
-        detail: toolSummaryForQuestion,
-        actionSignature
-      };
-    }
-
-    if (!targetTool) {
-      toolSummaryForQuestion = `工具執行失敗：${targetServer.name} 沒有 ${normalizedDecision.tool} 這個工具。`;
-      logNow({
-        category: "mcp",
-        agent: args.agent.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "tool execution",
-        message: `Tool decision selected unavailable tool: ${normalizedDecision.tool}`,
-        details: JSON.stringify(normalizedDecision)
-      });
-      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-      return {
-        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-        ok: false,
-        status: "tool_called",
-        toolLabel: `MCP ${targetServer.name} -> ${normalizedDecision.tool}`,
-        detail: toolSummaryForQuestion,
-        actionSignature
-      };
-    }
-
-    try {
-      const timeoutMs = getMcpToolTimeoutMs(targetServer, normalizedDecision.tool);
-      const toolOutput = await mcpClientManager.run(
-        targetServer,
-        (client) => callMcpToolWithTimeout(client, normalizedDecision.tool, normalizedDecision.input ?? {}, timeoutMs),
-        (t) => pushLog({ category: "mcp", agent: targetServer.name, requestId: args.requestId, stage: "tool execution", message: t })
-      );
-      const toolIntent = classifyMcpToolIntent(targetTool);
-      const toolOutputText = stringifyAny(toolOutput);
-      const browserObservation = extractBrowserObservation({
-        toolName: normalizedDecision.tool,
-        output: toolOutput
-      });
-      toolSummaryForQuestion = buildToolResultPromptBlock({
-        kind: "mcp",
-        serverName: targetServer.name,
-        toolName: normalizedDecision.tool,
-        input: normalizedDecision.input ?? {},
-        output: toolOutput
-      }, args.promptDetail ?? "default");
-      logNow({
-        category: "mcp",
-        agent: targetServer.name,
-        ok: true,
-        requestId: args.requestId,
-        stage: "tool execution",
-        message: `MCP tool call OK: ${normalizedDecision.tool}`,
-        details: toolOutputText
-      });
-      append(
-        msg(
-          "tool",
-          `MCP ${targetServer.name} -> ${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}\noutput:\n${toolOutputText}`,
-          "mcp",
-          { displayName: "MCP Tool" }
-        )
-      );
-      return {
-        input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-        ok: true,
-        status: "tool_called",
-        toolLabel: `MCP ${targetServer.name} -> ${normalizedDecision.tool}`,
-        detail: toolSummaryForQuestion,
-        actionSignature,
-        toolIntent,
-        observationSignature: toolIntent === "observe" ? buildObservationSignature(toolOutput) : undefined,
-        decisionSummary: `mcp:${targetServer.name}/${normalizedDecision.tool}\ninput:\n${stringifyAny(normalizedDecision.input ?? {})}`,
-        toolOutput,
-        browserObservation,
-        serverId: targetServer.id
-      };
-    } catch (e) {
-      const briefError = errorMessage(e);
-      toolSummaryForQuestion = `工具執行失敗：${normalizedDecision.tool} 呼叫失敗（${briefError}）。`;
-      append(msg("tool", toolSummaryForQuestion, "mcp", { displayName: "MCP Tool" }));
-      logNow({
-        category: "mcp",
-        agent: targetServer.name,
-        ok: false,
-        requestId: args.requestId,
-        stage: "tool execution",
-        message: `Tool call failed: ${normalizedDecision.tool}`,
-        details: briefError
-      });
-    }
-
-    return toolSummaryForQuestion
-      ? {
-          input: appendToolPromptSummary(args.input, toolSummaryForQuestion),
-          ok: false,
-          status: "tool_called",
-          toolLabel: `MCP ${targetServer.name} -> ${normalizedDecision.tool}`,
-          detail: toolSummaryForQuestion,
-          actionSignature
-        }
-      : { input: args.input, ok: false, status: "no_tool", detail: "沒有產生可回填的工具摘要。" };
   }
 
   async function prepareSkillExecution(args: {
@@ -3265,7 +2259,6 @@ export default function App() {
         })
       : undefined;
     const verifierAgent = resolveSkillVerifierAgent(args.agent);
-    const verifierAdapter = pickAdapter(verifierAgent);
     const scopedToolEntries: ToolEntry[] = [
       ...args.prepared.scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
       ...args.prepared.scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
@@ -3404,7 +2397,6 @@ export default function App() {
           bootstrapPlan: async () => {
             const bootstrap = await runSkillBootstrapPlan({
               agent: args.agent,
-              adapter: args.adapter,
               retry: getRetryPolicyForAgent(args.agent),
               skill: args.skill,
               runtime: args.prepared.runtime,
@@ -3536,7 +2528,6 @@ export default function App() {
 
               const fastDecision = await runToolDecision({
                 agent: args.agent,
-                adapter: args.adapter,
                 userInput: args.prepared.decisionContext ? `${fastPrompt}\n\nCurrent loaded skill context (internal only):\n${args.prepared.decisionContext}` : fastPrompt,
                 retry: getRetryPolicyForAgent(args.agent),
                 toolEntries: fastPathScope.toolEntries,
@@ -3562,7 +2553,6 @@ export default function App() {
 
             return await runSkillStepPlanner({
               agent: args.agent,
-              adapter: args.adapter,
               retry: getRetryPolicyForAgent(args.agent),
               state,
               skill: args.skill,
@@ -3744,7 +2734,6 @@ export default function App() {
               }
               return await runSkillCompletionGate({
                 agent: args.agent,
-                adapter: args.adapter,
                 retry: getRetryPolicyForAgent(args.agent),
                 state,
                 skill: args.skill,
@@ -3862,7 +2851,6 @@ export default function App() {
       const verifyDecision = await runSkillVerifyDecision({
         answeringAgent: args.agent,
         verifierAgent,
-        adapter: verifierAdapter,
         userInput: args.userInput,
         currentInput,
         answer: currentAnswer,
@@ -3995,15 +2983,6 @@ export default function App() {
       }
     };
     reader.readAsDataURL(file);
-  }
-
-  const userProfile = React.useMemo<UserProfile>(
-    () => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl, description: userDescription.trim() }),
-    [userName, userAvatarUrl, userDescription]
-  );
-  function limitHistory(messages: ChatMessage[]) {
-    const limit = clampHistoryLimit(historyMessageLimit);
-    return messages.filter((message) => message.role !== "tool").slice(-limit);
   }
 
   async function sendOneToOneTurn(args: {
@@ -4139,7 +3118,6 @@ export default function App() {
       setAssistantStatus("正在分析是否需要使用 skill 中…");
       const skillDecision = await runSkillDecision({
         agent: resolvedActiveAgent,
-        adapter,
         userInput: modelInput,
         retry: getRetryPolicyForAgent(resolvedActiveAgent),
         skills: availableSkillsForAgent,
@@ -4627,20 +3605,6 @@ export default function App() {
     }
   }
 
-  async function onCreateDoc() {
-    const d: DocItem = { id: generateId(), title: "New Doc", content: "", updatedAt: Date.now() };
-    try {
-      await upsertDoc(d);
-      setDocs(await listDocs());
-      setDocEditorId(d.id);
-      logNow({ category: "docs", ok: true, message: "Doc created", details: JSON.stringify(d, null, 2) });
-      return d;
-    } catch (e) {
-      logNow({ category: "docs", ok: false, message: "Doc create failed", details: errorMessage(e) });
-      return null;
-    }
-  }
-
   async function ensureTutorialDoc() {
     const existing = docs.find((item) => item.title === TUTORIAL_DOC_NAME) ?? null;
     const nextDoc: DocItem = {
@@ -4650,9 +3614,7 @@ export default function App() {
       updatedAt: Date.now()
     };
     await upsertDoc(nextDoc);
-    const nextDocs = await listDocs();
-    setDocs(nextDocs);
-    setDocEditorId(nextDoc.id);
+    await reloadDocs(nextDoc.id);
     logNow({ category: "docs", ok: true, message: `Tutorial doc ensured: ${nextDoc.title}` });
   }
 
@@ -4675,112 +3637,11 @@ export default function App() {
     logNow({ category: "tool", ok: true, message: `Tutorial built-in tool ensured: ${nextTool.name}` });
   }
 
-  async function onSaveDoc(d: DocItem) {
-    try {
-      await upsertDoc({ ...d, updatedAt: Date.now() });
-      setDocs(await listDocs());
-      logNow({ category: "docs", ok: true, message: "Doc saved", details: JSON.stringify(d, null, 2) });
-    } catch (e) {
-      logNow({ category: "docs", ok: false, message: "Doc save failed", details: errorMessage(e) });
-    }
-  }
-
-  async function onDeleteDoc(id: string) {
-    try {
-      await deleteDoc(id);
-      setDocs(await listDocs());
-      if (docEditorId === id) setDocEditorId(null);
-      logNow({ category: "docs", ok: true, message: "Doc deleted", details: id });
-    } catch (e) {
-      logNow({ category: "docs", ok: false, message: "Doc delete failed", details: errorMessage(e) });
-    }
-  }
-
-  async function onImportSkill(file: File) {
-    const skill = await importSkillZip(file);
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(skill.id);
-    const [docs, files] = await Promise.all([listSkillDocs(skill.id), listSkillFiles(skill.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
-    logNow({ category: "skills", ok: true, message: `Skill imported: ${skill.name}`, details: `${skill.id}\n${skill.sourcePackageName ?? ""}`.trim() });
-  }
-
-  async function onCreateEmptySkill(name: string) {
-    const skill = await createEmptySkill(name);
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(skill.id);
-    const [docs, files] = await Promise.all([listSkillDocs(skill.id), listSkillFiles(skill.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
-    logNow({ category: "skills", ok: true, message: `Empty skill created: ${skill.name}`, details: skill.id });
-  }
-
-  async function onDeleteSkill(skillId: string) {
-    const target = skills.find((skill) => skill.id === skillId);
-    await deleteSkill(skillId);
-    const next = await listSkills();
-    setSkills(next);
-    const nextSelectedId = skillPanelSelectedId === skillId ? next[0]?.id ?? null : skillPanelSelectedId;
-    setSkillPanelSelectedId(nextSelectedId);
-    if (nextSelectedId) {
-      const [docs, files] = await Promise.all([listSkillDocs(nextSelectedId), listSkillFiles(nextSelectedId)]);
-      setSkillPanelDocs(docs);
-      setSkillPanelFiles(files);
-    } else {
-      setSkillPanelDocs([]);
-      setSkillPanelFiles([]);
-    }
-    logNow({ category: "skills", ok: true, message: `Skill deleted: ${target?.name ?? skillId}` });
-  }
-
-  async function onUpdateSkillMarkdown(skillId: string, markdown: string) {
-    const updated = await updateSkillMarkdown(skillId, markdown);
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(updated.id);
-    const [docs, files] = await Promise.all([listSkillDocs(updated.id), listSkillFiles(updated.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
-    logNow({ category: "skills", ok: true, message: `Skill updated: ${updated.name}`, details: updated.id });
-  }
-
-  async function onUpsertSkillTextFile(skillId: string, path: string, kind: "reference" | "asset", content: string) {
-    const updated = await upsertSkillTextFile(skillId, { path, kind, content });
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(updated.id);
-    const [docs, files] = await Promise.all([listSkillDocs(updated.id), listSkillFiles(updated.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
-    logNow({ category: "skills", ok: true, message: `Skill file saved: ${path}`, details: `${updated.name}\n${kind}` });
-  }
-
-  async function onDeleteSkillTextFile(skillId: string, path: string) {
-    const updated = await deleteSkillTextFile(skillId, path);
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(updated.id);
-    const [docs, files] = await Promise.all([listSkillDocs(updated.id), listSkillFiles(updated.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
-    logNow({ category: "skills", ok: true, message: `Skill file deleted: ${path}`, details: updated.name });
-  }
-
   async function onResetAppData() {
     const confirmed = window.confirm("這會清空這個網站中 agent-go-round 儲存的所有資料，包含對話、Docs、Skills、Agents、Credentials、MCP 與 Built-in Tools。要繼續嗎？");
     if (!confirmed) return;
     await resetAgentGoRoundStorage();
     window.location.reload();
-  }
-
-  async function onExportSkill(skillId: string) {
-    const target = skills.find((skill) => skill.id === skillId);
-    const blob = await exportSkillZip(skillId);
-    downloadFileBlob(`${target?.rootPath ?? skillId}.zip`, blob);
-    logNow({ category: "skills", ok: true, message: `Skill exported: ${target?.name ?? skillId}`, details: target?.rootPath ?? skillId });
   }
 
   async function ensureTutorialSequentialSkill() {
@@ -4811,12 +3672,7 @@ export default function App() {
       content: TUTORIAL_SEQUENTIAL_ASSET_CONTENT
     });
 
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(target.id);
-    const [docs, files] = await Promise.all([listSkillDocs(target.id), listSkillFiles(target.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
+    await reloadSkillsFromStore(target.id);
   }
 
   async function ensureTutorialChatgptBrowserSkill() {
@@ -4842,12 +3698,7 @@ export default function App() {
       content: TUTORIAL_CHATGPT_BROWSER_ASSET_CONTENT
     });
 
-    const next = await listSkills();
-    setSkills(next);
-    setSkillPanelSelectedId(target.id);
-    const [docs, files] = await Promise.all([listSkillDocs(target.id), listSkillFiles(target.id)]);
-    setSkillPanelDocs(docs);
-    setSkillPanelFiles(files);
+    await reloadSkillsFromStore(target.id);
   }
 
   function onChangeMcpServers(next: McpServerConfig[]) {
@@ -5093,88 +3944,6 @@ export default function App() {
     }
   }
 
-  function exportRawHistory() {
-    const payload: ExportPayload = {
-      kind: "raw_history",
-      exportedAt: Date.now(),
-      history
-    };
-    downloadBlob(`agent-go-round-history-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
-    logNow({ category: "chat", ok: true, message: `Raw history exported (${history.length})` });
-  }
-
-  async function exportSummaryHistory() {
-    if (!activeAgent) {
-      logNow({ category: "chat", ok: false, message: "Summary export skipped: no active agent" });
-      return;
-    }
-    if (history.length === 0) {
-      logNow({ category: "chat", ok: false, message: "Summary export skipped: empty history" });
-      return;
-    }
-
-    setIsSummaryExporting(true);
-    const requestId = createLogRequestId("summary");
-    try {
-      const summary = await runOneToOneWithLoadBalancer({
-        logicalAgent: activeAgent,
-        input:
-          "Please compress this conversation into a concise reusable summary for future continuation. Keep key facts, decisions, unresolved items, user preferences, and open tasks. Output plain text only.",
-        history,
-        system:
-          "You are preparing a conversation carry-over note. Write in Traditional Chinese when possible. Do not include markdown code fences.",
-        requestId,
-        requestLabel: "summary export",
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: activeAgent.name, requestId, stage: "summary export", message: t })
-      });
-
-      const payload: ExportPayload = {
-        kind: "summary_history",
-        exportedAt: Date.now(),
-        summary,
-        agent: { id: activeAgent.id, name: activeAgent.name, model: activeAgent.model }
-      };
-      downloadBlob(`agent-go-round-summary-${Date.now()}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
-      logNow({ category: "chat", agent: activeAgent.name, ok: true, requestId, stage: "summary export", outcome: "success", message: "Summary history exported", details: summary });
-    } catch (e) {
-      logNow({ category: "chat", agent: activeAgent.name, ok: false, requestId, stage: "summary export", outcome: "failure", message: "Summary export failed", details: errorMessage(e) });
-    } finally {
-      setIsSummaryExporting(false);
-    }
-  }
-
-  async function importHistoryFile(file: File) {
-    try {
-      const text = await file.text();
-      let imported: unknown = null;
-      try {
-        imported = JSON.parse(text);
-      } catch {
-        imported = null;
-      }
-
-      const importedRecord = asRecord(imported);
-      if (importedRecord?.kind === "raw_history" && Array.isArray(importedRecord.history)) {
-        const nextHistory = importedRecord.history.map(normalizeImportedMessage).filter(Boolean) as ChatMessage[];
-        setHistory(nextHistory);
-        logNow({ category: "chat", ok: true, message: `Raw history imported (${nextHistory.length})` });
-        return;
-      }
-
-      const summaryText =
-        importedRecord?.kind === "summary_history" && typeof importedRecord.summary === "string"
-          ? importedRecord.summary
-          : text.trim();
-
-      const summaryMessage = msg("user", summaryText, "summary_import", { displayName: "上次對話總結" });
-      setHistory([summaryMessage]);
-      logNow({ category: "chat", ok: true, message: "Summary history imported", details: summaryText });
-    } catch (e) {
-      logNow({ category: "chat", ok: false, message: "Import history failed", details: errorMessage(e) });
-    }
-  }
-
   function logRenderError(scope: string, error: Error, info: React.ErrorInfo) {
     logNow({
       category: "render_error",
@@ -5255,9 +4024,8 @@ export default function App() {
                   onSend={onSend}
                   onStop={stopActiveChatExecution}
                   onClear={() => {
-                    setHistory([]);
+                    clearHistory();
                     setTutorialOpenedToolResultMessageIds([]);
-                    logNow({ category: "chat", message: "Chat cleared" });
                   }}
                   leaderName={null}
                   userName={userProfile.name}
@@ -5275,11 +4043,7 @@ export default function App() {
                   voiceError={voiceError}
                   onToggleVoiceDictation={() => void toggleVoiceDictation()}
                   onPlayMessageTts={(messageId, text) => void playMessageTts(messageId, text)}
-                  onOpenToolResult={(assistantMessageId) =>
-                    setTutorialOpenedToolResultMessageIds((current) =>
-                      current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
-                    )
-                  }
+                  onOpenToolResult={markToolResultOpened}
                 />
               </ErrorBoundary>
             </div>
@@ -5763,9 +4527,8 @@ export default function App() {
                 onSend={onSend}
                 onStop={stopActiveChatExecution}
                 onClear={() => {
-                  setHistory([]);
+                  clearHistory();
                   setTutorialOpenedToolResultMessageIds([]);
-                  logNow({ category: "chat", message: "Chat cleared" });
                 }}
                 leaderName={null}
                 userName={userProfile.name}
@@ -5782,11 +4545,7 @@ export default function App() {
                 voiceError={voiceError}
                 onToggleVoiceDictation={() => void toggleVoiceDictation()}
                 onPlayMessageTts={(messageId, text) => void playMessageTts(messageId, text)}
-                onOpenToolResult={(assistantMessageId) =>
-                  setTutorialOpenedToolResultMessageIds((current) =>
-                    current.includes(assistantMessageId) ? current : [...current, assistantMessageId]
-                  )
-                }
+                onOpenToolResult={markToolResultOpened}
               />
             </ErrorBoundary>
           </div>
