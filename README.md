@@ -1,162 +1,141 @@
 # AgentGoRound
 
-AgentGoRound 是一個 browser-first、frontend-only 的 agent playground。它把多代理對話、skills、tools、docs、MCP、prompt routing、知識圖譜與教學案例整合在同一個前端應用裡，方便你直接在瀏覽器中設計、驗證與展示 agent workflow。
+AgentGoRound 是一個 browser-first、frontend-only 的 agent workflow playground。它把 agents、load balancers、docs、MCP、built-in tools、skills、voice 與多代理模式整合在同一個 React 應用中，適合用來建立原型、驗證 workflow 與製作教學案例。
 
-- 產品介紹導覽頁：[線上瀏覽](https://gipapa.github.io/agent-go-round/intro/) ｜ [PPTX](./public/intro/agent-go-round.pptx)
-- 專案介紹與知識圖譜：[WIKI](https://gipapa.github.io/agent-go-round/graphify/wiki/index.html) ｜ [互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) ｜ [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
+- [產品介紹](https://gipapa.github.io/agent-go-round/intro/) | [PPTX](./public/intro/agent-go-round.pptx)
+- [Graphify WIKI](https://gipapa.github.io/agent-go-round/graphify/wiki/index.html) | [互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) | [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
+- [2026-07 App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)
 
-## 功能重點
+## 核心能力
 
-- Agents 與多代理互動
-  - 可建立多個 agent，分別配置描述、權限與 load balancer
-  - 支援一般一對一對話、Voice STT/TTS 輔助，以及 `S.C. MAGI` 多代理裁決模式
-- Load Balancer
-  - agent 不直接綁死單一模型，而是綁定一個由多個 instances 組成的 load balancer
-  - 支援 retry、delay、resume minute、failure 狀態與 failover
-- Docs / MCP / Built-in Tools / Skills
-  - docs 可直接注入 prompt context
-  - MCP 支援 Streamable HTTP remote servers 與舊式 SSE
-  - built-in tools 可直接執行瀏覽器端 JavaScript
-  - skills 支援單輪與多輪 runtime，可做較複雜的 workflow
-- Voice
-  - 一般對話輸入框可按麥克風錄音，停止後用 STT 轉寫並追加到輸入框
-  - 使用者可在送出前自行修改轉寫文字；系統不會自動送出或另跑 refine
-  - user / assistant 訊息旁可手動播放 TTS，同一時間只播放一則訊息
-  - Voice config 可直接測試 STT / TTS load balancer，方便在正式對話前先驗證語音鏈路
-- Prompt Templates
-  - 將 tool decision、skill decision、skill runtime 等提示詞抽成 YAML
-  - 內建中英文模板，並可直接在 UI 內做格式檢查與 API 測試
-  - 目前主要覆蓋一般 chat routing 與 skill runtime；`MAGI` 不走這套模板
-- Onboarding / 教學案例
-  - 以真實 UI 搭配 YAML 定義的案例，引導使用者逐步完成設定與對話驗證
-  - 案例同時可作為 smoke test 與 real tutorial test 的基礎資料
-- Graphify 整合
-  - 專案本身可輸出為 concept-first 的 WIKI、知識圖譜與報告
-  - 讓功能、設計概念與模組之間的關係更容易理解與展示
+### Agents 與模型路由
 
-## 技術重點
+- 一般一對一對話與 `S.C. MAGI` 多代理裁決模式
+- Agent 綁定 load balancer，不直接綁死單一 provider key 或 model
+- Load balancer 支援 retry、delay、暫停恢復、failure state 與 failover
+- OpenAI-compatible、custom、Chrome Prompt 與 A2A adapter
 
-- 前端技術棧
-  - `Vite + React + TypeScript`
-  - 可直接部署到 `GitHub Pages`
-- Browser-first 資料模型
-  - `localStorage`：agents、credentials、prompt templates、部分 UI state
-  - `IndexedDB`：docs、chat history、skills 與 skill assets
-- Model routing
-  - 透過 OpenAI-compatible API + load balancer 管理 provider、model 與 key pool
-  - 支援 tool decision、skill decision、chat response 等不同階段的 routing
-- Voice I/O
-  - STT / TTS 走 load balancer，讓語音 I/O 與一般 chat 一樣有 key pool、failure state 與 failover
-  - Voice settings 保留語音專屬參數，例如 `STT language`、`STT temperature`、`Whisper prompt` 與 `voice`
-- Skill runtime
-  - `single_turn`：適合語氣控制、回答模板、輕量技能
-  - `multi_turn`：適合 observe / act / verify 類流程，如 browser workflow
-- Prompt engineering workflow
-  - decision 類 prompt 以較保守的 machine-oriented 模板為主
-  - 可直接在 Prompt Templates 面板裡用真實 API 驗證模板輸出是否符合預期
-- MCP 與 browser workflow
-  - Remote MCP 使用 Streamable HTTP，支援 Bearer token、自訂 headers、協議初始化與 session headers
-  - Tavily 等未開放 browser CORS 的服務可在 `npm run dev` 使用內建 local relay；靜態部署需另設同源 gateway
-  - MCP client manager 會重用同一台 server 的 client，並在閒置後自動關閉
-  - MCP tool catalog 會去重同 server 的並發 `tools/list` 請求，避免重複連線與 cache stampede
-  - 多輪 skill 可根據工具結果持續規劃下一步
-- 近期重構方向
-  - 將 voice config、voice helpers、agent failure 分類與 load balancer diagnostics 從 `App.tsx` 中拆出，降低單一檔案承擔的邊界
-  - MCP serverId routing 已統一成 exact id/name、fuzzy 與單一 tool match 流程；無法解析時會記錄 `mcp_routing_fallback`，不再沿用無效 serverId
-- Runtime reliability
-  - OpenAI-compatible、custom 與 Chrome Prompt adapter 會套用預設 60 秒 timeout，並預留 `AbortSignal` 取消介面
-  - Root 與主要 panel 已加上 Error Boundary，render error 會顯示局部 fallback，不會直接白畫面
+### Context 與工具
 
-## 主要模組
+- Docs 可注入 agent prompt context
+- Built-in tools 可執行瀏覽器端 JavaScript，並支援確認與 timeout
+- Skills 使用 `SKILL.md + references/ + assets/` 結構，支援 single-turn 與 multi-turn runtime
+- Prompt Templates 可在 UI 中編輯、驗證格式並呼叫真實 API 測試
 
-- Chat Config
-  - 管理 active agent、credentials、load balancers、docs、MCP、skills、built-in tools、prompt templates 與 voice settings
-- Agents
-  - 管理 agent profile、load balancer 與 access control
-- Skills
-  - 使用 `SKILL.md + references/ + assets/` 結構管理技能包
-- Onboarding
-  - 用案例教學帶使用者走過 agent、doc、tool、skill、MCP 與 browser automation
-- MAGI
-  - 提供三賢人表決與共識兩種多代理模式
-  - MAGI 目前使用固定的內建 skills 與 orchestrator prompt，不經由 Prompt Templates 面板切換或編輯
-- Voice
-  - 提供一般對話中的 STT 打字輔助與手動 TTS 朗讀
-  - 使用獨立的 Voice config panel 管理 STT / TTS load balancer 與語音參數
-- Graphify
-  - 為專案本身生成 WIKI、互動圖譜與報告
+### Remote MCP
+
+- 支援 Streamable HTTP 與 legacy SSE
+- 支援 Bearer token、自訂 headers、MCP session headers 與 client reuse
+- Tool catalog 會合併並去重並行的 `tools/list` 請求
+- Tavily 等未開放 browser CORS 的服務，本機開發可使用內建 relay
+
+瀏覽器或手機無法繞過第三方服務的 CORS 限制。若要從 GitHub Pages 或手機上的正式網址呼叫這類 remote MCP，應部署同源 HTTPS gateway，並將 API token 保存在 gateway 端，而不是打包進前端。
+
+### Voice
+
+- 對話輸入框可使用 STT 協助打字，辨識後仍可編輯再送出
+- User 與 assistant 訊息可手動播放 TTS
+- STT / TTS 各自使用 load balancer，保留 failure state 與 failover
+- Voice Config 可獨立測試語音鏈路與參數
+
+### Onboarding 與 Graphify
+
+- YAML 教學案例會操作真實 UI，可同時作為 smoke test 基礎
+- Graphify 將專案內容產生為 WIKI、知識圖譜與報告
+
+## 架構
+
+```text
+src/app/          應用組裝與跨域 workflow orchestration
+src/ui/           Panels、modals 與呈現元件
+src/chat/         Chat history state、匯入匯出與 persistence controller
+src/resources/    Docs 與 skills controllers
+src/credentials/  Credential state 與 provider runtime
+src/voice/        STT / TTS controller 與 runtime
+src/runtime/      Decision、tool、skill、browser 與 load-balancer runtime
+src/orchestrators/ One-to-one、MAGI 等高階 orchestrators
+src/onboarding/   Tutorial catalog、session 與 workspace helpers
+src/mcp/          MCP transports、client manager、routing 與 tool catalog
+src/storage/      localStorage / IndexedDB stores 與 migrations
+src/schemas/      模型結構化輸出的 Zod schemas
+```
+
+`App.tsx` 仍負責跨越多個 domain 的送訊息、multi-turn skill 與 tutorial transition orchestration；domain state、可獨立測試的 runtime 與 UI panels 已逐步移出。詳細邊界與兩次重構內容請見 [App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)。
+
+## 資料儲存
+
+- `localStorage`：agents、credentials、prompt templates 與部分 UI state
+- `IndexedDB`：docs、chat history、skills 與 skill assets
+
+資料預設只存在目前瀏覽器。清除網站資料、換裝置或換瀏覽器 profile 都可能看不到原本內容；重要資料應先使用各 panel 的匯出功能備份。
 
 ## 本機啟動
 
 ```bash
+npm install
 bash run.sh -dev
 ```
 
-預設網址：
+預設網址：<http://127.0.0.1:5566/>
 
-```text
-http://127.0.0.1:5566/
+也可以直接使用 Vite：
+
+```bash
+npm run dev
 ```
+
+`predev` 與 `prebuild` 會自動執行 `scripts/sync-graphify.mjs`，同步 Graphify 靜態內容。
 
 ## 測試與建置
 
-教學案例 smoke test：
-
 ```bash
-npm run test:tutorial
-```
-
-真實案例測試：
-
-```bash
+npm test                 # 完整 Vitest suite
+npm run lint             # ESLint，禁止 warnings
+npm run build            # TypeScript + production bundle
+npm run test:tutorial    # Tutorial runtime smoke test
 npm run test:real_tutorial
 ```
 
-這次重構完成後，已重新執行 real tutorial 作為回歸驗證。
-
-只測單一案例：
+只執行單一 real tutorial：
 
 ```bash
 REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
 ```
 
-建置：
-
-```bash
-npm run build
-```
-
 ## MCP 測試伺服器
-
-專案內附本機 MCP 測試環境：
 
 ```bash
 cd mcp-test
 bash run.sh -simple
 ```
 
-常用模式：
+其他模式：
 
-- `bash run.sh -simple`
-- `bash run.sh -agent_browser`
-- `bash run.sh -uninstall`
+```bash
+bash run.sh -agent_browser
+bash run.sh -uninstall
+```
 
-`mcp-test/server.js` 會驗證 `/mcp/rpc` 的 JSON body、`id`、`method` 與 tool call 參數；空 body、非 JSON 或缺欄位會回 400，而不是讓測試 server crash。
+`mcp-test/server.js` 會驗證 JSON-RPC body、`id`、`method` 與 tool call 參數；格式錯誤會回傳 400，不會讓 fixture server crash。
 
-## Frontend-only 風險與部署提醒
+## 文件
 
-這個專案刻意採 frontend-only 設計，適合做 agent workflow 原型、教學、展示與 UI/UX 實驗，但不應直接視為可公開線上部署的安全架構。
+- [App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)
+- [Multi-turn skill runtime 設計](./docs/skill-runtime-design.md)
+- [Agentic workflow notes](./agentic.md)
+- [Coding agent / contributor guide](./AGENTS.md)
+- [Open issue batches](./issue/)
 
-需要注意：
+## 安全與部署限制
 
-- provider API keys 目前保存在瀏覽器端
-- custom built-in tools 會以同 origin 權限執行 JavaScript
-- docs、skills、prompt templates 與部分設定也都保存在使用者本機
-- 純前端無法直接連線未開放 CORS 的 remote MCP；內建 relay 只供本機開發，正式環境仍需 server-side gateway
+這個專案刻意採 frontend-only 設計，適合 prototype、教學與內部展示，不應直接視為 production secret architecture。
 
-如果要對外正式提供服務，建議至少補上：
+目前需要注意：
 
-- server-side proxy / gateway
-- secret 與 arbitrary JS execution 的隔離
-- 更嚴格的 tool / credential trust boundary
-- 明確的多使用者資料隔離策略
+- Provider credentials 由瀏覽器端管理
+- Custom built-in tools 會以同 origin 權限執行 JavaScript
+- Docs、skills、prompt templates 與部分設定保存在使用者本機
+- 未開放 CORS 的 remote MCP 需要 server-side gateway
+- 靜態前端不應內嵌共享 API token
+
+公開部署前，至少應加入 server-side gateway、secret 隔離、tool execution trust boundary 與多使用者資料隔離策略。
