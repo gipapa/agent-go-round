@@ -127,6 +127,6 @@ npm test
 
 - [README.md](./README.md)
 - [App runtime refactor](./docs/app-runtime-refactor-2026-07.md)
-- [Multi-turn skill runtime design](./docs/skill-runtime-design.md)
+- [Pi Agent skill integration plan](./docs/pi-agent-skill-integration-plan.md)
 - [Agentic workflow notes](./agentic.md)
 - [Issue batches](./issue/)

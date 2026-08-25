@@ -121,7 +121,7 @@ bash run.sh -uninstall
 ## 文件
 
 - [App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)
-- [Multi-turn skill runtime 設計](./docs/skill-runtime-design.md)
+- [Pi Agent skill 整合規劃](./docs/pi-agent-skill-integration-plan.md)
 - [Agentic workflow notes](./agentic.md)
 - [Coding agent / contributor guide](./AGENTS.md)
 - [Open issue batches](./issue/)
