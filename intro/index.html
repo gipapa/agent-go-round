@@ -766,13 +766,13 @@ preferredMcpServerId
 <span class="text-accent">- behavior:</span> first_chat_skill_references<br/>
 &nbsp;&nbsp;<span class="text-accent">automation:</span><br/>
 &nbsp;&nbsp;&nbsp;&nbsp;<span class="text-secondary">composerSeed:</span> "用這份客製化報告..."<br/>
-&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-secondary">skillExecutionMode:</span> single_turn<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-secondary">skillHarness:</span> pi_loop_v1<br/>
 &nbsp;&nbsp;<span class="text-accent">expect:</span><br/>
 &nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">assistantContentIncludes:</span><br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- "投資組合"<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">skillTraceIncludes:</span><br/>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- "references"<br/>
-&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">requireSkillTodo:</span> true
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="text-warning">activityTrace:</span> skill_loaded · tool_result
               </div>
 
               <div class="mt-4 border-t border-white/5 pt-4 space-y-2.5">
@@ -782,7 +782,7 @@ preferredMcpServerId
                 </div>
                 <div class="flex items-start gap-2 text-xs text-slate-400">
                   <span class="text-pink">▸</span>
-                  <span><strong class="text-white/80">expect 斷言</strong><br/>assistantContentIncludes · skillTraceIncludes · requireSkillTodo · requireSkillTodoProgress</span>
+                  <span><strong class="text-white/80">expect 斷言</strong><br/>assistantContentIncludes · skillTraceIncludes · successfulToolNames</span>
                 </div>
                 <div class="flex items-start gap-2 text-xs text-slate-400">
                   <span class="text-pink">▸</span>
