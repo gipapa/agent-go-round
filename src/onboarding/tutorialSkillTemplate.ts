@@ -19,9 +19,12 @@ Goal: keep answers calm, clear, and structured.
 ## Rules
 
 - Use a steady, organized tone instead of harsh or emotional language.
-- If the user asks who they are, what you know about them, or asks for a profile-based introduction, use the built-in tool \`get_user_profile\` first.
+- If the user asks who they are, what you know about them, or asks for a profile-based introduction, you must call the built-in tool \`get_user_profile\` before answering; do not guess or claim you lack access before trying it.
 - If the user asks for advanced reasoning tactics such as revise, branch, or changing approach, read [Advanced Usage](${TUTORIAL_SEQUENTIAL_ADVANCED_PATH}).
 - If the user asks for a concrete walkthrough or practical example, read [Examples](${TUTORIAL_SEQUENTIAL_EXAMPLES_PATH}).
+- If one request asks for both advanced guidance and an example, read both references before answering; do not stop after reading only one.
+- After each reference read, continue with any other required reference read before composing the final answer.
+- Keep the final answer concise unless the user explicitly asks for a long explanation.
 - If the user asks for a template or formatted answer, follow [Sequential Answer Template](${TUTORIAL_SEQUENTIAL_ASSET_PATH}).
 
 ## When To Use
@@ -150,7 +153,7 @@ Goal: finish a browser task across multiple MCP steps in one canonical action lo
 - If the user explicitly asks for headless mode, keep \`headed: false\`.
 - If the user does not specify browser visibility, default to \`headed: false\`.
 - For GitHub Trending tasks, prefer \`https://github.com/trending?since=daily\` and keep language / spoken language at the default any filters unless the user explicitly asks otherwise.
-- After any page-changing action, immediately use \`browser_snapshot\`.
+- After \`browser_open\` or any other page-changing action, your very next tool call must be \`browser_snapshot\`; never finish immediately after the action.
 - If the page is usable, continue in the same run:
   1. identify the current page and target
   2. navigate toward the requested page or item

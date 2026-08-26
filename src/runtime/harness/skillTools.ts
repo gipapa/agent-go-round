@@ -290,7 +290,15 @@ export function createSkillInternalToolRunner(args: {
   const loadedResourcePaths = new Set<string>();
   let totalResourceChars = 0;
 
-  const findSkill = (skillId: string) => args.snapshot.skills.find(({ skill }) => skill.id === skillId) ?? null;
+  const findSkill = (skillId: string) => {
+    const normalized = skillId.trim().toLowerCase();
+    if (!normalized) return null;
+    return args.snapshot.skills.find(({ skill }) => {
+      const frontmatterName = skill.skillMarkdown.match(/^---\s*[\r\n]+name:\s*([^\r\n]+)\s*[\r\n]/i)?.[1]?.trim();
+      return [skill.id, skill.rootPath, skill.name, frontmatterName]
+        .some((candidate) => candidate?.trim().toLowerCase() === normalized);
+    }) ?? null;
+  };
 
   return {
     getLoadedSkill: () => loaded?.skill.id,

@@ -84,16 +84,16 @@ steps:
 
       請回到 Chat Config，打開 Credentials 設定。
 
-      這一步請先補出第二個可用來源：
+      這一步請確認第二個可用來源已經加入：
       - 新增第二把 key，或
       - 新增另一個 provider
 
       當系統偵測到第二個可用來源後，會自動建立 `教學用Load Balancer 2`，其中三個 instances 會是：
-      - Instance 1：沿用目前對話用的 provider / key，model=`openai/gpt-oss-20b`
-      - Instance 2：沿用同一把 key，但 model 改成 `openai/gpt-oss-20b`
-      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`openai/gpt-oss-20b`
+      - Instance 1：目前對話用的 provider / key，model=`openai/gpt-oss-20b`
+      - Instance 2：第二把 key 或另一個 provider，model=`openai/gpt-oss-20b`
+      - Instance 3：第一把 key 的最後 fallback，model=`openai/gpt-oss-20b`
 
-      這個案例不會驗證 failover 是否真的發生；這一步只確認第二個 load balancer 已建立完成。
+      這個案例會讓第二個 key 排在第一個 failover 位置；這一步只確認第二個 load balancer 已建立完成。
     completionLabel: 等待你新增第二把 key / 其他 provider，並讓系統建立第二個 Load Balancer
     tab: chat_config
     targetId: chat-config-credentials-card

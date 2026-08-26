@@ -3,6 +3,7 @@ import type { AgentAdapter, RetryConfig } from "../adapters/base";
 import type { ExecutionDeadline } from "../utils/deadline";
 import type { ContextBudget, HarnessEvent } from "../runtime/harness/types";
 import type { HarnessSkillPackage } from "../runtime/harness/skillTools";
+import type { ToolDashboardHelpers } from "../utils/toolDashboard";
 import { projectPersistedHarnessRun } from "./harnessProjection";
 import { runHarnessOneToOne } from "../orchestrators/harnessOneToOne";
 import { errorMessage } from "../utils/errors";
@@ -28,7 +29,16 @@ function summarizeToolInput(input: unknown) {
   }
 }
 
-function summarizeToolResult(event: Extract<HarnessEvent, { type: "tool_result" }>, durationMs: number) {
+function formatToolRef(toolId: string, toolDisplayNames: ReadonlyMap<string, string>) {
+  const displayName = toolDisplayNames.get(toolId)?.trim();
+  return displayName ? `${toolId} [${displayName}]` : toolId;
+}
+
+function summarizeToolResult(
+  event: Extract<HarnessEvent, { type: "tool_result" }>,
+  durationMs: number,
+  toolDisplayNames: ReadonlyMap<string, string>
+) {
   const { result } = event;
   const certainty = result.outcome === "outcome_unknown"
     ? "unknown"
@@ -37,10 +47,14 @@ function summarizeToolResult(event: Extract<HarnessEvent, { type: "tool_result" 
       : "not_dispatched";
   const observation = result.observationConfirmed === false ? "; observation=unconfirmed" : "";
   const error = result.errorCode ? `; error=${result.errorCode}` : "";
-  return `${event.call.toolId}: ${result.outcome}; certainty=${certainty}; duration_ms=${durationMs}; model_chars=${result.modelContent.length}; summary_chars=${result.displaySummary.length}${observation}${error}`;
+  return `${formatToolRef(event.call.toolId, toolDisplayNames)}: ${result.outcome}; certainty=${certainty}; duration_ms=${durationMs}; model_chars=${result.modelContent.length}; summary_chars=${result.displaySummary.length}${observation}${error}`;
 }
 
-function eventTrace(event: HarnessEvent, toolDispatchTimes: Map<string, number>): ChatTraceEntry | null {
+function eventTrace(
+  event: HarnessEvent,
+  toolDispatchTimes: Map<string, number>,
+  toolDisplayNames: ReadonlyMap<string, string>
+): ChatTraceEntry | null {
   if (event.type === "run_start") return { label: "Run start", content: `generation=${event.generation}` };
   if (event.type === "model_step_start") return { label: "Model step", content: `step=${event.step}` };
   if (event.type === "model_step_end") return { label: "Model step result", content: `step=${event.step}; status=${event.status}` };
@@ -57,14 +71,14 @@ function eventTrace(event: HarnessEvent, toolDispatchTimes: Map<string, number>)
   }
   if (event.type === "skill_loaded") return { label: "Skill loaded", content: event.skillId };
   if (event.type === "resource_loaded") return { label: "Skill resource", content: `${event.path} (${event.chars} chars)` };
-  if (event.type === "tool_preflight") return { label: "Tool preflight", content: `${event.call.toolId}: input=${summarizeToolInput(event.call.input)}; ${event.ok ? "allowed" : event.errorCode ?? "rejected"}` };
-  if (event.type === "tool_dispatch") return { label: "Tool dispatch", content: `${event.call.toolId} (${event.call.callId})` };
+  if (event.type === "tool_preflight") return { label: "Tool preflight", content: `${formatToolRef(event.call.toolId, toolDisplayNames)}: input=${summarizeToolInput(event.call.input)}; ${event.ok ? "allowed" : event.errorCode ?? "rejected"}` };
+  if (event.type === "tool_dispatch") return { label: "Tool dispatch", content: `${formatToolRef(event.call.toolId, toolDisplayNames)} (${event.call.callId})` };
   if (event.type === "tool_result") {
     return {
       label: "Tool result",
       // Persist only shape/size and stable outcome metadata. Tool summaries
       // may contain untrusted MCP or built-in output and never enter history.
-      content: summarizeToolResult(event, Math.max(0, Date.now() - (toolDispatchTimes.get(event.call.callId) ?? Date.now())))
+      content: summarizeToolResult(event, Math.max(0, Date.now() - (toolDispatchTimes.get(event.call.callId) ?? Date.now())), toolDisplayNames)
     };
   }
   if (event.type === "protocol_repair") return { label: "Protocol repair", content: "repair requested" };
@@ -105,6 +119,9 @@ export async function runHarnessChatTurn(args: {
   isCurrent?: () => boolean;
   confirm?: (message: string, signal: AbortSignal) => Promise<boolean>;
   getUserProfilePayload?: () => { name: string; description: string; hasAvatar: boolean };
+  ui?: {
+    dashboard?: ToolDashboardHelpers;
+  };
   onTransportCandidateSuccess?: (candidateId: string) => void;
   onTransportCandidateFailure?: (candidateId: string, message: string) => void;
   emit?: (event: HarnessEvent) => void;
@@ -114,6 +131,10 @@ export async function runHarnessChatTurn(args: {
   const trace: ChatTraceEntry[] = [];
   const runEvents: HarnessEvent[] = [];
   const toolDispatchTimes = new Map<string, number>();
+  const toolDisplayNames = new Map<string, string>([
+    ...args.builtInTools.map((tool) => [`builtin:${tool.id}`, tool.displayLabel?.trim() || tool.name] as const),
+    ...args.mcpTools.flatMap(({ server, tools }) => tools.map((tool) => [`mcp:${server.id}:${tool.name}`, tool.name] as const))
+  ]);
   const startedAt = Date.now();
   const ownsRun = () => args.isCurrent?.() !== false;
   const deadlineExpired = () => args.deadline !== undefined && Date.now() >= args.deadline.expiresAt;
@@ -137,7 +158,7 @@ export async function runHarnessChatTurn(args: {
       // A UI/controller observer cannot change the harness terminal outcome.
     }
     if (event.type === "tool_dispatch") toolDispatchTimes.set(event.call.callId, Date.now());
-    const nextTrace = eventTrace(event, toolDispatchTimes);
+    const nextTrace = eventTrace(event, toolDispatchTimes, toolDisplayNames);
     if (event.type === "tool_result") toolDispatchTimes.delete(event.call.callId);
     if (nextTrace) {
       trace.push({ label: nextTrace.label.slice(0, 160), content: nextTrace.content.slice(0, 2_000) });
@@ -215,6 +236,7 @@ export async function runHarnessChatTurn(args: {
       isCurrent: args.isCurrent,
       confirm: args.confirm,
       getUserProfilePayload: args.getUserProfilePayload,
+      ui: args.ui,
       emit: onEvent,
       onTransportCandidateSuccess: args.onTransportCandidateSuccess,
       onTransportCandidateFailure: args.onTransportCandidateFailure

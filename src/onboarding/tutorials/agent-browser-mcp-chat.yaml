@@ -115,6 +115,8 @@ steps:
       來開啟：
       - `https://github.com/trending`
 
+      開頁工具執行後，請在同一段對話立即再呼叫 `browser_snapshot` 觀察頁面，不能在 `browser_open` 後直接結束回覆；下一步仍會再次要求 snapshot。
+
       只要送出後有正常回覆，且 tool result 顯示真的呼叫了開頁類工具，就算完成。
     tab: chat
     targetId: chat-input
@@ -123,10 +125,10 @@ steps:
     actionLabel: 下一步
     automation:
       clearChatOnEnter: true
-      composerSeed: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，不要只口頭描述你要做什麼。
+      composerSeed: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，接著在同一段對話立即使用 browser_snapshot 觀察頁面，不要只口頭描述你要做什麼，也不要在 browser_open 後直接結束。
       activeAgentPreset: tutorial_agent_base
       expect:
-        userPrompt: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，不要只口頭描述你要做什麼。
+        userPrompt: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，接著在同一段對話立即使用 browser_snapshot 觀察頁面，不要只口頭描述你要做什麼，也不要在 browser_open 後直接結束。
         requireAssistant: true
         skillTraceIncludesAny:
           - browser_open

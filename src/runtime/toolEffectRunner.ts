@@ -4,6 +4,7 @@ import { callMcpToolWithTimeout, getMcpToolTimeoutMs, McpToolExecutionError } fr
 import { BuiltInToolExecutionError, runBuiltInScriptTool } from "../utils/runBuiltInScriptTool";
 import { errorMessage } from "../utils/errors";
 import { SYSTEM_BUILT_IN_TOOLS } from "../utils/systemBuiltInTools";
+import type { ToolDashboardHelpers } from "../utils/toolDashboard";
 import type {
   HarnessToolCall,
   HarnessToolDefinition,
@@ -191,6 +192,9 @@ export type ToolEffectRunnerDependencies = {
   pickBestAgentForQuestion?: (question: string) => Promise<string> | string;
   confirm?: (message: string, signal: AbortSignal) => Promise<boolean>;
   requestId?: string;
+  ui?: {
+    dashboard?: ToolDashboardHelpers;
+  };
 };
 
 function result(outcome: HarnessToolResult["outcome"], message: string, errorCode?: string, effectDispatched = false): HarnessToolResult {
@@ -263,10 +267,14 @@ export function createToolEffectRunner(dependencies: ToolEffectRunnerDependencie
           const output = await runBuiltInScriptTool(
             builtin,
             call.input,
-            { system },
+            { system, ui: dependencies.ui },
             {
               signal: context.signal,
-              sandbox: trustedSystemBuiltin ? "inline" : "worker",
+              // DOM/page helpers are only available in the page context. The
+              // automatic mode keeps ordinary custom tools in a worker while
+              // allowing tools that explicitly use dashboard/window/document
+              // to run with the injected UI helpers.
+              sandbox: trustedSystemBuiltin ? "inline" : "auto",
               fallbackToInline: trustedSystemBuiltin,
               onDispatch: context.onDispatch
             }

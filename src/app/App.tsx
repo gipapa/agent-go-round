@@ -58,6 +58,7 @@ import LoadBalancersPanel from "../ui/LoadBalancersPanel";
 import VoiceConfigPanel from "../ui/VoiceConfigPanel";
 import LogPanel from "../ui/LogPanel";
 import CredentialsPanel from "../ui/CredentialsPanel";
+import { createToolDashboardHelpers } from "../utils/toolDashboard";
 import { getTutorialCatalogError, getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
 import {
   normalizeTutorialPrimaryAgentList,
@@ -74,6 +75,7 @@ import {
   TUTORIAL_TIME_TOOL_DESCRIPTION,
   TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
   TUTORIAL_TIME_TOOL_NAME,
+  isTutorialTimeTool,
   TUTORIAL_MCP_NAME,
   TUTORIAL_PRIMARY_MODEL,
   TUTORIAL_SECONDARY_MODEL,
@@ -289,12 +291,20 @@ export default function App() {
   const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
+  const toolDashboard = useMemo(() => createToolDashboardHelpers(), []);
   const [explicitSkillId, setExplicitSkillId] = useState<string | null>(null);
   const [loadBalancers, setLoadBalancers] = useState<LoadBalancerConfig[]>(() => loadLoadBalancers());
   const [loadBalancerPanelSelectedId, setLoadBalancerPanelSelectedId] = useState<string | null>(null);
   const systemBuiltInTools = useMemo(() => SYSTEM_BUILT_IN_TOOLS, []);
   const allBuiltInTools = useMemo(
-    () => [...systemBuiltInTools, ...builtInTools.map((tool) => ({ ...tool, source: "custom" as const, readonly: false }))],
+    () => [...systemBuiltInTools, ...builtInTools.map((tool) => ({
+      ...tool,
+      source: "custom" as const,
+      // The tutorial clock only presents local page state. Keep ordinary
+      // persisted custom tools conservative, even if their stored metadata
+      // claims to be read-only.
+      readonly: isTutorialTimeTool(tool)
+    }))],
     [builtInTools, systemBuiltInTools]
   );
 
@@ -640,9 +650,10 @@ export default function App() {
             typeof value.delaySecond === "number" ? Math.max(0, Math.min(30, Math.round(value.delaySecond))) : undefined,
           maxRetries:
             typeof value.maxRetries === "number" ? Math.max(0, Math.min(20, Math.round(value.maxRetries))) : undefined,
-          resumeMinute:
-            typeof value.resumeMinute === "number" ? Math.max(0, Math.min(1440, Math.round(value.resumeMinute))) : undefined
+            resumeMinute:
+              typeof value.resumeMinute === "number" ? Math.max(0, Math.min(1440, Math.round(value.resumeMinute))) : undefined
         }),
+      setExplicitSkillId,
       clearChat: () => {
         setHistory([]);
         setTutorialOpenedToolResultMessageIds([]);
@@ -1055,7 +1066,7 @@ export default function App() {
       kind === "single"
         ? {
             ...createLoadBalancer("教學用Load Balancer 1"),
-            description: "教學用單一 instance Load Balancer",
+            description: "教學用 key failover Load Balancer",
             instances: [
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
@@ -1077,13 +1088,13 @@ export default function App() {
               }),
               createLoadBalancerInstance({
                 model: TUTORIAL_SECONDARY_MODEL,
-                description: "Same key with alternate model",
+                description: "Alternate key with secondary model",
                 toolCallingCapability: "native",
                 contextBudget: TUTORIAL_CONTEXT_BUDGET
               }),
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
-                description: "Different key or provider with primary model",
+                description: "Primary key retry position",
                 toolCallingCapability: "native",
                 contextBudget: TUTORIAL_CONTEXT_BUDGET
               })
@@ -1106,43 +1117,50 @@ export default function App() {
     if (!credential || !key) return;
 
     const existing = loadBalancers.find((entry) => entry.name.trim() === "教學用Load Balancer 1") ?? null;
-    const existingInstance = existing?.instances[0] ?? null;
     const now = Date.now();
+    const tutorialKeys = [
+      key,
+      ...credential.keys.filter((entry) => entry.id !== key.id && entry.apiKey.trim())
+    ].slice(0, 2);
+    const nextInstances = tutorialKeys.map((tutorialKey, index) => ({
+      ...(existing?.instances[index] ?? createLoadBalancerInstance()),
+      credentialId: credential.id,
+      credentialKeyId: tutorialKey.id,
+      model: TUTORIAL_PRIMARY_MODEL,
+      description: index === 0 ? "Primary tutorial instance" : "Alternate key for failover",
+      failure: false,
+      failureCount: 0,
+      nextCheckTime: null,
+      toolCallingCapability: "native" as const,
+      contextBudget: TUTORIAL_CONTEXT_BUDGET,
+      updatedAt: now
+    }));
     const nextEntry: LoadBalancerConfig = {
       ...(existing ?? createLoadBalancer("教學用Load Balancer 1")),
       name: "教學用Load Balancer 1",
-      description: "教學用單一 instance Load Balancer",
-      instances: [
-        {
-          ...(existingInstance ?? createLoadBalancerInstance()),
-          credentialId: credential.id,
-          credentialKeyId: key.id,
-          model: TUTORIAL_PRIMARY_MODEL,
-          description: "Primary tutorial instance",
-          failure: false,
-          failureCount: 0,
-          nextCheckTime: null,
-          toolCallingCapability: "native",
-          contextBudget: TUTORIAL_CONTEXT_BUDGET,
-          updatedAt: now
-        }
-      ],
+      description: "教學用 key failover Load Balancer",
+      instances: nextInstances,
       updatedAt: now
     };
 
     const alreadyMatches =
       !!existing &&
       existing.description === nextEntry.description &&
-      existing.instances.length === 1 &&
-      existing.instances[0]?.credentialId === nextEntry.instances[0]?.credentialId &&
-      existing.instances[0]?.credentialKeyId === nextEntry.instances[0]?.credentialKeyId &&
-      existing.instances[0]?.model === nextEntry.instances[0]?.model &&
-      existing.instances[0]?.description === nextEntry.instances[0]?.description &&
-      existing.instances[0]?.toolCallingCapability === nextEntry.instances[0]?.toolCallingCapability &&
-      JSON.stringify(existing.instances[0]?.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
-      existing.instances[0]?.failure === false &&
-      existing.instances[0]?.failureCount === 0 &&
-      existing.instances[0]?.nextCheckTime === null;
+      existing.instances.length === nextEntry.instances.length &&
+      existing.instances.every((instance, index) => {
+        const nextInstance = nextEntry.instances[index];
+        return (
+          instance.credentialId === nextInstance.credentialId &&
+          instance.credentialKeyId === nextInstance.credentialKeyId &&
+          instance.model === nextInstance.model &&
+          instance.description === nextInstance.description &&
+          instance.toolCallingCapability === nextInstance.toolCallingCapability &&
+          JSON.stringify(instance.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
+          instance.failure === false &&
+          instance.failureCount === 0 &&
+          instance.nextCheckTime === null
+        );
+      });
 
     if (alreadyMatches) {
       setLoadBalancerPanelSelectedId(existing.id);
@@ -1214,10 +1232,10 @@ export default function App() {
       }),
       createLoadBalancerInstance({
         id: existing?.instances[1]?.id,
-        credentialId: primaryCredential.id,
-        credentialKeyId: primaryKey.id,
+        credentialId: secondaryCredential.id,
+        credentialKeyId: secondaryKey.id,
         model: TUTORIAL_SECONDARY_MODEL,
-        description: "Same key with alternate model",
+        description: "Alternate key with secondary model",
         maxRetries: existing?.instances[1]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[1]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
         resumeMinute: existing?.instances[1]?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
@@ -1230,11 +1248,10 @@ export default function App() {
       }),
       createLoadBalancerInstance({
         id: existing?.instances[2]?.id,
-        credentialId: secondaryCredential.id,
-        credentialKeyId: secondaryKey.id,
+        credentialId: primaryCredential.id,
+        credentialKeyId: primaryKey.id,
         model: TUTORIAL_PRIMARY_MODEL,
-        description:
-          secondaryCredential.id === primaryCredential.id ? "Different key with primary model" : "Different provider with primary model",
+        description: "Primary key retry position",
         maxRetries: existing?.instances[2]?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
         delaySecond: existing?.instances[2]?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
         resumeMinute: existing?.instances[2]?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
@@ -2035,6 +2052,7 @@ export default function App() {
       emit: args.emit,
       confirm: requestToolConfirmation,
       getUserProfilePayload: () => getUserProfileToolPayload(userProfile),
+      ui: { dashboard: toolDashboard },
       onTransportCandidateSuccess: (candidateId) => {
         const candidate = candidateById.get(candidateId);
         if (!candidate) return;
@@ -2321,6 +2339,7 @@ export default function App() {
       code: TUTORIAL_TIME_TOOL_CODE,
       inputSchema: TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
       requireConfirmation: false,
+      readonly: true,
       updatedAt: Date.now(),
       source: "custom"
     };

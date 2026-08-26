@@ -4,6 +4,7 @@ import { runHarnessChatTurn } from "../chat/harnessChatTurn";
 import type { AgentAdapter } from "../adapters/base";
 import type { ChatMessage } from "../types";
 import type { HarnessSkillPackage } from "../runtime/harness/skillTools";
+import { createToolDashboardHelpers } from "../utils/toolDashboard";
 
 describe("harness chat turn adapter", () => {
   const managers: McpClientManager[] = [];
@@ -46,6 +47,55 @@ describe("harness chat turn adapter", () => {
       }
     });
     expect(patches.at(-1)?.patch.harnessRun).toMatchObject({ runId: "run-1", terminalReason: "final", stepCount: 1 });
+  });
+
+  it("includes stable built-in tool names in the persisted activity trace", async () => {
+    let callCount = 0;
+    const adapter: AgentAdapter = {
+      async *chat() {
+        if (callCount++ === 0) {
+          yield { type: "done", text: JSON.stringify({ type: "tool_call", toolId: "builtin:named-tool", input: {} }) };
+          return;
+        }
+        yield { type: "done", text: "tool completed" };
+      }
+    };
+    const manager = new McpClientManager();
+    managers.push(manager);
+    const dashboard = createToolDashboardHelpers();
+    const patches: Array<{ id: string; patch: Partial<ChatMessage> }> = [];
+
+    await runHarnessChatTurn({
+      requestId: "request-named-tool",
+      runId: "run-named-tool",
+      generation: 1,
+      assistantMessageId: "assistant-named-tool",
+      userInput: "run the named tool",
+      agent: { id: "agent", name: "Agent", type: "custom" },
+      adapter,
+      builtInTools: [{
+        id: "named-tool",
+        name: "教學用時鐘工具",
+        description: "A named test tool",
+        code: "const panel = dashboard.show({ title: \"Named tool\" }); return { dashboardId: panel.id };",
+        inputSchema: {},
+        requireConfirmation: false,
+        readonly: true,
+        source: "custom",
+        updatedAt: 0
+      }],
+      docs: [],
+      skills: [],
+      mcpServers: [],
+      mcpTools: [],
+      mcpClientManager: manager,
+      ui: { dashboard },
+      patchMessage: (id, patch) => patches.push({ id, patch })
+    });
+
+    const traceText = patches.at(-1)?.patch.skillTrace?.map((entry) => entry.content).join("\n") ?? "";
+    expect(traceText).toContain("builtin:named-tool [教學用時鐘工具]");
+    expect(traceText).toContain("builtin:named-tool [教學用時鐘工具]: success;");
   });
 
   it("does not persist internal skill instructions in the assistant trace", async () => {

@@ -3,7 +3,7 @@ import { listSkillFiles, listSkills, restoreSkillSnapshots } from "../storage/sk
 import { hasStructuredAgentFailureContent } from "../utils/agentFailure";
 import { normalizeCredentialUrl } from "../utils/credential";
 import { SYSTEM_REQUEST_CONFIRMATION_TOOL_ID, SYSTEM_USER_PROFILE_TOOL_ID } from "../utils/systemBuiltInTools";
-import { AgentConfig } from "../types";
+import type { AgentConfig, BuiltInToolConfig } from "../types";
 import {
   TUTORIAL_TIME_TOOL_CODE,
   TUTORIAL_TIME_TOOL_DESCRIPTION,
@@ -47,6 +47,15 @@ export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
 export const TUTORIAL_PRIMARY_MODEL = "openai/gpt-oss-20b";
 export const TUTORIAL_SECONDARY_MODEL = "openai/gpt-oss-20b";
 export const TUTORIAL_AGENT_ROLE = "primary";
+
+export function isTutorialTimeTool(tool: Pick<BuiltInToolConfig, "name" | "description" | "inputSchema" | "code">) {
+  return (
+    tool.name.trim() === TUTORIAL_TIME_TOOL_NAME &&
+    tool.description.trim() === TUTORIAL_TIME_TOOL_DESCRIPTION &&
+    JSON.stringify(tool.inputSchema ?? {}) === JSON.stringify(TUTORIAL_TIME_TOOL_INPUT_SCHEMA) &&
+    tool.code.trim() === TUTORIAL_TIME_TOOL_CODE.trim()
+  );
+}
 
 export function resolveTutorialExecutionDeadlineMs(
   step: TutorialStepDefinition | null | undefined,
@@ -144,6 +153,22 @@ function loadBalancerMatchesTutorialGroq(state: TutorialRuntimeState, loadBalanc
   );
 }
 
+function tutorialPrimaryLoadBalancerHasExpectedKeys(state: TutorialRuntimeState) {
+  const loadBalancer = findLoadBalancerByName(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
+  const firstInstance = loadBalancer?.instances[0];
+  if (!loadBalancer || !firstInstance) return false;
+  const credential = state.credentials.find((entry) => entry.id === firstInstance.credentialId) ?? null;
+  const configuredKeys = credential?.keys.filter((key) => key.apiKey.trim()) ?? [];
+  if (configuredKeys.length < 2) return true;
+  const instanceKeyIds = new Set(
+    loadBalancer.instances
+      .filter((instance) => instance.credentialId === credential?.id)
+      .map((instance) => instance.credentialKeyId?.trim())
+      .filter((id): id is string => !!id)
+  );
+  return instanceKeyIds.size >= 2;
+}
+
 function findTutorialTimeTool(state: TutorialRuntimeState) {
   return state.builtInTools.find((tool) => tool.name.trim() === TUTORIAL_TIME_TOOL_NAME) ?? null;
 }
@@ -152,6 +177,7 @@ function findTutorialSequentialSkill(state: TutorialRuntimeState) {
   return (
     state.skills.find((skill) => skill.rootPath === TUTORIAL_SEQUENTIAL_SKILL_ROOT) ??
     state.skills.find((skill) => skill.name === TUTORIAL_SEQUENTIAL_SKILL_NAME) ??
+    state.skills.find((skill) => /^---\s*[\r\n]+name:\s*sequential-thinking\s*[\r\n]/i.test(skill.skillMarkdown)) ??
     null
   );
 }
@@ -160,6 +186,7 @@ function findTutorialChatgptBrowserSkill(state: TutorialRuntimeState) {
   return (
     state.skills.find((skill) => skill.rootPath === TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT) ??
     state.skills.find((skill) => skill.name === TUTORIAL_CHATGPT_BROWSER_SKILL_NAME) ??
+    state.skills.find((skill) => /^---\s*[\r\n]+name:\s*browser-workflow-multiturn\s*[\r\n]/i.test(skill.skillMarkdown)) ??
     null
   );
 }
@@ -458,7 +485,11 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
     }
     case "create_single_load_balancer": {
       const loadBalancer = findLoadBalancerByName(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
-      const completed = !!loadBalancer && loadBalancer.instances.length >= 1 && loadBalancerMatchesTutorialGroq(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME);
+      const completed =
+        !!loadBalancer &&
+        loadBalancer.instances.length >= 1 &&
+        loadBalancerMatchesTutorialGroq(state, TUTORIAL_PRIMARY_LOAD_BALANCER_NAME) &&
+        tutorialPrimaryLoadBalancerHasExpectedKeys(state);
       return {
         completed,
         targetId: step.targetId ?? "chat-config-load-balancer-card",
@@ -504,12 +535,12 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         loadBalancer.instances[0]?.credentialId === primary.credential.id &&
         loadBalancer.instances[0]?.credentialKeyId === primary.key.id &&
         loadBalancer.instances[0]?.model === TUTORIAL_PRIMARY_MODEL &&
-        loadBalancer.instances[1]?.credentialId === primary.credential.id &&
-        loadBalancer.instances[1]?.credentialKeyId === primary.key.id &&
+        loadBalancer.instances[1]?.credentialId === secondary.credential.id &&
+        loadBalancer.instances[1]?.credentialKeyId === secondary.key.id &&
         loadBalancer.instances[1]?.model === TUTORIAL_SECONDARY_MODEL &&
         loadBalancer.instances[2]?.model === TUTORIAL_PRIMARY_MODEL &&
-        (loadBalancer.instances[2]?.credentialId !== primary.credential.id ||
-          loadBalancer.instances[2]?.credentialKeyId !== primary.key.id);
+        loadBalancer.instances[2]?.credentialId === primary.credential.id &&
+        loadBalancer.instances[2]?.credentialKeyId === primary.key.id;
       return {
         completed,
         targetId: step.targetId ?? "chat-config-credentials-card",
@@ -578,10 +609,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
     case "create_tutorial_time_tool": {
       const tool = findTutorialTimeTool(state);
       const completed =
-        !!tool &&
-        tool.description.trim() === TUTORIAL_TIME_TOOL_DESCRIPTION &&
-        JSON.stringify(tool.inputSchema ?? {}) === JSON.stringify(TUTORIAL_TIME_TOOL_INPUT_SCHEMA) &&
-        tool.code.trim() === TUTORIAL_TIME_TOOL_CODE.trim();
+        !!tool && isTutorialTimeTool(tool);
       return {
         completed,
         targetId:
@@ -956,6 +984,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "first_chat_skill_user_profile":
     case "first_chat_skill_references":
     case "first_chat_skill_asset_template":
+      controller.setExplicitSkillId?.(findTutorialSequentialSkill(state)?.id ?? null);
       break;
     case "enable_tutorial_chatgpt_browser_skill_access": {
       controller.setActiveTab("agents");
@@ -969,6 +998,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     }
     case "first_chat_skill_chatgpt_open":
     case "first_chat_skill_chatgpt_ask":
+      controller.setExplicitSkillId?.(findTutorialChatgptBrowserSkill(state)?.id ?? null);
       controller.ensureTutorialAgentBrowserMcpTools();
       break;
     case "register_tutorial_agent_browser_mcp":

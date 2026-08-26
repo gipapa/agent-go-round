@@ -93,7 +93,7 @@ describe("skill capability snapshot", () => {
     const snapshot = buildSkillCapabilitySnapshot({
       enabled: true,
       skills: [packageEntry],
-      externalTools: [],
+      externalTools: buildBuiltinHarnessToolDefinitions([echo]),
       maxCatalogChars: 10_000
     });
     packageEntry.skill.workflow.requiredToolIds?.push("builtin:forged");
@@ -182,6 +182,36 @@ describe("skill capability snapshot", () => {
 });
 
 describe("skill internal tools", () => {
+  it("resolves an allowed skill by its stable name aliases", async () => {
+    const packageEntry = skill("stable-id", {
+      name: "Tutorial Skill",
+      skillMarkdown: "---\nname: tutorial-slug\ndescription: Tutorial skill\n---\n# Tutorial Skill"
+    });
+    const snapshot = buildSkillCapabilitySnapshot({
+      enabled: true,
+      skills: [packageEntry],
+      externalTools: buildBuiltinHarnessToolDefinitions([echo]),
+      maxCatalogChars: 10_000
+    });
+    const runner = createSkillInternalToolRunner({
+      snapshot,
+      budget: { maxSkillInstructionChars: 1_000, maxResourceChars: 1_000 }
+    });
+    const context = {
+      signal: new AbortController().signal,
+      runId: "run",
+      generation: 1,
+      definition: SKILL_INTERNAL_TOOL_DEFINITIONS[0]
+    };
+
+    await expect(runner.execute({
+      callId: "load-by-frontmatter-name",
+      toolId: SKILL_LOAD_TOOL_ID,
+      input: { skillId: "tutorial-slug" },
+      origin: "model"
+    }, context)).resolves.toMatchObject({ outcome: "success" });
+  });
+
   it("loads an explicit skill once, blocks switching, and intersects external tools", async () => {
     const one = skill("one");
     const two = skill("two", { workflow: { instructions: "two", disableModelInvocation: true, allowBuiltInTools: true, requiredToolIds: ["builtin:echo"] } });

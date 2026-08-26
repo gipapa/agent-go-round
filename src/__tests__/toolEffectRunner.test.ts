@@ -6,6 +6,7 @@ import {
   createToolEffectRunner
 } from "../runtime/toolEffectRunner";
 import { SYSTEM_BUILT_IN_TOOLS } from "../utils/systemBuiltInTools";
+import { createToolDashboardHelpers } from "../utils/toolDashboard";
 import type { AgentConfig, BuiltInToolConfig, McpServerConfig } from "../types";
 
 const agent: AgentConfig = { id: "agent-1", name: "Agent One", type: "openai_compat" };
@@ -56,6 +57,41 @@ describe("headless tool effect runner", () => {
     });
     expect(result).toMatchObject({ outcome: "success", effectDispatched: true });
     expect(onDispatch).toHaveBeenCalledOnce();
+  });
+
+  it("runs custom page tools with the injected dashboard helper", async () => {
+    const target = builtin({
+      id: "dashboard-tool",
+      name: "dashboard-tool",
+      description: "Show a dashboard",
+      code: `
+        const panel = dashboard.show({ key: "test-dashboard", title: "Test dashboard" });
+        panel.body.textContent = "ready";
+        return { dashboardId: panel.id };
+      `,
+      inputSchema: {},
+      requireConfirmation: false,
+      source: "custom"
+    });
+    const manager = new McpClientManager();
+    managers.push(manager);
+    const dashboard = createToolDashboardHelpers();
+    const runner = createToolEffectRunner({
+      agent,
+      availableBuiltinTools: [target],
+      availableMcpServers: [],
+      availableMcpTools: [],
+      mcpClientManager: manager,
+      ui: { dashboard }
+    });
+    const definition = buildBuiltinHarnessToolDefinitions([target])[0];
+    expect(definition.intent).toBe("control");
+    const result = await runner.execute({ callId: "call-dashboard", toolId: definition.id, input: {}, origin: "model" }, context(definition));
+
+    expect(result).toMatchObject({ outcome: "success", effectDispatched: true });
+    expect(result.modelContent).toContain("dashboardId");
+    expect(document.querySelector('[data-agr-tool-dashboard="true"]')).toHaveTextContent("ready");
+    dashboard.close("test-dashboard");
   });
 
   it("does not trust a forged system source for inline execution", async () => {

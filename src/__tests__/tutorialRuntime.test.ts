@@ -9,11 +9,17 @@ import {
   applyTutorialStepEntry,
   TUTORIAL_AGENT_ROLE,
   evaluateTutorialStep,
+  isTutorialTimeTool,
+  TUTORIAL_TIME_TOOL_CODE,
+  TUTORIAL_TIME_TOOL_DESCRIPTION,
+  TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
+  TUTORIAL_TIME_TOOL_NAME,
   TUTORIAL_PRIMARY_MODEL,
+  TUTORIAL_SECONDARY_MODEL,
   resolveTutorialExecutionDeadlineMs
 } from "../onboarding/runtime";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../onboarding/types";
-import type { AgentConfig, ChatMessage, LoadBalancerConfig } from "../types";
+import type { AgentConfig, ChatMessage, LoadBalancerConfig, SkillConfig } from "../types";
 import type { ModelCredentialEntry } from "../storage/settingsStore";
 import {
   assertRealTutorialGate,
@@ -139,6 +145,61 @@ describe("tutorial YAML automation linkage", () => {
     });
   });
 
+  it("gives the sequential references check an explicit bounded read sequence", () => {
+    const step = getStep("sequential-skill-chat", "references_chat");
+    const prompt = step.automation?.composerSeed ?? "";
+
+    expect(prompt).toContain("skill.read");
+    expect(prompt).toContain("references/advanced.md");
+    expect(prompt).toContain("references/examples.md");
+    expect(prompt).toContain("不要先回答");
+  });
+
+  it("explicitly activates the skill before tutorial skill chat steps", () => {
+    const controller: TutorialEntryController = {
+      setActiveTab: vi.fn(),
+      setConfigModal: vi.fn(),
+      setActiveAgentId: vi.fn(),
+      setSelectedAgentId: vi.fn(),
+      setAgentLoadBalancerRetryPolicy: vi.fn(),
+      setExplicitSkillId: vi.fn(),
+      setComposerSeed: vi.fn(),
+      clearChat: vi.fn(),
+      seedTutorialLoadBalancerDraft: vi.fn(),
+      ensureTutorialAgentBrowserMcpTools: vi.fn(),
+      ensureTutorialSequentialSkill: vi.fn(),
+      ensureTutorialChatgptBrowserSkill: vi.fn()
+    };
+    const skill = {
+      id: "tutorial-skill-id",
+      name: "Sequential Thinking Tutorial Skill",
+      rootPath: "sequential-thinking-tutorial-skill"
+    } as SkillConfig;
+
+    applyTutorialStepEntry(
+      getStep("sequential-skill-chat", "profile_tool_chat"),
+      makeState({ skills: [skill] }),
+      controller
+    );
+
+    expect(controller.setExplicitSkillId).toHaveBeenCalledWith(skill.id);
+
+    const browserSkill = {
+      ...skill,
+      id: "browser-skill-id",
+      name: "Browser Workflow Multi-turn Skill",
+      rootPath: "browser-workflow-multi-turn-skill",
+      skillMarkdown: "---\nname: browser-workflow-multiturn\n---\n"
+    } as SkillConfig;
+    applyTutorialStepEntry(
+      getStep("chatgpt-browser-skill", "run_chatgpt_flow"),
+      makeState({ skills: [browserSkill] }),
+      controller
+    );
+
+    expect(controller.setExplicitSkillId).toHaveBeenLastCalledWith(browserSkill.id);
+  });
+
   it("uses YAML automation to seed the composer for MCP snapshot steps", () => {
     const step = getStep("agent-browser-mcp-chat", "snapshot_trending");
     const controller: TutorialEntryController = {
@@ -167,6 +228,66 @@ describe("tutorial YAML automation linkage", () => {
     expect(controller.setComposerSeed).toHaveBeenCalledWith(
       "請明確使用 MCP 工具 browser_snapshot 讀取目前瀏覽器頁面，整理出 GitHub Trending 前十個熱門 repo 名稱。"
     );
+  });
+
+  it("requires the tutorial secondary load balancer to put the alternate key first", () => {
+    const step = getStep("first-agent-chat", "create-multi-load-balancer");
+    const now = Date.now();
+    const primaryKey = { id: "credential-groq-key-1", apiKey: "test-key-1", createdAt: now, updatedAt: now };
+    const alternateKey = { id: "credential-groq-key-2", apiKey: "test-key-2", createdAt: now, updatedAt: now };
+    const primaryLoadBalancer = {
+      ...makeTutorialLoadBalancer(),
+      name: "教學用Load Balancer 1"
+    };
+    const baseInstance = primaryLoadBalancer.instances[0];
+    const secondaryLoadBalancer: LoadBalancerConfig = {
+      id: "lb-groq-secondary",
+      name: "教學用Load Balancer 2",
+      instances: [
+        { ...baseInstance, id: "secondary-1", credentialKeyId: primaryKey.id, model: TUTORIAL_PRIMARY_MODEL },
+        { ...baseInstance, id: "secondary-2", credentialKeyId: alternateKey.id, model: TUTORIAL_SECONDARY_MODEL },
+        { ...baseInstance, id: "secondary-3", credentialKeyId: primaryKey.id, model: TUTORIAL_PRIMARY_MODEL }
+      ],
+      createdAt: now,
+      updatedAt: now
+    };
+    const credential = { ...makeTutorialCredential(), keys: [primaryKey, alternateKey] };
+    const state = makeState({
+      credentials: [credential],
+      loadBalancers: [primaryLoadBalancer, secondaryLoadBalancer]
+    });
+
+    expect(evaluateTutorialStep(step, state).completed).toBe(true);
+    expect(evaluateTutorialStep(step, makeState({
+      credentials: [credential],
+      loadBalancers: [{
+        ...secondaryLoadBalancer,
+        instances: [secondaryLoadBalancer.instances[0], { ...secondaryLoadBalancer.instances[1], credentialKeyId: primaryKey.id }, { ...secondaryLoadBalancer.instances[2], credentialKeyId: alternateKey.id }]
+      }, primaryLoadBalancer]
+    })).completed).toBe(false);
+  });
+
+  it("requires the first tutorial load balancer to include both configured keys", () => {
+    const step = getStep("first-agent-chat", "create-single-load-balancer");
+    const now = Date.now();
+    const primaryKey = { id: "credential-groq-key-1", apiKey: "test-key-1", createdAt: now, updatedAt: now };
+    const alternateKey = { id: "credential-groq-key-2", apiKey: "test-key-2", createdAt: now, updatedAt: now };
+    const credential = { ...makeTutorialCredential(), keys: [primaryKey, alternateKey] };
+    const firstInstance = makeTutorialLoadBalancer().instances[0];
+    const loadBalancer = {
+      ...makeTutorialLoadBalancer(),
+      name: "教學用Load Balancer 1",
+      instances: [
+        { ...firstInstance, credentialId: credential.id, credentialKeyId: primaryKey.id },
+        { ...firstInstance, id: "lb-groq-instance-2", credentialId: credential.id, credentialKeyId: alternateKey.id }
+      ]
+    };
+
+    expect(evaluateTutorialStep(step, makeState({ credentials: [credential], loadBalancers: [loadBalancer] })).completed).toBe(true);
+    expect(evaluateTutorialStep(step, makeState({
+      credentials: [credential],
+      loadBalancers: [{ ...loadBalancer, instances: [loadBalancer.instances[0]] }]
+    })).completed).toBe(false);
   });
 
   it("never selects managed MAGI agents as tutorial active agents", () => {
@@ -357,6 +478,12 @@ describe("tutorial YAML automation linkage", () => {
     expect(result.completed).toBe(true);
   });
 
+  it("keeps the sequential profile check focused on the natural user question", () => {
+    const step = getStep("sequential-skill-chat", "profile_tool_chat");
+    expect(step.automation?.composerSeed).toBe("你知道我是誰嗎?!?!?!");
+    expect(step.automation?.expect?.userPrompt).toBe(step.automation?.composerSeed);
+  });
+
   it("requires messages sent to model to be 1 for history limit tutorial steps", () => {
     const step = getStep("built-in-tools-chat", "set-history-limit");
     expect(evaluateTutorialStep(step, makeState({ historyMessageLimit: 10 })).completed).toBe(false);
@@ -536,6 +663,21 @@ describe("tutorial YAML automation linkage", () => {
       endpoint: LOCALHOST_GROQ_ENDPOINT,
       model: "another-model"
     })).toThrow(TUTORIAL_PRIMARY_MODEL);
+  });
+
+  it("classifies only the exact tutorial clock as presentation-only", () => {
+    const tool = {
+      name: TUTORIAL_TIME_TOOL_NAME,
+      description: TUTORIAL_TIME_TOOL_DESCRIPTION,
+      inputSchema: TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
+      code: "return 'clock';"
+    };
+    expect(isTutorialTimeTool(tool)).toBe(false);
+    expect(isTutorialTimeTool({
+      ...tool,
+      code: "if (!dashboard) throw new Error('missing');\nreturn {};"
+    })).toBe(false);
+    expect(isTutorialTimeTool({ ...tool, code: TUTORIAL_TIME_TOOL_CODE })).toBe(true);
   });
 
   it("validates real tutorial session counts and rollout gate requirements", () => {

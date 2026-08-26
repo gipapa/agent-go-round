@@ -136,6 +136,7 @@ export type TutorialEntryController = {
   setActiveAgentId: (id: string) => void;
   setSelectedAgentId: (id: string) => void;
   setAgentLoadBalancerRetryPolicy: (agentId: string, value: { delaySecond?: number; maxRetries?: number; resumeMinute?: number }) => void;
+  setExplicitSkillId?: (id: string | null) => void;
   setComposerSeed: (value: string) => void;
   clearChat: () => void;
   ensureTutorialPrimaryLoadBalancer: () => void;

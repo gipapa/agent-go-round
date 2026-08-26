@@ -13,6 +13,7 @@ import { runAgentLoop } from "../runtime/harness/runAgentLoop";
 import { createHarnessToolRegistry } from "../runtime/harness/toolRegistry";
 import { normalizeToolCallingCapability, type ToolCallingCapability } from "../runtime/harness/capability";
 import { filterAgentHarnessCapabilities } from "../runtime/harness/agentScope";
+import type { ToolDashboardHelpers } from "../utils/toolDashboard";
 
 export type HarnessOneToOneArgs = {
   agent: AgentConfig;
@@ -41,6 +42,9 @@ export type HarnessOneToOneArgs = {
   confirm?: (message: string, signal: AbortSignal) => Promise<boolean>;
   getUserProfilePayload?: () => { name: string; description: string; hasAvatar: boolean };
   pickBestAgentForQuestion?: (question: string) => Promise<string> | string;
+  ui?: {
+    dashboard?: ToolDashboardHelpers;
+  };
   runId: string;
   generation: number;
   signal?: AbortSignal;
@@ -150,6 +154,7 @@ export async function runHarnessOneToOne(args: HarnessOneToOneArgs): Promise<Har
     mcpClientManager: args.mcpClientManager,
     getUserProfilePayload: args.getUserProfilePayload,
     pickBestAgentForQuestion: args.pickBestAgentForQuestion,
+    ui: args.ui,
     confirm: args.confirm
   });
   const skillsEnabled = skillSnapshot.skills.length > 0;

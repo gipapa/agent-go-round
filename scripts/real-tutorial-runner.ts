@@ -493,6 +493,27 @@ async function hasLoadBalancer(name: string) {
   `);
 }
 
+async function hasLoadBalancerWithDistinctKeys(name: string, minimumKeys: number) {
+  return browserEval<boolean>(`
+    (() => {
+      try {
+        const raw = localStorage.getItem("agr_load_balancers_v1");
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : [];
+        const loadBalancer = entries.find((entry) => String(entry?.name || "").trim() === ${literal(name)});
+        if (!loadBalancer || !Array.isArray(loadBalancer.instances)) return false;
+        const keyIds = loadBalancer.instances
+          .map((instance) => String(instance?.credentialKeyId || "").trim())
+          .filter(Boolean);
+        return new Set(keyIds).size >= ${Math.max(1, Math.floor(minimumKeys))};
+      } catch {
+        return false;
+      }
+    })()
+  `);
+}
+
 async function hasCredentialKeyRow(rowIndex: number) {
   return browserEval<boolean>(`
     !!document.querySelector(${literal(`[data-tutorial-id="credential-groq-api-key-${rowIndex}"]`)})
@@ -554,6 +575,7 @@ async function waitForTutorialNextEnabled(timeoutMs: number, step: TutorialStepD
   try {
     await waitFor(
       async () => {
+        await approvePendingToolConfirmation();
         const next = await getTutorialNextState();
         return !next.disabled;
       },
@@ -806,7 +828,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       } catch {
         await createLoadBalancerByTutorialUi({
           name: TUTORIAL_PRIMARY_LB_NAME,
-          description: "教學用單一 instance Load Balancer",
+          description: "教學用 key failover Load Balancer",
           instances: [
             {
               credentialLabel: "Groq",
@@ -816,9 +838,27 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
               capability: "native",
               maxRetries: 4,
               delaySecond: 5
-            }
+            },
+            ...(config.apiKeys.length >= 2
+              ? [{
+                  credentialLabel: "Groq",
+                  keyLabel: "Key 2",
+                  model: TUTORIAL_PRIMARY_MODEL,
+                  description: "Alternate key for failover",
+                  capability: "native" as const,
+                  maxRetries: 4,
+                  delaySecond: 5
+                }]
+              : [])
           ]
         });
+      }
+      if (config.apiKeys.length >= 2) {
+        await waitFor(
+          () => hasLoadBalancerWithDistinctKeys(TUTORIAL_PRIMARY_LB_NAME, 2),
+          10000,
+          "等待第一個 Load Balancer 加入兩把 key"
+        );
       }
       return;
     case "create_groq_agent":
@@ -908,6 +948,8 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       } catch {
         await clickLabelContaining('[data-tutorial-id="agent-access-skills-section"]', "Sequential Thinking Tutorial Skill");
       }
+      await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
+      await clickByTutorialId("agent-access-builtins-all");
       await clickByTutorialId("agent-save-button");
       return;
     case "enable_tutorial_chatgpt_browser_skill_access":
