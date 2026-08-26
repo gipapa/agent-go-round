@@ -45,7 +45,16 @@ function eventTrace(event: HarnessEvent, toolDispatchTimes: Map<string, number>)
   if (event.type === "model_step_start") return { label: "Model step", content: `step=${event.step}` };
   if (event.type === "model_step_end") return { label: "Model step result", content: `step=${event.step}; status=${event.status}` };
   if (event.type === "context_projected") return { label: "Context projected", content: `${event.candidateId ? `candidate=${event.candidateId}; ` : ""}chars=${event.chars}; messages=${event.messageCount}; tools=${event.toolCount}` };
-  if (event.type === "transport_failover") return { label: "Transport failover", content: "candidate failover" };
+  if (event.type === "transport_failover") {
+    return {
+      label: "Transport failover",
+      content: [
+        event.fromCandidateId ? `from=${event.fromCandidateId}` : "",
+        event.toCandidateId ? `to=${event.toCandidateId}` : "",
+        `reason=${event.failureKind ?? "provider"}`
+      ].filter(Boolean).join("; ")
+    };
+  }
   if (event.type === "skill_loaded") return { label: "Skill loaded", content: event.skillId };
   if (event.type === "resource_loaded") return { label: "Skill resource", content: `${event.path} (${event.chars} chars)` };
   if (event.type === "tool_preflight") return { label: "Tool preflight", content: `${event.call.toolId}: input=${summarizeToolInput(event.call.input)}; ${event.ok ? "allowed" : event.errorCode ?? "rejected"}` };

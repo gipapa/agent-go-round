@@ -6,13 +6,19 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { parseTutorialScenario } from "../src/onboarding/catalogCore";
 import type { TutorialScenarioDefinition, TutorialStepDefinition } from "../src/onboarding/types";
 import {
+  assertRealTutorialGate,
+  assertRealTutorialScenariosSupported,
+  normalizeRealTutorialConfig,
+  parseRealTutorialSessionCount,
+  type RealTutorialConfig
+} from "../src/onboarding/realTutorialContract";
+import {
   TUTORIAL_TIME_TOOL_CODE,
   TUTORIAL_TIME_TOOL_DESCRIPTION,
   TUTORIAL_TIME_TOOL_NAME
 } from "../src/onboarding/tutorialBuiltInToolTemplate";
 import { TUTORIAL_PRIMARY_MODEL } from "../src/onboarding/runtime";
 import { AGENT_GO_ROUND_INDEXED_DB_TARGETS, AGENT_GO_ROUND_LOCAL_STORAGE_KEYS } from "../src/utils/resetAppStorage";
-import { normalizeCredentialUrl } from "../src/utils/credential";
 import { errorMessage } from "../src/utils/errors";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -32,31 +38,15 @@ const APP_URL = "http://127.0.0.1:5566/";
 const MCP_SSE_URL = "http://127.0.0.1:3334/mcp/sse";
 const MCP_RPC_URL = "http://127.0.0.1:3334/mcp/rpc";
 const AGENT_BROWSER_SESSION_PREFIX = `agr_real_tutorial_${Date.now()}`;
-const LOCALHOST_GROQ_ENDPOINT = "https://api.groq.com/openai/v1";
 const MODEL_COOLDOWN_MS = 12000;
+const DEFAULT_REAL_TUTORIAL_REPLY_TIMEOUT_MS = 10 * 60 * 1000;
 const TUTORIAL_PRIMARY_LB_NAME = "教學用Load Balancer 1";
 const TUTORIAL_SECONDARY_LB_NAME = "教學用Load Balancer 2";
 const execFile = promisify(execFileCallback);
 const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
 const REAL_TUTORIAL_PROMPT_OVERRIDE = process.env.REAL_TUTORIAL_PROMPT_OVERRIDE?.trim() || "";
-const REAL_TUTORIAL_SESSIONS = parseSessionCount(process.env.REAL_TUTORIAL_SESSIONS);
+const REAL_TUTORIAL_SESSIONS = parseRealTutorialSessionCount(process.env.REAL_TUTORIAL_SESSIONS);
 const REAL_TUTORIAL_GATE = process.env.REAL_TUTORIAL_GATE === "1";
-
-function parseSessionCount(value: string | undefined) {
-  if (!value?.trim()) return 1;
-  const count = Number(value);
-  if (!Number.isInteger(count) || count < 1 || count > 100) {
-    throw new Error("REAL_TUTORIAL_SESSIONS 必須是 1 到 100 之間的整數。");
-  }
-  return count;
-}
-
-type RealTutorialConfig = {
-  provider: string;
-  apiKeys: string[];
-  endpoint: string;
-  model: string;
-};
 
 type ManagedProcess = {
   name: string;
@@ -85,40 +75,15 @@ async function readRealTutorialConfig(): Promise<RealTutorialConfig> {
     }
     throw error;
   }
-  const parsed = JSON.parse(raw) as {
-    provider?: unknown;
-    apiKey?: unknown;
-    endpoint?: unknown;
-    model?: unknown;
-  };
-  const provider = String(parsed.provider ?? "").trim();
-  const apiKeys = Array.isArray(parsed.apiKey)
-    ? parsed.apiKey.map((entry) => String(entry ?? "").trim()).filter(Boolean)
-    : typeof parsed.apiKey === "string" && parsed.apiKey.trim()
-    ? [parsed.apiKey.trim()]
-    : [];
-  const endpoint = normalizeCredentialUrl(parsed.endpoint);
-  const model = String(parsed.model ?? "").trim();
-
-  if (!provider || apiKeys.length === 0 || !endpoint || !model) {
-    throw new Error(".tutorial-test.local.json 缺少必要欄位：provider / apiKey / endpoint / model");
-  }
-
-  if (normalizeCredentialUrl(endpoint) !== LOCALHOST_GROQ_ENDPOINT) {
-    throw new Error(`目前教學案例 1 走的是 Groq 路線，.tutorial-test.local.json 的 endpoint 必須是 ${LOCALHOST_GROQ_ENDPOINT}`);
-  }
-
-  if (provider !== "groq") {
-    throw new Error('目前教學案例 1 需要 provider 設定為 "groq"。');
-  }
-
-  return { provider, apiKeys, endpoint, model };
+  return normalizeRealTutorialConfig(JSON.parse(raw) as unknown);
 }
 
 async function loadScenarios(): Promise<TutorialScenarioDefinition[]> {
-  return Promise.all(
+  const scenarios = await Promise.all(
     TUTORIAL_FILES.map(async (file) => parseTutorialScenario(await fs.readFile(path.join(TUTORIAL_DIR, file), "utf8")))
   );
+  assertRealTutorialScenariosSupported(scenarios);
+  return scenarios;
 }
 
 function startManagedProcess(name: string, cwd: string, command: string) {
@@ -991,10 +956,14 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
     case "first_chat_skill_user_profile":
     case "first_chat_skill_references":
     case "first_chat_skill_asset_template":
+    case "first_chat_skill_chatgpt_open":
     case "first_chat_skill_chatgpt_ask":
     case "first_chat_mcp_browser_open":
     case "first_chat_mcp_browser_snapshot": {
-      const replyTimeout = 600000;
+      const replyTimeout = Math.max(
+        DEFAULT_REAL_TUTORIAL_REPLY_TIMEOUT_MS,
+        step.automation?.executionDeadlineMs ?? DEFAULT_REAL_TUTORIAL_REPLY_TIMEOUT_MS
+      );
       const toolSummaryTimeout = 180000;
       await clickByTutorialId("tab-chat");
       const prompt =
@@ -1156,9 +1125,7 @@ async function main() {
   realConfig = await readRealTutorialConfig();
   const scenarios = await loadScenarios();
 
-  if (REAL_TUTORIAL_GATE && (REAL_TUTORIAL_ONLY !== "chatgpt-browser-skill" || REAL_TUTORIAL_SESSIONS < 10)) {
-    throw new Error("REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=chatgpt-browser-skill 且 REAL_TUTORIAL_SESSIONS 至少為 10。");
-  }
+  assertRealTutorialGate({ enabled: REAL_TUTORIAL_GATE, only: REAL_TUTORIAL_ONLY, sessions: REAL_TUTORIAL_SESSIONS });
 
   let devProc: ManagedProcess | null = null;
   let mcpProc: ManagedProcess | null = null;

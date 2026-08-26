@@ -247,6 +247,9 @@ steps:
     actionLabel: 完成案例教學
     automation:
       clearChatOnEnter: true
+      # Browser workflows can legitimately spend several minutes across model
+      # turns and MCP calls. Keep this budget local to the long-running step.
+      executionDeadlineMs: 900000
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
       composerSeed: 幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要

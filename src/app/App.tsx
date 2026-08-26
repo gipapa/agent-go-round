@@ -76,7 +76,8 @@ import {
   TUTORIAL_TIME_TOOL_NAME,
   TUTORIAL_MCP_NAME,
   TUTORIAL_PRIMARY_MODEL,
-  TUTORIAL_SECONDARY_MODEL
+  TUTORIAL_SECONDARY_MODEL,
+  resolveTutorialExecutionDeadlineMs
 } from "../onboarding/runtime";
 import {
   TUTORIAL_CHATGPT_BROWSER_ASSET_CONTENT,
@@ -488,6 +489,7 @@ export default function App() {
     () => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl, description: userDescription.trim() }),
     [userName, userAvatarUrl, userDescription]
   );
+  const tutorialExecutionDeadlineMs = resolveTutorialExecutionDeadlineMs(currentTutorialStep, executionDeadlineMs);
   const mcpCountRef = React.useRef(mcpServers.length);
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
@@ -2098,7 +2100,7 @@ export default function App() {
       try {
         const result = await harnessController.startTask(async (context: AgentHarnessTaskContext) => {
           const deadline = createDeadline({
-            totalMs: executionDeadlineMs,
+            totalMs: tutorialExecutionDeadlineMs,
             externalSignal: context.signal,
             label: "chat execution"
           });

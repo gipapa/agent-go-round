@@ -41,7 +41,16 @@ export function projectPersistedHarnessRun(args: {
       if (event.type === "run_end") return { type: event.type, message: boundedActivityMessage(event.reason) };
       if (event.type === "late_result_dropped") return { type: event.type, message: boundedActivityMessage(event.kind) };
       if (event.type === "protocol_repair") return { type: event.type, message: "repair_requested" };
-      if (event.type === "transport_failover") return { type: event.type, message: "candidate_failover" };
+      if (event.type === "transport_failover") {
+        return {
+          type: event.type,
+          message: boundedActivityMessage([
+            event.fromCandidateId ? `from=${event.fromCandidateId}` : "",
+            event.toCandidateId ? `to=${event.toCandidateId}` : "",
+            `reason=${event.failureKind ?? "provider"}`
+          ].filter(Boolean).join(";"))
+        };
+      }
       if (event.type === "resource_loaded") return { type: event.type, message: boundedActivityMessage(event.path) };
       if (event.type === "skill_loaded") return { type: event.type, message: boundedActivityMessage(event.skillId) };
       if (event.type === "tool_preflight") return { type: event.type, message: boundedActivityMessage(event.errorCode ?? (event.ok ? "ok" : "rejected")) };

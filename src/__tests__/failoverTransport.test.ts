@@ -17,7 +17,7 @@ describe("harness transport failover", () => {
     });
     await expect(transport.runStep(context, new AbortController().signal)).resolves.toMatchObject({ status: "step", candidateId: "second" });
     expect(seen).toEqual(["first:1", "second:1"]);
-    expect(onFailover).toHaveBeenCalledWith("first", "second", "offline");
+    expect(onFailover).toHaveBeenCalledWith({ fromId: "first", toId: "second", kind: "network", message: "offline" });
   });
 
   it("does not fail over protocol errors", async () => {

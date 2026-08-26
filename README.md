@@ -116,6 +116,8 @@ Rollout gate 會在獨立的 agent-browser session 連續執行 primary native-t
 }
 ```
 
+目前 real tutorial runner 固定使用 `openai/gpt-oss-20b`；`model` 欄位需與此值一致。Browser workflow 的長流程步驟會使用 15 分鐘的專用 execution deadline，其他對話仍維持一般的 5 分鐘上限。
+
 ```bash
 REAL_TUTORIAL_GATE=1 \
 REAL_TUTORIAL_ONLY=chatgpt-browser-skill \

@@ -52,6 +52,8 @@ export type HarnessTransportResult =
     }
   | { status: "aborted"; message: string };
 
+export type HarnessTransportFailureKind = Extract<HarnessTransportResult, { status: "transport_error" }>["kind"] | "context";
+
 export type HarnessStopReason =
   | "final"
   | "aborted"
@@ -131,7 +133,13 @@ export type HarnessEvent =
   | { type: "run_start"; runId: string; generation: number }
   | { type: "model_step_start"; step: number }
   | { type: "model_step_end"; step: number; status: HarnessTransportResult["status"] }
-  | { type: "transport_failover"; message: string }
+  | {
+      type: "transport_failover";
+      message: string;
+      fromCandidateId?: string;
+      toCandidateId?: string;
+      failureKind?: HarnessTransportFailureKind;
+    }
   | { type: "tool_preflight"; call: HarnessToolCall; ok: boolean; errorCode?: string }
   | { type: "tool_dispatch"; call: HarnessToolCall }
   | { type: "tool_result"; call: HarnessToolCall; result: HarnessToolResult }

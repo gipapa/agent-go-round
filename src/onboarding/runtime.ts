@@ -48,6 +48,15 @@ export const TUTORIAL_PRIMARY_MODEL = "openai/gpt-oss-20b";
 export const TUTORIAL_SECONDARY_MODEL = "openai/gpt-oss-20b";
 export const TUTORIAL_AGENT_ROLE = "primary";
 
+export function resolveTutorialExecutionDeadlineMs(
+  step: TutorialStepDefinition | null | undefined,
+  fallbackMs: number
+) {
+  const configured = step?.automation?.executionDeadlineMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) return fallbackMs;
+  return Math.max(10_000, Math.min(30 * 60 * 1000, Math.round(configured)));
+}
+
 function isManagedMagiAgent(agent: AgentConfig) {
   return agent.managedBy === "magi" && !!agent.managedUnitId;
 }
@@ -166,7 +175,23 @@ function findTutorialAgentByPreset(state: TutorialRuntimeState, preset?: "tutori
 }
 
 function hasSkillTracePath(assistant: TutorialRuntimeState["history"][number] | null, path: string) {
-  return !!assistant?.skillTrace?.some((entry) => entry.content.includes(path));
+  return !!assistant?.skillTrace?.some((entry) => {
+    if (!entry.content.includes(path)) return false;
+
+    // Canonical harness tool traces include the typed outcome immediately
+    // after the tool id (for example: `browser_open: success; ...`). A
+    // failed/rejected tool must not satisfy a tutorial merely because its
+    // name appears in the trace. Older imported success traces may not include
+    // an outcome, so retain their path-matching behavior unless failure
+    // wording is present.
+    if (entry.label !== "Tool result") return true;
+    const outcome = entry.content.match(/:\s*(success|rejected|failed_before_dispatch|failed|outcome_unknown)(?:;|$)/)?.[1];
+    if (outcome !== undefined) return outcome === "success";
+    // Imported pre-canonical traces did not always carry a typed outcome.
+    // Still reject the common legacy failure wording instead of treating any
+    // trace containing a tool name as proof of successful execution.
+    return !/(?:\bfailed\b|\bfailure\b|\brejected\b|\berror\b|\bunknown\b|失敗|錯誤|拒絕|未知)/i.test(entry.content);
+  });
 }
 
 function hasSkillLoaded(
@@ -175,7 +200,7 @@ function hasSkillLoaded(
 ) {
   const values = identifiers.map((item) => item?.trim()).filter((item): item is string => !!item);
   return !!assistant?.skillTrace?.some(
-    (entry) => entry.label === "Skill load" && values.some((value) => entry.content.includes(value))
+    (entry) => (entry.label === "Skill load" || entry.label === "Skill loaded") && values.some((value) => entry.content.includes(value))
   );
 }
 

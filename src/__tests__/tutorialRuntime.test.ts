@@ -1,16 +1,28 @@
 // @vitest-environment node
 
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getTutorialScenario, tutorialCatalog } from "../onboarding/catalog";
+import { parseTutorialScenario } from "../onboarding/catalogCore";
 import {
   applyTutorialStepEntry,
   TUTORIAL_AGENT_ROLE,
   evaluateTutorialStep,
-  TUTORIAL_PRIMARY_MODEL
+  TUTORIAL_PRIMARY_MODEL,
+  resolveTutorialExecutionDeadlineMs
 } from "../onboarding/runtime";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../onboarding/types";
 import type { AgentConfig, ChatMessage, LoadBalancerConfig } from "../types";
 import type { ModelCredentialEntry } from "../storage/settingsStore";
+import {
+  assertRealTutorialGate,
+  assertRealTutorialScenariosSupported,
+  LOCALHOST_GROQ_ENDPOINT,
+  normalizeRealTutorialConfig,
+  parseRealTutorialSessionCount,
+  REAL_TUTORIAL_RUNNER_BEHAVIORS
+} from "../onboarding/realTutorialContract";
 
 function makeTutorialCredential(): ModelCredentialEntry {
   const now = Date.now();
@@ -336,7 +348,7 @@ describe("tutorial YAML automation linkage", () => {
     const assistant = makeAssistant("assistant-skill", "冷靜又有條理的回答", {
       skillTrace: [
         {
-          label: "Skill load",
+          label: "Skill loaded",
           content: "已載入 skill：sequential-thinking (sequential-thinking-tutorial-skill)"
         }
       ]
@@ -355,7 +367,21 @@ describe("tutorial YAML automation linkage", () => {
     const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
     expect(step.automation?.loadBalancerDelaySecond).toBe(10);
     expect(step.automation?.loadBalancerMaxRetries).toBe(10);
+    expect(step.automation?.executionDeadlineMs).toBe(900000);
     expect(step.automation?.composerSeed).toBe("幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
+  });
+
+  it("applies a configured tutorial deadline without changing the normal fallback", () => {
+    const browserStep = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+    const normalStep = getStep("first-agent-chat", "intro");
+    expect(resolveTutorialExecutionDeadlineMs(browserStep, 300000)).toBe(900000);
+    expect(resolveTutorialExecutionDeadlineMs(normalStep, 300000)).toBe(300000);
+    expect(
+      resolveTutorialExecutionDeadlineMs(
+        { ...normalStep, automation: { executionDeadlineMs: 1 } },
+        300000
+      )
+    ).toBe(10000);
   });
 
   it("uses activity trace and tool expectations for the browser workflow skill step", () => {
@@ -363,7 +389,7 @@ describe("tutorial YAML automation linkage", () => {
     const prompt = step.automation?.expect?.userPrompt ?? "";
     const assistant = makeAssistant("assistant-multi-turn", "已完成 GitHub repo README 摘要。", {
       skillTrace: [
-        { label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" },
+        { label: "Skill loaded", content: "已載入 skill：browser-workflow-multiturn" },
         { label: "Tool result", content: "MCP tool browser_open completed. [mcp:tutorial:browser_open] success" },
         { label: "Tool result", content: "MCP tool browser_snapshot completed. [mcp:tutorial:browser_snapshot] success" },
         { label: "Tool result", content: "MCP tool browser_click completed. [mcp:tutorial:browser_click] success" }
@@ -397,7 +423,7 @@ describe("tutorial YAML automation linkage", () => {
         "GitHub repo README"
       ].join("\n"),
       {
-        skillTrace: [{ label: "Skill load", content: "已載入 skill：browser-workflow-multiturn" }],
+        skillTrace: [{ label: "Skill loaded", content: "已載入 skill：browser-workflow-multiturn" }],
       }
     );
     const openTool = makeTool("MCP 教學用MCP -> browser_open");
@@ -406,6 +432,124 @@ describe("tutorial YAML automation linkage", () => {
     const result = evaluateTutorialStep(step, makeState({ history: [makeUser(prompt), openTool, snapshotTool, clickTool, assistant] }));
     expect(result.completed).toBe(false);
     expect(result.statusText).toContain("執行失敗");
+  });
+
+  it("does not accept a failed built-in tool trace as a successful step", () => {
+    const step = getStep("built-in-tools-chat", "chat-time-tool");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const result = evaluateTutorialStep(
+      step,
+      makeState({
+        history: [
+          makeUser(prompt),
+          makeAssistant("assistant-failed-builtin", "我目前無法打開時鐘。", {
+            skillTrace: [{ label: "Tool result", content: "教學用時鐘工具: failed; certainty=dispatched; error=tool_execution_failed" }]
+          })
+        ]
+      })
+    );
+    expect(result.completed).toBe(false);
+  });
+
+  it("does not accept a failed MCP tool trace as a successful step", () => {
+    const step = getStep("agent-browser-mcp-chat", "open_trending");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const result = evaluateTutorialStep(
+      step,
+      makeState({
+        history: [
+          makeUser(prompt),
+          makeAssistant("assistant-failed-mcp", "我目前無法開啟頁面。", {
+            skillTrace: [{ label: "Tool result", content: "mcp:tutorial:browser_open: failed_before_dispatch; certainty=not_dispatched; error=mcp_routing_failed" }]
+          })
+        ]
+      })
+    );
+    expect(result.completed).toBe(false);
+  });
+
+  it("does not accept a failed browser-skill tool trace as a completed workflow", () => {
+    const step = getStep("chatgpt-browser-skill", "run_chatgpt_flow");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const result = evaluateTutorialStep(
+      step,
+      makeState({
+        history: [
+          makeUser(prompt),
+          makeAssistant("assistant-failed-browser", "GitHub repo 摘要如下。", {
+            skillTrace: [
+              { label: "Skill loaded", content: "已載入 skill：browser-workflow-multiturn" },
+              { label: "Tool result", content: "mcp:tutorial:browser_open: success; certainty=dispatched" },
+              { label: "Tool result", content: "mcp:tutorial:browser_snapshot: success; certainty=dispatched" },
+              { label: "Tool result", content: "mcp:tutorial:browser_click: failed; certainty=dispatched; error=mcp_outcome_unknown" }
+            ]
+          })
+        ]
+      })
+    );
+    expect(result.completed).toBe(false);
+  });
+
+  it("keeps the real runner behavior contract in sync with every tutorial YAML", async () => {
+    const tutorialDir = path.resolve(import.meta.dirname, "../onboarding/tutorials");
+    const files = [
+      "first-agent-chat.yaml",
+      "docs-persona-chat.yaml",
+      "built-in-tools-chat.yaml",
+      "sequential-skill-chat.yaml",
+      "agent-browser-mcp-chat.yaml",
+      "chatgpt-browser-skill.yaml"
+    ];
+    const scenarios = await Promise.all(files.map(async (file) => parseTutorialScenario(await fs.readFile(path.join(tutorialDir, file), "utf8"))));
+    expect(() => assertRealTutorialScenariosSupported(scenarios)).not.toThrow();
+    expect(() => assertRealTutorialScenariosSupported([{
+      id: "future-scenario",
+      title: "",
+      description: "",
+      exitTitle: "",
+      exitBody: "",
+      steps: [{ id: "future-step", behavior: "future_behavior" as TutorialStepDefinition["behavior"] } as TutorialStepDefinition]
+    }])).toThrow("future-scenario/future-step");
+
+    const runnerSource = await fs.readFile(path.resolve(import.meta.dirname, "../../scripts/real-tutorial-runner.ts"), "utf8");
+    REAL_TUTORIAL_RUNNER_BEHAVIORS.forEach((behavior) => {
+      expect(runnerSource).toContain(`case "${behavior}"`);
+    });
+  });
+
+  it("validates the real tutorial provider config and fixed tutorial model", () => {
+    expect(normalizeRealTutorialConfig({
+      provider: "groq",
+      apiKey: ["key-1", "key-2"],
+      endpoint: `${LOCALHOST_GROQ_ENDPOINT}/`,
+      model: TUTORIAL_PRIMARY_MODEL
+    })).toEqual({
+      provider: "groq",
+      apiKeys: ["key-1", "key-2"],
+      endpoint: LOCALHOST_GROQ_ENDPOINT,
+      model: TUTORIAL_PRIMARY_MODEL
+    });
+    expect(() => normalizeRealTutorialConfig({ provider: "groq", apiKey: "key", endpoint: LOCALHOST_GROQ_ENDPOINT })).toThrow("model");
+    expect(() => normalizeRealTutorialConfig({
+      provider: "groq",
+      apiKey: "key",
+      endpoint: LOCALHOST_GROQ_ENDPOINT,
+      model: "another-model"
+    })).toThrow(TUTORIAL_PRIMARY_MODEL);
+  });
+
+  it("validates real tutorial session counts and rollout gate requirements", () => {
+    expect(parseRealTutorialSessionCount(undefined)).toBe(1);
+    expect(parseRealTutorialSessionCount("10")).toBe(10);
+    expect(parseRealTutorialSessionCount("100")).toBe(100);
+    expect(() => parseRealTutorialSessionCount("0")).toThrow("1 到 100");
+    expect(() => parseRealTutorialSessionCount("101")).toThrow("1 到 100");
+    expect(() => parseRealTutorialSessionCount("not-a-number")).toThrow("1 到 100");
+
+    expect(() => assertRealTutorialGate({ enabled: false, only: "", sessions: 1 })).not.toThrow();
+    expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 10 })).not.toThrow();
+    expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 9 })).toThrow("至少為 10");
+    expect(() => assertRealTutorialGate({ enabled: true, only: "built-in-tools-chat", sessions: 10 })).toThrow("chatgpt-browser-skill");
   });
 
 });

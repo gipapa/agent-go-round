@@ -238,7 +238,14 @@ export async function runHarnessOneToOne(args: HarnessOneToOneArgs): Promise<Har
       create: () => createCandidateTransport(candidate, candidateBudgets.get(candidate.id) ?? baseBudget),
       project: (source) => projectForBudget(source, candidateBudgets.get(candidate.id) ?? baseBudget)
     })),
-    onFailover: (fromId, toId, message) => emit({ type: "transport_failover", message: `${fromId} → ${toId}: ${message}` }),
+    onFailover: ({ fromId, toId, kind }) =>
+      emit({
+        type: "transport_failover",
+        fromCandidateId: fromId,
+        toCandidateId: toId,
+        failureKind: kind,
+        message: `reason=${kind}`
+      }),
     onContextProjected: (candidateId, context) => emit({
       type: "context_projected",
       candidateId,

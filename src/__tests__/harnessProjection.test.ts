@@ -53,6 +53,25 @@ describe("persisted harness projection", () => {
     ]);
   });
 
+  it("persists a safe failover reason without provider error text", () => {
+    const projection = projectPersistedHarnessRun({
+      result,
+      startedAt: Date.now(),
+      events: [{
+        type: "transport_failover",
+        fromCandidateId: "candidate-1",
+        toCandidateId: "candidate-2",
+        failureKind: "empty",
+        message: "provider body with secret=do-not-persist"
+      }]
+    });
+    expect(projection.activity).toEqual([{
+      type: "transport_failover",
+      message: "from=candidate-1;to=candidate-2;reason=empty"
+    }]);
+    expect(JSON.stringify(projection)).not.toContain("secret=");
+  });
+
   it("uses a finite default when the activity cap is malformed", () => {
     const projection = projectPersistedHarnessRun({
       result,

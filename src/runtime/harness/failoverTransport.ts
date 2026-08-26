@@ -1,4 +1,12 @@
-import type { ContextProjectionFailure, HarnessMessage, HarnessModelContext, HarnessTransport, HarnessTransportResult, HarnessToolDefinition } from "./types";
+import type {
+  ContextProjectionFailure,
+  HarnessMessage,
+  HarnessModelContext,
+  HarnessTransport,
+  HarnessTransportFailureKind,
+  HarnessTransportResult,
+  HarnessToolDefinition
+} from "./types";
 import { errorMessage } from "../../utils/errors";
 
 export type HarnessTransportCandidate = {
@@ -7,9 +15,16 @@ export type HarnessTransportCandidate = {
   project?: (source: { transcript: HarnessMessage[]; system?: string; tools: HarnessToolDefinition[] }) => HarnessModelContext | ContextProjectionFailure;
 };
 
+export type HarnessFailoverDiagnostic = {
+  fromId: string;
+  toId: string;
+  kind: HarnessTransportFailureKind;
+  message: string;
+};
+
 export function createFailoverTransport(args: {
   candidates: HarnessTransportCandidate[];
-  onFailover?: (fromId: string, toId: string, message: string) => void;
+  onFailover?: (diagnostic: HarnessFailoverDiagnostic) => void;
   onContextProjected?: (candidateId: string, context: HarnessModelContext) => void;
   onCandidateSuccess?: (candidateId: string) => void;
   onCandidateFailure?: (candidateId: string, message: string) => void;
@@ -46,7 +61,7 @@ export function createFailoverTransport(args: {
           if (index >= args.candidates.length - 1) return result;
           if (signal.aborted || !isCurrent()) return { status: "aborted", message: "Transport failover was aborted." };
           const next = args.candidates[index + 1];
-          args.onFailover?.(candidate.id, next.id, candidateContext.message);
+          args.onFailover?.({ fromId: candidate.id, toId: next.id, kind: "context", message: candidateContext.message });
           index += 1;
           current = null;
           continue;
@@ -68,7 +83,7 @@ export function createFailoverTransport(args: {
             }
             const next = args.candidates[index + 1];
             if (signal.aborted || !isCurrent()) return { status: "aborted", message: "Transport failover was aborted." };
-            args.onFailover?.(candidate.id, next.id, message);
+            args.onFailover?.({ fromId: candidate.id, toId: next.id, kind: "provider", message });
             index += 1;
             continue;
           }
@@ -95,7 +110,7 @@ export function createFailoverTransport(args: {
         args.onCandidateFailure?.(candidate.id, result.message);
         if (index >= args.candidates.length - 1) return result;
         const next = args.candidates[index + 1];
-        args.onFailover?.(candidate.id, next.id, result.message);
+        args.onFailover?.({ fromId: candidate.id, toId: next.id, kind: result.kind, message: result.message });
         index += 1;
         current = null;
       }

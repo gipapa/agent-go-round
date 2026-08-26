@@ -68,6 +68,8 @@ export type TutorialChatExpectation = {
 export type TutorialStepAutomation = {
   composerSeed?: string;
   clearChatOnEnter?: boolean;
+  /** Optional per-step budget for a long-running model/tool workflow. */
+  executionDeadlineMs?: number;
   loadBalancerDelaySecond?: number;
   loadBalancerMaxRetries?: number;
   activeAgentPreset?: "tutorial_agent" | "tutorial_agent_base";

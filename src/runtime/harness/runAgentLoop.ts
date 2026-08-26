@@ -307,6 +307,13 @@ function boundedEvent(event: HarnessEvent): HarnessEvent {
     case "model_step_end":
       return { ...event, step: Number.isFinite(event.step) ? Math.max(0, Math.floor(event.step)) : 0 };
     case "transport_failover":
+      return {
+        ...event,
+        message: boundedText(event.message, 2_000),
+        fromCandidateId: event.fromCandidateId === undefined ? undefined : boundedText(event.fromCandidateId, MAX_TOOL_ID_CHARS),
+        toCandidateId: event.toCandidateId === undefined ? undefined : boundedText(event.toCandidateId, MAX_TOOL_ID_CHARS),
+        failureKind: event.failureKind === undefined ? undefined : boundedText(event.failureKind, 80) as typeof event.failureKind
+      };
     case "protocol_repair":
       return { ...event, message: boundedText(event.message, 2_000) };
     case "run_end":

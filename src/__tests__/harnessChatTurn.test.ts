@@ -110,6 +110,54 @@ describe("harness chat turn adapter", () => {
     expect(traceText).toContain("internal:skill.load: success");
   });
 
+  it("records a safe typed reason when native transport fails over", async () => {
+    const first: AgentAdapter = {
+      async *chat() { yield { type: "done", text: "unused" }; },
+      async *nativeChat() {
+        yield { type: "error", kind: "empty", retryable: true, message: "provider body secret=do-not-persist" };
+      }
+    };
+    const second: AgentAdapter = {
+      async *chat() { yield { type: "done", text: "unused" }; },
+      async *nativeChat() {
+        yield { type: "text_delta", text: "recovered" };
+        yield { type: "done", finishReason: "stop" };
+      }
+    };
+    const manager = new McpClientManager();
+    managers.push(manager);
+    const patches: Array<{ id: string; patch: Partial<ChatMessage> }> = [];
+
+    const result = await runHarnessChatTurn({
+      requestId: "request-failover",
+      runId: "run-failover",
+      generation: 1,
+      assistantMessageId: "assistant-failover",
+      userInput: "hello",
+      agent: { id: "agent", name: "Agent", type: "openai_compat" },
+      adapter: first,
+      transportCandidates: [
+        { id: "candidate-first", agent: { id: "candidate-first", name: "First", type: "openai_compat" }, adapter: first, capability: "native" },
+        { id: "candidate-second", agent: { id: "candidate-second", name: "Second", type: "openai_compat" }, adapter: second, capability: "native" }
+      ],
+      docs: [],
+      skills: [],
+      builtInTools: [],
+      mcpServers: [],
+      mcpTools: [],
+      mcpClientManager: manager,
+      patchMessage: (id, patch) => patches.push({ id, patch })
+    });
+
+    expect(result).toMatchObject({ status: "success", displayContent: "recovered" });
+    const traceText = patches.at(-1)?.patch.skillTrace?.map((entry) => entry.content).join("\n") ?? "";
+    expect(traceText).toContain("from=candidate-first; to=candidate-second; reason=empty");
+    expect(traceText).not.toContain("secret=");
+    expect(patches.at(-1)?.patch.harnessRun?.activity).toEqual(expect.arrayContaining([
+      { type: "transport_failover", message: "from=candidate-first;to=candidate-second;reason=empty" }
+    ]));
+  });
+
   it("marks an abort during skill package loading as degraded instead of failure", async () => {
     const controller = new AbortController();
     const adapter: AgentAdapter = {
