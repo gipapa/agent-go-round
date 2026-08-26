@@ -1,4 +1,4 @@
-import { AgentAdapter, ChatEvent, ChatRequest } from "./base";
+import { AgentAdapter, ChatEvent, ChatRequest, NativeChatEvent, NativeChatRequest, normalizeRetryConfig } from "./base";
 import { DetectResult, ChatMessage } from "../types";
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
@@ -6,18 +6,31 @@ import {
   getAbortSignalMessage,
   getErrorMessage,
   getRetryAfterDelayMs,
+  readResponseTextWithLimit,
   sleepWithAbort
 } from "../utils/fetchWithTimeout";
 import { errorMessage } from "../utils/errors";
 
 type OpenAIMessage = { role: Exclude<ChatMessage["role"], "tool">; content: string };
+const MAX_DETECTION_RESPONSE_CHARS = 64 * 1024;
+const DEFAULT_MAX_RESPONSE_CHARS = 64_000;
+const DEFAULT_MAX_TOKENS = 4_096;
+const GPT_OSS_MAX_TOKENS = 1_024;
+
+function normalizeMaxResponseChars(value: number | undefined) {
+  return Number.isFinite(value) && (value as number) >= 0
+    ? Math.min(1_000_000, Math.floor(value as number))
+    : DEFAULT_MAX_RESPONSE_CHARS;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 async function readJson(response: Response): Promise<unknown> {
-  return (await response.json()) as unknown;
+  const bounded = await readResponseTextWithLimit(response, MAX_DETECTION_RESPONSE_CHARS);
+  if (bounded.exceeded) throw new Error(`Provider discovery response exceeded ${MAX_DETECTION_RESPONSE_CHARS} chars`);
+  return JSON.parse(bounded.text) as unknown;
 }
 
 function firstChoice(value: unknown): Record<string, unknown> | null {
@@ -29,6 +42,18 @@ function choiceMessageContent(choice: Record<string, unknown> | null): string {
   const message = asRecord(choice?.message);
   if (typeof message?.content === "string") return message.content;
   return typeof choice?.text === "string" ? choice.text : "";
+}
+
+function httpError(status: number, text: string): ChatEvent {
+  const kind = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "auth" : "http";
+  const retryable = status === 429 || status >= 500;
+  return { type: "error", kind, retryable, message: `HTTP ${status}${text ? `\n${text}` : ""}` };
+}
+
+function nativeHttpError(status: number, text: string): NativeChatEvent {
+  const kind = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "auth" : "http";
+  const retryable = status === 429 || status >= 500;
+  return { type: "error", kind, retryable, message: `HTTP ${status}${text ? `\n${text}` : ""}` };
 }
 
 function toOpenAIMessage(m: ChatMessage) {
@@ -61,9 +86,12 @@ export const OpenAICompatAdapter: AgentAdapter = {
   async *chat(req: ChatRequest): AsyncGenerator<ChatEvent> {
     const endpoint = (req.agent.endpoint ?? "").replace(/\/$/, "");
     const url = endpoint + "/chat/completions";
-    const retryDelaySec = Math.max(0, req.retry?.delaySec ?? 0);
-    const retryMax = Math.max(0, req.retry?.max ?? 0);
+    const retry = normalizeRetryConfig(req.retry);
+    const retryDelaySec = retry?.delaySec ?? 0;
+    const retryMax = retry?.max ?? 0;
     const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    const maxResponseChars = normalizeMaxResponseChars(req.maxModelResponseChars);
+    const maxResponseBodyChars = maxResponseChars + 65_536;
 
     const messages: OpenAIMessage[] = [];
     if (req.system?.trim()) messages.push({ role: "system", content: req.system.trim() });
@@ -100,7 +128,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
         );
       } catch (e) {
         if (req.signal?.aborted) {
-          yield { type: "done", text: `Request failed: ${getAbortSignalMessage(req.signal)}` };
+          yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
           return;
         }
         if (attempt < retryMax) {
@@ -108,54 +136,64 @@ export const OpenAICompatAdapter: AgentAdapter = {
           try {
             await waitBeforeRetry(retryDelaySec * 1000);
           } catch (waitError) {
-            yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+            if (req.signal?.aborted) yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+            else yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(waitError) };
             return;
           }
           continue;
         }
-        yield { type: "done", text: `Request failed: ${getErrorMessage(e)}` };
+        yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(e) };
         return;
       }
 
       if (res.ok && res.body) break;
 
-      const text = await res.text().catch(() => "");
+      const text = (await readResponseTextWithLimit(res, 8_192).catch(() => ({ text: "", exceeded: false }))).text;
       if (res.status === 429 && attempt < retryMax) {
         const delayMs = getRetryAfterDelayMs(res.headers, retryDelaySec * 1000);
         req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${Math.round(delayMs / 1000)}s`);
         try {
           await waitBeforeRetry(delayMs);
         } catch (waitError) {
-          yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+          if (req.signal?.aborted) yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+          else yield { type: "error", kind: "rate_limit", retryable: true, message: getErrorMessage(waitError) };
           return;
         }
         continue;
       }
-      yield { type: "done", text: `Request failed: HTTP ${res.status}\n${text}` };
+      yield httpError(res.status, text);
       return;
     }
 
     if (!res) {
-      yield { type: "done", text: "Request failed: No response" };
+      yield { type: "error", kind: "network", retryable: true, message: "No response" };
       return;
     }
 
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType.includes("text/event-stream")) {
+      const bounded = await readResponseTextWithLimit(res, maxResponseBodyChars);
+      if (bounded.exceeded) {
+        yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+        return;
+      }
       try {
-        const json = await readJson(res);
+        const json = JSON.parse(bounded.text) as unknown;
         const text = choiceMessageContent(firstChoice(json));
+        if (text.length > maxResponseChars) {
+          yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+          return;
+        }
         yield { type: "done", text };
         return;
       } catch {
-        const text = await res.text().catch(() => "");
-        yield { type: "done", text };
+        yield { type: "error", kind: "provider", retryable: false, message: "Provider returned an invalid OpenAI-compatible JSON response." };
         return;
       }
     }
 
     if (!res.body) {
-      yield { type: "done", text: "Request failed: empty response body" };
+      yield { type: "error", kind: "empty", retryable: true, message: "Empty response body" };
       return;
     }
 
@@ -163,18 +201,26 @@ export const OpenAICompatAdapter: AgentAdapter = {
     const decoder = new TextDecoder("utf-8");
     let buf = "";
     let full = "";
+    let wireChars = 0;
 
     try {
       while (true) {
         if (req.signal?.aborted) {
           await reader.cancel().catch(() => {});
-          yield { type: "done", text: full || `Request failed: ${getAbortSignalMessage(req.signal)}` };
+          yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
           return;
         }
 
         const { value, done } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
+        const chunk = decoder.decode(value, { stream: true });
+        wireChars += chunk.length;
+        if (wireChars > maxResponseBodyChars) {
+          await reader.cancel().catch(() => {});
+          yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+          return;
+        }
+        buf += chunk;
 
         const lines = buf.split("\n");
         buf = lines.pop() ?? "";
@@ -186,36 +232,271 @@ export const OpenAICompatAdapter: AgentAdapter = {
             yield { type: "done", text: full };
             return;
           }
+          let j: unknown;
           try {
-            const j = JSON.parse(data) as unknown;
-            const choice = firstChoice(j);
-            const deltaRecord = asRecord(choice?.delta);
-            const delta = typeof deltaRecord?.content === "string" ? deltaRecord.content : "";
-            const msgContent = choiceMessageContent(choice);
-            if (delta) {
-              full += delta;
-              yield { type: "delta", text: delta };
-              continue;
-            }
-            if (msgContent) {
-              const nextText = msgContent.startsWith(full) ? msgContent.slice(full.length) : msgContent;
-              full = msgContent;
-              if (nextText) yield { type: "delta", text: nextText };
-            }
+            j = JSON.parse(data) as unknown;
           } catch {
-            // ignore malformed chunks
+            await reader.cancel().catch(() => {});
+            yield { type: "error", kind: "provider", retryable: false, message: "Provider returned a malformed OpenAI-compatible SSE chunk." };
+            return;
+          }
+          const choice = firstChoice(j);
+          const deltaRecord = asRecord(choice?.delta);
+          const delta = typeof deltaRecord?.content === "string" ? deltaRecord.content : "";
+          const msgContent = choiceMessageContent(choice);
+          if (delta) {
+            full += delta;
+            if (full.length > maxResponseChars) {
+              await reader.cancel().catch(() => {});
+              yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+              return;
+            }
+            yield { type: "delta", text: delta };
+            continue;
+          }
+          if (msgContent) {
+            const nextText = msgContent.startsWith(full) ? msgContent.slice(full.length) : msgContent;
+            full = msgContent;
+            if (full.length > maxResponseChars) {
+              await reader.cancel().catch(() => {});
+              yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+              return;
+            }
+            if (nextText) yield { type: "delta", text: nextText };
           }
         }
       }
     } catch (error) {
       if (req.signal?.aborted) {
-        yield { type: "done", text: full || `Request failed: ${getAbortSignalMessage(req.signal)}` };
+        yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
         return;
       }
-      yield { type: "done", text: `Request failed: ${getErrorMessage(error)}` };
+      yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(error) };
       return;
     }
 
     yield { type: "done", text: full };
+  },
+
+  async *nativeChat(req: NativeChatRequest): AsyncGenerator<NativeChatEvent> {
+    const endpoint = (req.agent.endpoint ?? "").replace(/\/$/, "");
+    const url = endpoint + "/chat/completions";
+    const retry = normalizeRetryConfig(req.retry);
+    const retryDelaySec = retry?.delaySec ?? 0;
+    const retryMax = retry?.max ?? 0;
+    const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    const maxResponseChars = normalizeMaxResponseChars(req.maxModelResponseChars);
+    const model = req.agent.model ?? "gpt-4o-mini";
+    const isGptOss = /^openai\/gpt-oss-(?:20b|120b)$/.test(model);
+    let res: Response | null = null;
+
+    const waitBeforeRetry = async (delayMs: number) => {
+      if (delayMs > 0) await sleepWithAbort(delayMs, req.signal);
+    };
+
+    for (let attempt = 0; attempt <= retryMax; attempt += 1) {
+      try {
+        res = await fetchWithTimeout(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(req.agent.apiKey ? { Authorization: `Bearer ${req.agent.apiKey}` } : {}),
+            ...(req.agent.headers ?? {})
+          },
+          body: JSON.stringify({
+            model,
+            stream: true,
+            messages: req.messages,
+            tools: req.tools,
+            tool_choice: "auto",
+            max_tokens: isGptOss ? GPT_OSS_MAX_TOKENS : DEFAULT_MAX_TOKENS,
+            ...(isGptOss ? { reasoning_effort: "low" } : {})
+          })
+        }, { signal: req.signal, timeoutMs });
+      } catch (error) {
+        if (req.signal?.aborted) {
+          yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+          return;
+        }
+        if (attempt < retryMax) {
+          req.onLog?.(`[retry] native network error, attempt ${attempt + 1}/${retryMax}, waiting ${retryDelaySec}s`);
+          try {
+            await waitBeforeRetry(retryDelaySec * 1000);
+          } catch (waitError) {
+            yield req.signal?.aborted
+              ? { type: "aborted", message: getAbortSignalMessage(req.signal) }
+              : { type: "error", kind: "network", retryable: true, message: getErrorMessage(waitError) };
+            return;
+          }
+          continue;
+        }
+        yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(error) };
+        return;
+      }
+
+      if (res.ok && res.body) break;
+      const text = (await readResponseTextWithLimit(res, 8_192).catch(() => ({ text: "", exceeded: false }))).text;
+      if (res.status === 429 && attempt < retryMax) {
+        try {
+          await waitBeforeRetry(getRetryAfterDelayMs(res.headers, retryDelaySec * 1000));
+        } catch (waitError) {
+          yield req.signal?.aborted
+            ? { type: "aborted", message: getAbortSignalMessage(req.signal) }
+            : { type: "error", kind: "rate_limit", retryable: true, message: getErrorMessage(waitError) };
+          return;
+        }
+        continue;
+      }
+      yield nativeHttpError(res.status, text);
+      return;
+    }
+
+    if (!res) {
+      yield { type: "error", kind: "network", retryable: true, message: "No response" };
+      return;
+    }
+    if (!res.body) {
+      yield { type: "error", kind: "empty", retryable: true, message: "Empty response body" };
+      return;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/event-stream")) {
+      const bounded = await readResponseTextWithLimit(res, maxResponseChars + 65_536);
+      if (bounded.exceeded) {
+        yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
+        return;
+      }
+      try {
+        const json = JSON.parse(bounded.text) as unknown;
+        const choice = firstChoice(json);
+        const message = asRecord(choice?.message);
+        const content = typeof message?.content === "string" ? message.content : "";
+        let responseChars = content.length;
+        if (responseChars > maxResponseChars) {
+          yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
+          return;
+        }
+        if (content) yield { type: "text_delta", text: content };
+        const calls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+        for (const [index, entry] of calls.entries()) {
+          const call = asRecord(entry);
+          const fn = asRecord(call?.function);
+          const argumentsText = typeof fn?.arguments === "string" ? fn.arguments : "";
+          responseChars += argumentsText.length;
+          if (responseChars > maxResponseChars) {
+            yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
+            return;
+          }
+          yield {
+            type: "tool_call_delta",
+            call: {
+              index,
+              id: typeof call?.id === "string" ? call.id : undefined,
+              name: typeof fn?.name === "string" ? fn.name : undefined,
+              arguments: argumentsText
+            }
+          };
+        }
+        const finishReason = typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined;
+        yield { type: "done", finishReason };
+        return;
+      } catch (error) {
+        yield { type: "error", kind: "provider", retryable: false, message: getErrorMessage(error) };
+        return;
+      }
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let responseChars = 0;
+    let wireChars = 0;
+    try {
+      while (true) {
+        if (req.signal?.aborted) {
+          await reader.cancel().catch(() => {});
+          yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+          return;
+        }
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        wireChars += chunk.length;
+        if (wireChars > maxResponseChars + 65_536) {
+          await reader.cancel().catch(() => {});
+          yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
+          return;
+        }
+        buffer += chunk;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === "[DONE]") {
+            yield { type: "done" };
+            return;
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(data) as unknown;
+          } catch {
+            await reader.cancel().catch(() => {});
+            yield { type: "error", kind: "provider", retryable: false, message: "Provider returned a malformed OpenAI-compatible native SSE chunk." };
+            return;
+          }
+          const choice = firstChoice(parsed);
+          const delta = asRecord(choice?.delta);
+          const text = typeof delta?.content === "string" ? delta.content : "";
+          if (text) {
+            responseChars += text.length;
+            if (responseChars > maxResponseChars) {
+              await reader.cancel().catch(() => {});
+              yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
+              return;
+            }
+            yield { type: "text_delta", text };
+          }
+          const calls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : [];
+          for (const entry of calls) {
+            const call = asRecord(entry);
+            const fn = asRecord(call?.function);
+            const index = typeof call?.index === "number" ? call.index : Number.NaN;
+            if (!Number.isInteger(index) || index < 0) {
+              await reader.cancel().catch(() => {});
+              yield { type: "error", kind: "provider", retryable: false, message: "Provider returned a native tool call without a valid index." };
+              return;
+            }
+            const argumentsText = typeof fn?.arguments === "string" ? fn.arguments : "";
+            responseChars += argumentsText.length;
+            if (responseChars > maxResponseChars) {
+              await reader.cancel().catch(() => {});
+              yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
+              return;
+            }
+            yield {
+              type: "tool_call_delta",
+              call: {
+                index,
+                id: typeof call?.id === "string" ? call.id : undefined,
+                name: typeof fn?.name === "string" ? fn.name : undefined,
+                arguments: argumentsText
+              }
+            };
+          }
+          if (typeof choice?.finish_reason === "string") {
+            yield { type: "done", finishReason: choice.finish_reason };
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      if (req.signal?.aborted) yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+      else yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(error) };
+      return;
+    }
+    yield { type: "done" };
   }
 };

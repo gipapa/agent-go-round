@@ -23,6 +23,7 @@ export default function McpPanel(props: {
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
   const [serverDraft, setServerDraft] = useState<McpServerConfig | null>(null);
   const [customHeadersDraft, setCustomHeadersDraft] = useState("{}");
+  const [toolPoliciesDraft, setToolPoliciesDraft] = useState("{}");
   const [draftTools, setDraftTools] = useState<McpTool[]>([]);
   const [draftValidated, setDraftValidated] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -88,6 +89,7 @@ export default function McpPanel(props: {
       setEditingServerId(server.id);
       setServerDraft({ ...server });
       setCustomHeadersDraft(JSON.stringify(server.customHeaders ?? {}, null, 2));
+      setToolPoliciesDraft(JSON.stringify(server.toolPolicies ?? {}, null, 2));
       setDraftTools(props.toolsByServer[server.id] ?? []);
       setDraftValidated(Object.prototype.hasOwnProperty.call(props.toolsByServer, server.id));
     } else {
@@ -102,6 +104,7 @@ export default function McpPanel(props: {
       setEditingServerId(next.id);
       setServerDraft(next);
       setCustomHeadersDraft("{}");
+      setToolPoliciesDraft("{}");
       setDraftTools([]);
       setDraftValidated(false);
     }
@@ -115,6 +118,7 @@ export default function McpPanel(props: {
     setEditingServerId(null);
     setServerDraft(null);
     setCustomHeadersDraft("{}");
+    setToolPoliciesDraft("{}");
     setDraftTools([]);
     setDraftValidated(false);
     setDraftError(null);
@@ -180,7 +184,43 @@ export default function McpPanel(props: {
 
   function getValidatedDraft() {
     if (!serverDraft) throw new Error("Missing MCP server draft.");
-    return { ...serverDraft, customHeaders: parseCustomHeaders() };
+    return { ...serverDraft, customHeaders: parseCustomHeaders(), toolPolicies: parseToolPolicies() };
+  }
+
+  function parseToolPolicies(): McpServerConfig["toolPolicies"] {
+    if (toolPoliciesDraft.length > 32_000) throw new Error("Tool policy overrides JSON 不能超過 32,000 字元。");
+    const parsed: unknown = JSON.parse(toolPoliciesDraft || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Tool policy overrides 必須是 JSON object。");
+    }
+    const policies: NonNullable<McpServerConfig["toolPolicies"]> = {};
+    for (const [tool, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!tool.trim() || tool.length > 256 || !value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`Tool policy ${tool || "(empty)"} 格式無效。`);
+      }
+      const input = value as Record<string, unknown>;
+      const policy: NonNullable<McpServerConfig["toolPolicies"]>[string] = {};
+      if (input.intent !== undefined) {
+        if (input.intent !== "observe" && input.intent !== "mutate" && input.intent !== "control" && input.intent !== "context") throw new Error(`Tool policy ${tool} 的 intent 無效。`);
+        policy.intent = input.intent;
+      }
+      if (input.idempotency !== undefined) {
+        if (input.idempotency !== "idempotent" && input.idempotency !== "non_idempotent" && input.idempotency !== "unknown") throw new Error(`Tool policy ${tool} 的 idempotency 無效。`);
+        policy.idempotency = input.idempotency;
+      }
+      if (input.cancellation !== undefined) {
+        if (input.cancellation !== "terminable" && input.cancellation !== "cooperative" && input.cancellation !== "none") throw new Error(`Tool policy ${tool} 的 cancellation 無效。`);
+        policy.cancellation = input.cancellation;
+      }
+      if (input.requireConfirmation !== undefined) {
+        if (typeof input.requireConfirmation !== "boolean") throw new Error(`Tool policy ${tool} 的 requireConfirmation 必須是 boolean。`);
+        policy.requireConfirmation = input.requireConfirmation;
+      }
+      if (!Object.keys(policy).length) throw new Error(`Tool policy ${tool} 不可為空。`);
+      policies[tool] = policy;
+      if (Object.keys(policies).length > 200) throw new Error("Tool policy overrides 最多 200 個 tools。");
+    }
+    return Object.keys(policies).length ? policies : undefined;
   }
 
   function applyTavilyPreset() {
@@ -318,7 +358,7 @@ export default function McpPanel(props: {
             MCP 工具從 `Active MCP servers` 連入。Remote MCP 請選 Streamable HTTP；舊式本機 server 可繼續使用 SSE，系統會把 `/sse` 換成 `/rpc`。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
-            Tool / skill 相關的 prompt templates 已移到 Chat Config 裡的 `Prompt Templates` 面板集中管理，不再放在 MCP 視窗內單獨設定。
+            Tool / skill 的 action protocol 由 canonical harness 管理，不在 MCP 視窗內另設 prompt。
           </div>
           <div style={{ ...helpText, marginTop: 8 }}>
             補充：
@@ -497,6 +537,21 @@ export default function McpPanel(props: {
                   onChange={(e) => updateDraft({ heartbeatSecond: Math.max(0, Number(e.target.value) || 0) })}
                   style={inp}
                 />
+              </div>
+            </div>
+
+            <div>
+              <label style={label}>Tool policy overrides (JSON)</label>
+              <textarea
+                value={toolPoliciesDraft}
+                onChange={(e) => setToolPoliciesDraft(e.target.value)}
+                rows={5}
+                style={inp}
+                spellCheck={false}
+                placeholder={'{"browser_click":{"intent":"control","requireConfirmation":true}}'}
+              />
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                可針對 tools 覆寫 intent、idempotency、cancellation 與 requireConfirmation；未覆寫時採 MCP annotation，缺少可信 annotation 則保守要求確認。
               </div>
             </div>
 

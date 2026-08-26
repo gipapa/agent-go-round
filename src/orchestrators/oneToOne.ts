@@ -1,5 +1,5 @@
 import { AgentConfig, ChatMessage } from "../types";
-import { AgentAdapter, RetryConfig } from "../adapters/base";
+import { AgentAdapter, AgentTransportError, RetryConfig } from "../adapters/base";
 import type { ExecutionDeadline } from "../utils/deadline";
 import { combineSignals } from "../utils/deadline";
 
@@ -34,8 +34,12 @@ export async function runOneToOne(args: {
     if (ev.type === "delta") {
       full += ev.text;
       args.onDelta(ev.text);
-    } else {
+    } else if (ev.type === "done") {
       full = ev.text;
+    } else if (ev.type === "aborted") {
+      throw new AgentTransportError("network", ev.message, false);
+    } else {
+      throw new AgentTransportError(ev.kind, ev.message, ev.retryable);
     }
   }
   return full;

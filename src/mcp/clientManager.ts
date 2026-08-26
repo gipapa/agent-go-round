@@ -1,5 +1,6 @@
 import { McpServerConfig } from "../types";
 import { createMcpClient, type McpClient } from "./client";
+import { MAX_RUNTIME_TIMEOUT_MS } from "../utils/deadline";
 
 export type McpClientLike = McpClient;
 
@@ -36,7 +37,9 @@ export class McpClientManager {
   private createClient: (server: McpServerConfig) => McpClientLike;
 
   constructor(options: McpClientManagerOptions = {}) {
-    this.idleMs = options.idleMs ?? 60_000;
+    this.idleMs = Number.isFinite(options.idleMs)
+      ? Math.min(MAX_RUNTIME_TIMEOUT_MS, Math.max(0, Math.round(options.idleMs as number)))
+      : 60_000;
     this.createClient = options.createClient ?? createMcpClient;
   }
 
@@ -54,7 +57,16 @@ export class McpClientManager {
     }
 
     this.clearIdleTimer(server.id);
-    entry.client.connect(onLog);
+    try {
+      entry.client.connect(onLog);
+    } catch (error) {
+      // Do not retain a client that failed during setup: the next attempt
+      // must be able to construct a fresh transport.
+      if (this.clients.get(server.id)?.client === entry.client) {
+        this.closeClient(server.id);
+      }
+      throw error;
+    }
     this.scheduleIdleClose(server.id);
     return entry.client;
   }
@@ -69,7 +81,7 @@ export class McpClientManager {
     try {
       return await task(client);
     } finally {
-      this.scheduleIdleClose(server.id);
+      if (this.clients.get(server.id)?.client === client) this.scheduleIdleClose(server.id);
     }
   }
 
@@ -111,7 +123,11 @@ export class McpClientManager {
     this.clearIdleTimer(serverId);
     const entry = this.clients.get(serverId);
     if (entry) {
-      entry.client.close();
+      try {
+        entry.client.close();
+      } catch {
+        // Cleanup must not hide the original setup or execution failure.
+      }
       this.clients.delete(serverId);
     }
   }

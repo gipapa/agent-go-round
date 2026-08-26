@@ -5,6 +5,7 @@ AgentGoRound 是一個 browser-first、frontend-only 的 agent workflow playgrou
 - [產品介紹](https://gipapa.github.io/agent-go-round/intro/) | [PPTX](./public/intro/agent-go-round.pptx)
 - [Graphify WIKI](https://gipapa.github.io/agent-go-round/graphify/wiki/index.html) | [互動圖譜](https://gipapa.github.io/agent-go-round/graphify/graph.html) | [純文字報告](https://gipapa.github.io/agent-go-round/graphify/GRAPH_REPORT.md)
 - [2026-07 App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)
+- [2026-08 Pi Agent Harness 大改完成紀錄](./docs/pi-agent-skill-integration-2026-08.md)
 
 ## 核心能力
 
@@ -19,8 +20,8 @@ AgentGoRound 是一個 browser-first、frontend-only 的 agent workflow playgrou
 
 - Docs 可注入 agent prompt context
 - Built-in tools 可執行瀏覽器端 JavaScript，並支援確認與 timeout
-- Skills 使用 `SKILL.md + references/ + assets/` 結構，支援 single-turn 與 multi-turn runtime
-- Prompt Templates 可在 UI 中編輯、驗證格式並呼叫真實 API 測試
+- Skills 使用 `SKILL.md + references/ + assets/` 結構，透過同一個 canonical action loop 逐步載入 instructions 與 resources
+- Canonical Pi loop 會以 typed action protocol、bounded context、headless effects 與 activity trace 管理 tool / skill 執行
 
 ### Remote MCP
 
@@ -60,11 +61,11 @@ src/storage/      localStorage / IndexedDB stores 與 migrations
 src/schemas/      模型結構化輸出的 Zod schemas
 ```
 
-`App.tsx` 仍負責跨越多個 domain 的送訊息、multi-turn skill 與 tutorial transition orchestration；domain state、可獨立測試的 runtime 與 UI panels 已逐步移出。詳細邊界與兩次重構內容請見 [App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)。
+`App.tsx` 仍負責跨越多個 domain 的送訊息、canonical harness wiring 與 tutorial transition orchestration；domain state、可獨立測試的 runtime 與 UI panels 已逐步移出。詳細邊界請見 [App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)，本次 Pi-style harness 的實作結果請見 [大改完成紀錄](./docs/pi-agent-skill-integration-2026-08.md)。
 
 ## 資料儲存
 
-- `localStorage`：agents、credentials、prompt templates 與部分 UI state
+- `localStorage`：agents、credentials 與部分 UI state
 - `IndexedDB`：docs、chat history、skills 與 skill assets
 
 資料預設只存在目前瀏覽器。清除網站資料、換裝置或換瀏覽器 profile 都可能看不到原本內容；重要資料應先使用各 panel 的匯出功能備份。
@@ -102,6 +103,28 @@ npm run test:real_tutorial
 REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
 ```
 
+Rollout gate 會在獨立的 agent-browser session 連續執行 primary native-tool 案例；需要本機 provider 設定與可用網路：
+
+先在 repository root 建立未納入版本控制的 `.tutorial-test.local.json`（不要把真實 token 寫進 repository）：
+
+```json
+{
+  "provider": "groq",
+  "apiKey": ["<groq-key-1>", "<groq-key-2>"],
+  "endpoint": "https://api.groq.com/openai/v1",
+  "model": "openai/gpt-oss-20b"
+}
+```
+
+```bash
+REAL_TUTORIAL_GATE=1 \
+REAL_TUTORIAL_ONLY=chatgpt-browser-skill \
+REAL_TUTORIAL_SESSIONS=10 \
+npm run test:real_tutorial
+```
+
+`REAL_TUTORIAL_SESSIONS=N` 也可用來重複其他 non-destructive tutorial 或 text-protocol conformance（例如 N=3）。Real tutorial 需要可用的 provider quota；通過單次 smoke test 不等於完成 plan 所要求的 10-session rollout gate。
+
 ## MCP 測試伺服器
 
 ```bash
@@ -121,7 +144,8 @@ bash run.sh -uninstall
 ## 文件
 
 - [App runtime 重構紀錄](./docs/app-runtime-refactor-2026-07.md)
-- [Pi Agent skill 整合規劃](./docs/pi-agent-skill-integration-plan.md)
+- [Pi Agent Harness 大改完成紀錄](./docs/pi-agent-skill-integration-2026-08.md)
+- [Pi Agent skill 整合規劃（設計基準）](./docs/pi-agent-skill-integration-plan.md)
 - [Agentic workflow notes](./agentic.md)
 - [Coding agent / contributor guide](./AGENTS.md)
 - [Open issue batches](./issue/)
@@ -134,7 +158,7 @@ bash run.sh -uninstall
 
 - Provider credentials 由瀏覽器端管理
 - Custom built-in tools 會以同 origin 權限執行 JavaScript
-- Docs、skills、prompt templates 與部分設定保存在使用者本機
+- Docs、skills 與部分設定保存在使用者本機
 - 未開放 CORS 的 remote MCP 需要 server-side gateway
 - 靜態前端不應內嵌共享 API token
 

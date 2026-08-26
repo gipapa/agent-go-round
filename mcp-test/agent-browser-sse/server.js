@@ -7,7 +7,10 @@ const path = require("node:path");
 const app = express();
 const PORT = Number(process.env.PORT || 3334);
 const HOST = "0.0.0.0";
-const DEFAULT_SESSION = process.env.AGENT_BROWSER_SESSION || "agr_agent_browser";
+// Keep the default short enough for macOS Unix socket path limits. The server
+// is launched from a nested workspace path, so the agent-browser CLI can fail
+// before opening a browser when this session name is too long.
+const DEFAULT_SESSION = process.env.AGENT_BROWSER_SESSION || "agr_browser";
 const AGENT_BROWSER_BIN =
   process.env.AGENT_BROWSER_BIN ||
   path.join(__dirname, "node_modules", ".bin", process.platform === "win32" ? "agent-browser.cmd" : "agent-browser");
@@ -33,7 +36,8 @@ const tools = [
   },
   {
     name: "browser_snapshot",
-    description: "Capture an accessibility snapshot with @e* element refs.",
+    description: "Capture an accessibility snapshot with @e* element refs. Use the exact ref from this latest snapshot for the next browser action; repository links are the links nested under each repository heading.",
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -43,7 +47,7 @@ const tools = [
   },
   {
     name: "browser_click",
-    description: "Click an element by selector or @e* ref.",
+    description: "Click an element by CSS selector or an exact @e* ref from the latest browser_snapshot. For ranked GitHub results, click the repository link ref nested under the first repository heading, not the article or heading container.",
     inputSchema: {
       type: "object",
       properties: {
@@ -69,6 +73,7 @@ const tools = [
   {
     name: "browser_wait",
     description: "Wait for an element selector or a number of milliseconds.",
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -81,6 +86,7 @@ const tools = [
   {
     name: "browser_get_text",
     description: "Read visible text from a selector or @e* ref.",
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -93,6 +99,7 @@ const tools = [
   {
     name: "browser_get_url",
     description: "Get the current page URL from the session.",
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -103,6 +110,7 @@ const tools = [
   {
     name: "browser_screenshot",
     description: "Capture a screenshot to the given file path.",
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: "object",
       properties: {
@@ -279,6 +287,8 @@ app.post("/mcp/rpc", async (req, res) => {
     return res.json({ id, error: "Unknown method" });
   } catch (error) {
     const message = String(error?.message ?? error);
+    const inputSummary = params?.name === "browser_click" ? ` selector=${JSON.stringify(params?.input?.selector ?? "")}` : "";
+    console.error(`[agent-browser-sse] ${String(params?.name ?? "unknown")} failed${inputSummary}: ${message}`);
     pushEvent({ type: "tool_error", message });
     return res.json({
       id,

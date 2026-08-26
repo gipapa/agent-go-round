@@ -28,9 +28,6 @@ function normalizeAutomation(input: unknown): TutorialStepAutomation | undefined
   const automation: TutorialStepAutomation = {
     composerSeed: typeof record.composerSeed === "string" ? record.composerSeed.trim() : undefined,
     clearChatOnEnter: record.clearChatOnEnter === true,
-    skillExecutionMode: record.skillExecutionMode === "multi_turn" ? "multi_turn" : record.skillExecutionMode === "single_turn" ? "single_turn" : undefined,
-    skillVerifyMax: typeof record.skillVerifyMax === "number" ? record.skillVerifyMax : undefined,
-    skillToolLoopMax: typeof record.skillToolLoopMax === "number" ? record.skillToolLoopMax : undefined,
     loadBalancerDelaySecond: typeof record.loadBalancerDelaySecond === "number" ? record.loadBalancerDelaySecond : undefined,
     loadBalancerMaxRetries: typeof record.loadBalancerMaxRetries === "number" ? record.loadBalancerMaxRetries : undefined,
     activeAgentPreset:
@@ -50,10 +47,7 @@ function normalizeAutomation(input: unknown): TutorialStepAutomation | undefined
           requireOpenedToolResult: expectInput.requireOpenedToolResult === true,
           skillTraceIncludes: normalizeStringArray(expectInput.skillTraceIncludes),
           skillTraceIncludesAny: normalizeStringArray(expectInput.skillTraceIncludesAny),
-          skillLoadContainsAny: normalizeStringArray(expectInput.skillLoadContainsAny),
-          requireSkillTodo: expectInput.requireSkillTodo === true,
-          requireSkillTodoProgress: expectInput.requireSkillTodoProgress === true,
-          requireSkillTodoTerminal: expectInput.requireSkillTodoTerminal === true
+          skillLoadContainsAny: normalizeStringArray(expectInput.skillLoadContainsAny)
         }
       : undefined
   };
@@ -61,9 +55,6 @@ function normalizeAutomation(input: unknown): TutorialStepAutomation | undefined
   if (
     !automation.composerSeed &&
     !automation.clearChatOnEnter &&
-    !automation.skillExecutionMode &&
-    automation.skillVerifyMax === undefined &&
-    automation.skillToolLoopMax === undefined &&
     automation.loadBalancerDelaySecond === undefined &&
     automation.loadBalancerMaxRetries === undefined &&
     !automation.activeAgentPreset &&

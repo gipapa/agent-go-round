@@ -1,4 +1,5 @@
 import { ChatMessage } from "../types";
+import { boundChatContent, normalizeImportedMessage } from "../runtime/chatMessages";
 
 const DB_NAME = "agr_chat_db";
 const STORE = "chat_state";
@@ -36,7 +37,11 @@ export async function loadChatHistory(): Promise<ChatMessage[]> {
     const req = tx.objectStore(STORE).get(CURRENT_KEY);
     req.onsuccess = () => {
       const record = req.result as ChatStateRecord | undefined;
-      resolve(Array.isArray(record?.messages) ? record!.messages : []);
+      resolve(
+        Array.isArray(record?.messages)
+          ? (record.messages.map(normalizeImportedMessage).filter(Boolean) as ChatMessage[])
+          : []
+      );
     };
     req.onerror = () => reject(idbError("load chat history failed", req.error));
     tx.onabort = () => reject(idbError("load chat transaction aborted", tx.error));
@@ -45,11 +50,14 @@ export async function loadChatHistory(): Promise<ChatMessage[]> {
 
 export async function saveChatHistory(messages: ChatMessage[]): Promise<void> {
   const db = await openDb();
+  const persistedMessages = messages
+    .map((message) => normalizeImportedMessage(message))
+    .filter((message): message is ChatMessage => message !== null);
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put({
       id: CURRENT_KEY,
-      messages,
+      messages: persistedMessages.map((message) => ({ ...message, content: boundChatContent(message.content) })),
       updatedAt: Date.now()
     } satisfies ChatStateRecord);
     tx.oncomplete = () => resolve();

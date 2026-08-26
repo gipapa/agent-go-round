@@ -1,5 +1,8 @@
 import { ModelCredentialEntry } from "../storage/settingsStore";
 import { normalizeCredentialUrl } from "../utils/credential";
+import { readResponseTextWithLimit } from "../utils/fetchWithTimeout";
+
+const MAX_MODEL_DISCOVERY_RESPONSE_CHARS = 512 * 1024;
 
 export type CredentialTestState = {
   ok: boolean;
@@ -23,6 +26,16 @@ async function fetchModelsResponse(slot: ModelCredentialEntry, apiKey: string) {
   return await fetch(`${endpoint}/models`, { headers });
 }
 
+async function readDiscoveryRecord(response: Response) {
+  const bounded = await readResponseTextWithLimit(response, MAX_MODEL_DISCOVERY_RESPONSE_CHARS).catch(() => ({ text: "", exceeded: false }));
+  if (bounded.exceeded) return null;
+  try {
+    return asRecord(JSON.parse(bounded.text));
+  } catch {
+    return null;
+  }
+}
+
 export async function testCredentialConnection(
   slot: ModelCredentialEntry,
   apiKey: string
@@ -33,7 +46,7 @@ export async function testCredentialConnection(
 
   const res = await fetchModelsResponse(slot, apiKey);
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = (await readResponseTextWithLimit(res, 8_192).catch(() => ({ text: "", exceeded: false }))).text;
     if (res.status === 401 || res.status === 403) {
       throw new Error(
         slot.preset === "gemini"
@@ -51,7 +64,7 @@ export async function testCredentialConnection(
     throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
   }
 
-  const json = asRecord(await res.json().catch(() => null));
+  const json = await readDiscoveryRecord(res);
   const count = slot.preset === "gemini"
     ? Array.isArray(json?.models) ? json.models.length : undefined
     : Array.isArray(json?.data) ? json.data.filter((item) => asRecord(item)?.active !== false).length : undefined;
@@ -67,11 +80,11 @@ export async function fetchCredentialModels(slot: ModelCredentialEntry, apiKey: 
 
   const res = await fetchModelsResponse(slot, apiKey);
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = (await readResponseTextWithLimit(res, 8_192).catch(() => ({ text: "", exceeded: false }))).text;
     throw new Error(text ? `HTTP ${res.status}: ${text}` : `HTTP ${res.status}`);
   }
 
-  const json = asRecord(await res.json().catch(() => null));
+  const json = await readDiscoveryRecord(res);
   const models = slot.preset === "gemini"
     ? Array.isArray(json?.models)
       ? json.models

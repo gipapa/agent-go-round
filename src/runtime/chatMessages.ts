@@ -8,6 +8,24 @@ import type {
 } from "../types";
 import { generateId } from "../utils/id";
 
+export const MAX_PERSISTED_CHAT_CONTENT_CHARS = 64_000;
+const MAX_PERSISTED_TRACE_ENTRIES = 80;
+const MAX_PERSISTED_TODO_ENTRIES = 100;
+const MAX_PERSISTED_ACTIVITY_ENTRIES = 256;
+const MAX_PERSISTED_ID_CHARS = 200;
+const MAX_PERSISTED_LABEL_CHARS = 160;
+const MAX_PERSISTED_METADATA_CHARS = 2_000;
+
+function boundedPersistedText(value: string, maxChars: number) {
+  if (value.length <= maxChars) return value;
+  const marker = `\n[… persisted text truncated; original_chars=${value.length}]`;
+  return maxChars <= marker.length ? marker.slice(0, maxChars) : `${value.slice(0, maxChars - marker.length)}${marker}`;
+}
+
+export function boundChatContent(value: string) {
+  return boundedPersistedText(value, MAX_PERSISTED_CHAT_CONTENT_CHARS);
+}
+
 export function msg(
   role: ChatMessage["role"],
   content: string,
@@ -86,20 +104,28 @@ export function normalizeImportedMessage(input: unknown): ChatMessage | null {
   const skillTrace = Array.isArray(record.skillTrace)
     ? record.skillTrace
         .filter(isTraceEntry)
-        .map((entry) => ({ label: String(entry.label), content: String(entry.content) } satisfies ChatTraceEntry))
+        .slice(-MAX_PERSISTED_TRACE_ENTRIES)
+        .map(
+          (entry) =>
+            ({
+              label: String(entry.label).slice(0, MAX_PERSISTED_LABEL_CHARS),
+              content: boundedPersistedText(String(entry.content), MAX_PERSISTED_METADATA_CHARS)
+            } satisfies ChatTraceEntry)
+        )
     : undefined;
   const skillTodo = Array.isArray(record.skillTodo)
     ? record.skillTodo
         .filter(isTodoItem)
+        .slice(-MAX_PERSISTED_TODO_ENTRIES)
         .map(
           (item) =>
             ({
-              id: String(item.id),
-              label: String(item.label),
+              id: String(item.id).slice(0, MAX_PERSISTED_ID_CHARS),
+              label: String(item.label).slice(0, MAX_PERSISTED_LABEL_CHARS),
               status: item.status as SkillTodoStatus,
               source: item.source as SkillTodoSource,
-              reason: typeof item.reason === "string" ? item.reason : undefined,
-              updatedAt: typeof item.updatedAt === "number" ? item.updatedAt : Date.now()
+              reason: typeof item.reason === "string" ? boundedPersistedText(item.reason, MAX_PERSISTED_METADATA_CHARS) : undefined,
+              updatedAt: typeof item.updatedAt === "number" && Number.isFinite(item.updatedAt) ? item.updatedAt : Date.now()
             }) satisfies SkillTodoItem
         )
     : undefined;
@@ -119,21 +145,67 @@ export function normalizeImportedMessage(input: unknown): ChatMessage | null {
     ].includes(record.skillPhase)
       ? (record.skillPhase as SkillPhase)
       : undefined;
+  const harnessRunRecord = asRecord(record.harnessRun);
+  const harnessActivity = Array.isArray(harnessRunRecord?.activity)
+    ? harnessRunRecord.activity
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry.type === "string")
+        .slice(-MAX_PERSISTED_ACTIVITY_ENTRIES)
+        .map((entry) => ({
+          type: String(entry.type).slice(0, MAX_PERSISTED_LABEL_CHARS),
+          message: typeof entry.message === "string" ? boundedPersistedText(entry.message, 500) : undefined
+        }))
+    : [];
+  const harnessRun =
+    harnessRunRecord &&
+    typeof harnessRunRecord.runId === "string" &&
+    typeof harnessRunRecord.generation === "number" && Number.isFinite(harnessRunRecord.generation) &&
+    typeof harnessRunRecord.stepCount === "number" && Number.isFinite(harnessRunRecord.stepCount) &&
+    typeof harnessRunRecord.toolCallCount === "number" && Number.isFinite(harnessRunRecord.toolCallCount) &&
+    typeof harnessRunRecord.durationMs === "number" && Number.isFinite(harnessRunRecord.durationMs) &&
+    typeof harnessRunRecord.terminalReason === "string"
+      ? {
+          runId: harnessRunRecord.runId.slice(0, MAX_PERSISTED_ID_CHARS),
+          generation: Math.max(0, Math.floor(harnessRunRecord.generation)),
+          skillId: typeof harnessRunRecord.skillId === "string" ? harnessRunRecord.skillId.slice(0, MAX_PERSISTED_ID_CHARS) : undefined,
+          stepCount: Math.max(0, Math.floor(harnessRunRecord.stepCount)),
+          toolCallCount: Math.max(0, Math.floor(harnessRunRecord.toolCallCount)),
+          durationMs: Math.max(0, Math.floor(harnessRunRecord.durationMs)),
+          terminalReason: harnessRunRecord.terminalReason.slice(0, MAX_PERSISTED_LABEL_CHARS),
+          activity: harnessActivity
+        }
+      : undefined;
+  const interruptedAssistant =
+    record.role === "assistant" &&
+    (record.isStreaming === true || (!!harnessRunRecord && typeof harnessRunRecord.terminalReason !== "string"));
+  const normalizedContent = interruptedAssistant
+    ? record.content.trim()
+      ? `${record.content}\n\n【執行中斷】\n上一輪執行在頁面重新載入前尚未完成。`
+      : "【執行中斷】\n上一輪執行在頁面重新載入前尚未完成。"
+    : record.content;
   return {
-    id: typeof record.id === "string" ? record.id : generateId(),
+    id: typeof record.id === "string" ? record.id.slice(0, MAX_PERSISTED_ID_CHARS) : generateId(),
     role: record.role as ChatMessage["role"],
-    content: record.content,
-    name: typeof record.name === "string" ? record.name : undefined,
-    displayName: typeof record.displayName === "string" ? record.displayName : undefined,
-    avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl : undefined,
-    statusText: typeof record.statusText === "string" ? record.statusText : undefined,
-    isStreaming: record.isStreaming === true,
-    hideWhileStreaming: record.hideWhileStreaming === true,
+    content: boundChatContent(normalizedContent),
+    name: typeof record.name === "string" ? record.name.slice(0, MAX_PERSISTED_ID_CHARS) : undefined,
+    displayName: typeof record.displayName === "string" ? record.displayName.slice(0, MAX_PERSISTED_LABEL_CHARS) : undefined,
+    avatarUrl: typeof record.avatarUrl === "string" ? record.avatarUrl.slice(0, MAX_PERSISTED_METADATA_CHARS) : undefined,
+    statusText: interruptedAssistant
+      ? undefined
+      : typeof record.statusText === "string"
+        ? boundedPersistedText(record.statusText, MAX_PERSISTED_METADATA_CHARS)
+        : undefined,
+    isStreaming: interruptedAssistant ? false : record.isStreaming === true,
+    hideWhileStreaming: interruptedAssistant ? false : record.hideWhileStreaming === true,
     skillTrace: skillTrace?.length ? skillTrace : undefined,
-    skillGoal: typeof record.skillGoal === "string" && record.skillGoal.trim() ? record.skillGoal : undefined,
+    harnessRun,
+    skillGoal:
+      typeof record.skillGoal === "string" && record.skillGoal.trim()
+        ? boundedPersistedText(record.skillGoal, MAX_PERSISTED_METADATA_CHARS)
+        : undefined,
     skillTodo: skillTodo?.length ? skillTodo : undefined,
     skillPhase,
-    ts: typeof record.ts === "number" ? record.ts : Date.now()
+    ts: typeof record.ts === "number" && Number.isFinite(record.ts) ? record.ts : Date.now()
   };
 }
 

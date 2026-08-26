@@ -58,7 +58,7 @@ cd mcp-test && bash run.sh -simple
 目前刻意仍留在 App 的主要流程：
 
 - `sendOneToOneTurn` 與 `onSend`
-- `prepareSkillExecution` 與 `executeMultiTurnSkill`
+- canonical Pi harness chat turn wiring
 - Tutorial scenario transition / workspace restore
 - App-level load balancer 與 MAGI wiring
 
@@ -66,14 +66,15 @@ cd mcp-test && bash run.sh -simple
 
 ## Runtime Conventions
 
-- Model JSON：使用 `extractJsonObject`，再交給 `src/schemas/decisions.ts` 的 Zod normalizer。
-- Structured retries：使用 `runStructuredDecision`，不要在每個 decision loop 重寫 retry/sleep。
-- Tool execution：從 `createToolSelectionExecutor` 進入；MCP routing 走 `resolveMcpServerId`。
+- Model JSON：canonical one-to-one/skill harness 使用 strict text/native transport parser；legacy structured decisions 才使用 `extractJsonObject` 與 `src/schemas/decisions.ts`。
+- Structured retries：canonical harness 由 typed transport/load-balancer contract 處理，不在 loop 內重寫 provider retry；legacy structured decisions 才使用 `runStructuredDecision`。
+- Tool execution：canonical harness 從 `src/runtime/toolEffectRunner.ts` 進入；MCP routing 走 `mcpClientManager.run(server, ...)`。舊 `createToolSelectionExecutor` 不得成為新 path 依賴。
 - MCP calls：使用 `mcpClientManager.run(server, ...)`；tool list 使用 `McpToolCatalog`，避免重複 client lifecycle。
 - Logging：模組接受 `PendingLogEntry` sink；App 透過 `useAppLog` 顯示。保留 `requestId` 與 `stage`。
 - Errors：使用 `errorMessage(error)`，不要使用 `catch (error: any)`。
 - Cancellation：長時間工作要傳遞 `ExecutionDeadline` 或 `AbortSignal`。
 - Agent model calls：優先走 load-balancer runner，不要在 UI component 直接呼叫 adapter。
+- Pi loop harness：canonical action loop 位於 `src/runtime/harness/`，只接受 typed transport result；context projection、tool registry、effect runner 與 skill internal tools 都必須經 dependency injection。One-to-one 與 skill execution 不得再回到 planner/verifier/multi-turn legacy runtime。
 
 ## State And Storage
 
@@ -111,7 +112,7 @@ npm test
 - 正式 remote MCP 應透過同源 HTTPS gateway，API token 留在 server-side secret store。
 - Custom built-in tools 具有同-origin JavaScript 能力；新增 helper 前要重新評估資料外洩面。
 - McpPanel 的 test connection 是一次性 health check，可以不經 pooled client；正式 tool execution 必須經 manager。
-- MAGI 使用 `src/magi/magiSkills.ts` 固定 prompts，不走 Prompt Templates panel。
+- MAGI 使用 `src/magi/magiSkills.ts` 固定 prompts。
 
 ## Before Committing
 

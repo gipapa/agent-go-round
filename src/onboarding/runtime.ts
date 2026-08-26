@@ -42,8 +42,10 @@ export const TUTORIAL_DOC_CONTENT = "你是個說話結尾都會喵喵叫的助�
 export const TUTORIAL_MCP_NAME = "教學用MCP";
 export const TUTORIAL_PRIMARY_LOAD_BALANCER_NAME = "教學用Load Balancer 1";
 export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
-export const TUTORIAL_PRIMARY_MODEL = "groq/compound";
-export const TUTORIAL_SECONDARY_MODEL = "groq/compound-mini";
+// Compound systems only support Groq-managed built-in tools. The tutorial
+// exercises local/remote tool calling through MCP, so use tool-capable models.
+export const TUTORIAL_PRIMARY_MODEL = "openai/gpt-oss-20b";
+export const TUTORIAL_SECONDARY_MODEL = "openai/gpt-oss-20b";
 export const TUTORIAL_AGENT_ROLE = "primary";
 
 function isManagedMagiAgent(agent: AgentConfig) {
@@ -379,26 +381,6 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     issues.push("已收到回覆，但還沒有看到這個案例預期的 skill load 紀錄。");
   }
 
-  if (assistant && expect?.requireSkillTodo && !(assistant.skillTodo && assistant.skillTodo.length > 0)) {
-    issues.push("已收到回覆，但還沒有看到 multi-turn todo 面板資料。");
-  }
-
-  if (
-    assistant &&
-    expect?.requireSkillTodoProgress &&
-    !(assistant.skillTodo && assistant.skillTodo.some((item) => item.status !== "pending"))
-  ) {
-    issues.push("已收到回覆，但 multi-turn todo 尚未出現進度變化。");
-  }
-
-  if (
-    assistant &&
-    expect?.requireSkillTodoTerminal &&
-    !(assistant.skillTodo && assistant.skillTodo.length > 0 && assistant.skillTodo.every((item) => item.status === "completed" || item.status === "blocked"))
-  ) {
-    issues.push("已收到回覆，但 multi-turn todo 還沒有進入最終狀態。");
-  }
-
   return {
     completed: issues.length === 0 && (!expect || expect.requireAssistant === false || !!assistant),
     targetId: step.targetId ?? "chat-input",
@@ -680,7 +662,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `已建立教學 skill：${skill?.name}`
-          : "系統正在建立教學用 Browser workflow multi-turn skill，完成後即可前往下一步。"
+          : "系統正在建立教學用 Browser workflow skill，完成後即可前往下一步。"
       };
     }
     case "enable_tutorial_skill_access": {
@@ -727,7 +709,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         canContinue: completed,
         statusText: completed
           ? `目前 Agent 已允許使用 skill：${skill?.name}，且可使用所需的 MCP / Built-in Tools。`
-          : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許使用這個 Browser workflow multi-turn skill；啟用 Skills 後，MCP 與 Built-in Tools 應維持允許全部。"
+          : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許使用這個 Browser workflow skill；啟用 Skills 後，MCP 與 Built-in Tools 應維持允許全部。"
       };
     }
     case "first_chat_skill_tone": {
@@ -767,7 +749,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         completed: false,
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
-        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 使用 browser_open 打開目標網站。"
+        statusText: step.completionLabel ?? "請送出指定問題，讓 Browser workflow skill 使用 browser_open 打開目標網站。"
       };
     }
     case "first_chat_skill_chatgpt_ask": {
@@ -775,7 +757,7 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         completed: false,
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
-        statusText: step.completionLabel ?? "請送出指定問題，讓 multi-turn skill 完成開站、導航、點擊與內容摘要。"
+        statusText: step.completionLabel ?? "請送出指定問題，讓 Browser workflow skill 完成開站、導航、點擊與內容摘要。"
       };
     }
     case "register_tutorial_agent_browser_mcp": {
@@ -866,15 +848,6 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     targetAgentId = state.agents.find((agent) => agent.id === state.activeAgentId)?.id ?? null;
   }
 
-  if (step.automation?.skillExecutionMode) {
-    controller.setSkillExecutionMode(step.automation.skillExecutionMode);
-  }
-  if (typeof step.automation?.skillVerifyMax === "number") {
-    controller.setSkillVerifyMax(step.automation.skillVerifyMax);
-  }
-  if (typeof step.automation?.skillToolLoopMax === "number") {
-    controller.setSkillToolLoopMax(step.automation.skillToolLoopMax);
-  }
   if (
     targetAgentId &&
     (typeof step.automation?.loadBalancerDelaySecond === "number" || typeof step.automation?.loadBalancerMaxRetries === "number")
@@ -936,20 +909,17 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       break;
     case "ensure_tutorial_sequential_skill": {
       controller.setActiveTab("chat_config");
-      controller.setSkillExecutionMode("single_turn");
       controller.ensureTutorialSequentialSkill();
       break;
     }
     case "ensure_tutorial_chatgpt_browser_skill": {
       controller.setActiveTab("chat_config");
-      controller.setSkillExecutionMode("multi_turn");
       controller.ensureTutorialChatgptBrowserSkill();
       controller.ensureTutorialAgentBrowserMcpTools();
       break;
     }
     case "enable_tutorial_skill_access": {
       controller.setActiveTab("agents");
-      controller.setSkillExecutionMode("single_turn");
       const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);
@@ -964,7 +934,6 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       break;
     case "enable_tutorial_chatgpt_browser_skill_access": {
       controller.setActiveTab("agents");
-      controller.setSkillExecutionMode("multi_turn");
       const agent = findTutorialAgentBase(state);
       if (agent) {
         controller.setActiveAgentId(agent.id);

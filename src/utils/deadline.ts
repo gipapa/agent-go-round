@@ -9,6 +9,8 @@ export type ExecutionDeadline = {
   dispose: () => void;
 };
 
+export const MAX_RUNTIME_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
 function formatMs(ms: number) {
   const rounded = Math.max(0, Math.round(ms));
   if (rounded % 1000 === 0) return `${rounded / 1000}s`;
@@ -35,6 +37,12 @@ function deadlineError(label: string, ms: number) {
   return new Error(`${label} timed out after ${formatMs(ms)}`);
 }
 
+function normalizeTimeoutMs(value: number) {
+  if (value === Number.POSITIVE_INFINITY) return MAX_RUNTIME_TIMEOUT_MS;
+  if (typeof value !== "number" || Number.isNaN(value)) return 0;
+  return Math.min(MAX_RUNTIME_TIMEOUT_MS, Math.max(0, Math.round(value)));
+}
+
 export function getDeadlineAbortMessage(signal?: AbortSignal, fallback = "execution aborted") {
   return reasonMessage(signal?.reason) || fallback;
 }
@@ -59,7 +67,7 @@ export function combineSignals(...signals: Array<AbortSignal | undefined | null>
 }
 
 export function timeoutAfter(ms: number, label: string, signal?: AbortSignal): Promise<never> {
-  const timeoutMs = Math.max(0, Math.round(ms));
+  const timeoutMs = normalizeTimeoutMs(ms);
   if (signal?.aborted) return Promise.reject(new Error(getDeadlineAbortMessage(signal)));
   if (timeoutMs <= 0) return Promise.reject(deadlineError(label, timeoutMs));
 
@@ -93,7 +101,10 @@ export function createDeadline(opts: {
   externalSignal?: AbortSignal;
   label?: string;
 }): ExecutionDeadline {
-  const totalMs = Math.max(0, Math.round(opts.totalMs));
+  // Invalid durations fail closed immediately; finite oversized and positive
+  // infinite durations are capped so malformed settings cannot create an
+  // effectively unbounded run.
+  const totalMs = normalizeTimeoutMs(opts.totalMs);
   const startedAt = Date.now();
   const expiresAt = startedAt + totalMs;
   const controller = new AbortController();

@@ -1,6 +1,14 @@
 import { AgentAdapter, ChatEvent, ChatRequest } from "./base";
 import { DEFAULT_FETCH_TIMEOUT_MS, getAbortSignalMessage, getErrorMessage } from "../utils/fetchWithTimeout";
 
+const DEFAULT_MAX_RESPONSE_CHARS = 64_000;
+
+function normalizeMaxResponseChars(value: number | undefined) {
+  return Number.isFinite(value) && (value as number) >= 0
+    ? Math.min(1_000_000, Math.floor(value as number))
+    : DEFAULT_MAX_RESPONSE_CHARS;
+}
+
 type ChromePromptSession = {
   promptStreaming: (prompt: string) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
   destroy?: () => void;
@@ -87,7 +95,7 @@ async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promi
 export const ChromePromptAdapter: AgentAdapter = {
   async *chat(req: ChatRequest): AsyncGenerator<ChatEvent> {
     if (!window.ai?.languageModel) {
-      yield { type: "done", text: "Chrome Prompt API not available in this browser/profile." };
+      yield { type: "error", kind: "provider", retryable: false, message: "Chrome Prompt API not available in this browser/profile." };
       return;
     }
 
@@ -95,6 +103,7 @@ export const ChromePromptAdapter: AgentAdapter = {
     const system = req.system?.trim() ? `SYSTEM:\n${req.system.trim()}\n\n` : "";
     const prompt = `${system}${context ? `HISTORY:\n${context}\n\n` : ""}USER:\n${req.input}`;
     const guard = createPromptAbortGuard(req.signal, req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
+    const maxResponseChars = normalizeMaxResponseChars(req.maxModelResponseChars);
     let session: ChromePromptSession | undefined;
 
     try {
@@ -112,13 +121,25 @@ export const ChromePromptAdapter: AgentAdapter = {
       while (true) {
         const result = await raceWithAbort<IteratorResult<unknown, undefined>>(iterator.next(), guard.signal);
         if (result.done) break;
-        const chunk = String(result.value ?? "");
+        if (typeof result.value !== "string") {
+          yield { type: "error", kind: "provider", retryable: false, message: "Chrome Prompt API returned a non-text stream chunk." };
+          return;
+        }
+        const chunk = result.value;
         full += chunk;
+        if (full.length > maxResponseChars) {
+          yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+          return;
+        }
         if (chunk) yield { type: "delta", text: chunk };
       }
       yield { type: "done", text: full };
     } catch (error) {
-      yield { type: "done", text: `Request failed: ${getErrorMessage(error)}` };
+      if (guard.signal.aborted || req.signal?.aborted) {
+        yield { type: "aborted", message: getErrorMessage(error) };
+      } else {
+        yield { type: "error", kind: "provider", retryable: false, message: getErrorMessage(error) };
+      }
     } finally {
       guard.dispose();
       session?.destroy?.();

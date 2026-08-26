@@ -1,15 +1,51 @@
-import { AgentAdapter, ChatEvent, ChatRequest } from "./base";
+import { AgentAdapter, ChatEvent, ChatRequest, normalizeRetryConfig } from "./base";
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
   fetchWithTimeout,
   getAbortSignalMessage,
   getErrorMessage,
   getRetryAfterDelayMs,
+  readResponseTextWithLimit,
   sleepWithAbort
 } from "../utils/fetchWithTimeout";
 
+const DEFAULT_MAX_RESPONSE_CHARS = 64_000;
+
+function normalizeMaxResponseChars(value: number | undefined) {
+  return Number.isFinite(value) && (value as number) >= 0
+    ? Math.min(1_000_000, Math.floor(value as number))
+    : DEFAULT_MAX_RESPONSE_CHARS;
+}
+
 function mustache(tpl: string, vars: Record<string, string>) {
   return tpl.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => vars[key] ?? "");
+}
+
+function renderCustomBody(template: string, vars: Record<string, string>) {
+  const raw = mustache(template, vars);
+  try {
+    JSON.parse(raw) as unknown;
+    return raw;
+  } catch {
+    // Keep legacy plain-text templates unchanged. For JSON templates, retry
+    // with JSON-safe placeholder values so the protocol system/transcript can
+    // contain quotes and newlines without corrupting the request body.
+    const looksLikeJson = /^[\s\n\r]*[\[{]/.test(template);
+    return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (match, key: string, offset: number) => {
+      const value = vars[key] ?? "";
+      const before = template[offset - 1];
+      const after = template[offset + match.length];
+      if (before === '"' && after === '"') {
+        return JSON.stringify(value).slice(1, -1);
+      }
+      return looksLikeJson ? JSON.stringify(value) : value;
+    });
+  }
+}
+
+export function supportsCustomTextProtocol(agent: { custom?: { bodyTemplate: string } }) {
+  const template = agent.custom?.bodyTemplate ?? "";
+  return /\{\{\s*input\s*\}\}/.test(template) && /\{\{\s*system\s*\}\}/.test(template);
 }
 
 // Minimal JSONPath-like getter: supports $.a.b[0].c
@@ -35,11 +71,17 @@ function getByPath(obj: unknown, path: string) {
   return cur;
 }
 
+function httpError(status: number, text: string): ChatEvent {
+  const kind = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "auth" : "http";
+  const retryable = status === 429 || status >= 500;
+  return { type: "error", kind, retryable, message: `HTTP ${status}${text ? `\n${text}` : ""}` };
+}
+
 export const CustomAdapter: AgentAdapter = {
   async *chat(req: ChatRequest): AsyncGenerator<ChatEvent> {
     const c = req.agent.custom;
     if (!c) {
-      yield { type: "done", text: "Custom adapter missing config." };
+      yield { type: "error", kind: "provider", retryable: false, message: "Custom adapter missing config." };
       return;
     }
 
@@ -47,16 +89,21 @@ export const CustomAdapter: AgentAdapter = {
       .filter((m) => m.role !== "tool")
       .map((m) => `${m.role}: ${m.content}`)
       .join("\n");
-    const body = mustache(c.bodyTemplate, {
+    const body = renderCustomBody(c.bodyTemplate, {
       input: req.input,
       history,
-      model: req.agent.model ?? ""
+      model: req.agent.model ?? "",
+      system: req.system ?? ""
     });
-    const retryDelaySec = Math.max(0, req.retry?.delaySec ?? 0);
-    const retryMax = Math.max(0, req.retry?.max ?? 0);
+    const retry = normalizeRetryConfig(req.retry);
+    const retryDelaySec = retry?.delaySec ?? 0;
+    const retryMax = retry?.max ?? 0;
     const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+    const maxResponseChars = normalizeMaxResponseChars(req.maxModelResponseChars);
+    const maxResponseBodyChars = maxResponseChars + 65_536;
 
     let text = "";
+    let responseTooLarge = false;
     let res: Response | null = null;
     for (let attempt = 0; attempt <= retryMax; attempt++) {
       try {
@@ -75,7 +122,7 @@ export const CustomAdapter: AgentAdapter = {
         );
       } catch (error) {
         if (req.signal?.aborted) {
-          yield { type: "done", text: `Request failed: ${getAbortSignalMessage(req.signal)}` };
+          yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
           return;
         }
         if (attempt < retryMax) {
@@ -83,23 +130,27 @@ export const CustomAdapter: AgentAdapter = {
           try {
             await sleepWithAbort(retryDelaySec * 1000, req.signal);
           } catch (waitError) {
-            yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+            if (req.signal?.aborted) yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+            else yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(waitError) };
             return;
           }
           continue;
         }
-        yield { type: "done", text: `Request failed: ${getErrorMessage(error)}` };
+        yield { type: "error", kind: "network", retryable: true, message: getErrorMessage(error) };
         return;
       }
 
-      text = await res.text();
+      const bounded = await readResponseTextWithLimit(res, maxResponseBodyChars);
+      text = bounded.text;
+      responseTooLarge = bounded.exceeded;
       if (res.status === 429 && attempt < retryMax) {
         const delayMs = getRetryAfterDelayMs(res.headers, retryDelaySec * 1000);
         req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${Math.round(delayMs / 1000)}s`);
         try {
           await sleepWithAbort(delayMs, req.signal);
         } catch (waitError) {
-          yield { type: "done", text: `Request failed: ${getErrorMessage(waitError)}` };
+          if (req.signal?.aborted) yield { type: "aborted", message: getAbortSignalMessage(req.signal) };
+          else yield { type: "error", kind: "rate_limit", retryable: true, message: getErrorMessage(waitError) };
           return;
         }
         continue;
@@ -108,12 +159,16 @@ export const CustomAdapter: AgentAdapter = {
     }
 
     if (!res) {
-      yield { type: "done", text: "Request failed: No response" };
+      yield { type: "error", kind: "network", retryable: true, message: "No response" };
       return;
     }
 
     if (!res.ok) {
-      yield { type: "done", text: `Request failed: HTTP ${res.status}\n${text}` };
+      yield httpError(res.status, text);
+      return;
+    }
+    if (responseTooLarge || text.length > maxResponseChars) {
+      yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
       return;
     }
 
@@ -122,9 +177,14 @@ export const CustomAdapter: AgentAdapter = {
       const j = JSON.parse(text) as unknown;
       const v = getByPath(j, c.responseJsonPath);
       if (typeof v === "string") out = v;
-      else out = JSON.stringify(v, null, 2);
+      else out = JSON.stringify(v, null, 2) ?? "";
     } catch {
       // treat as plain text
+    }
+
+    if (out.length > maxResponseChars) {
+      yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
+      return;
     }
 
     yield { type: "done", text: out };

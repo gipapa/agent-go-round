@@ -1,4 +1,4 @@
-import { AgentConfig, BuiltInToolConfig, ChatMessage, DocItem, LoadBalancerConfig, SkillConfig, SkillExecutionMode, SkillFileItem } from "../types";
+import { AgentConfig, BuiltInToolConfig, ChatMessage, DocItem, LoadBalancerConfig, SkillConfig, SkillFileItem } from "../types";
 import { ModelCredentialEntry } from "../storage/settingsStore";
 
 export type TutorialTab = "chat" | "chat_config" | "agents" | "profile";
@@ -63,17 +63,11 @@ export type TutorialChatExpectation = {
   skillTraceIncludes?: string[];
   skillTraceIncludesAny?: string[];
   skillLoadContainsAny?: string[];
-  requireSkillTodo?: boolean;
-  requireSkillTodoProgress?: boolean;
-  requireSkillTodoTerminal?: boolean;
 };
 
 export type TutorialStepAutomation = {
   composerSeed?: string;
   clearChatOnEnter?: boolean;
-  skillExecutionMode?: SkillExecutionMode;
-  skillVerifyMax?: number;
-  skillToolLoopMax?: number;
   loadBalancerDelaySecond?: number;
   loadBalancerMaxRetries?: number;
   activeAgentPreset?: "tutorial_agent" | "tutorial_agent_base";
@@ -139,9 +133,6 @@ export type TutorialEntryController = {
   setConfigModal: (modal: TutorialConfigModal) => void;
   setActiveAgentId: (id: string) => void;
   setSelectedAgentId: (id: string) => void;
-  setSkillExecutionMode: (mode: "single_turn" | "multi_turn") => void;
-  setSkillVerifyMax: (value: number) => void;
-  setSkillToolLoopMax: (value: number) => void;
   setAgentLoadBalancerRetryPolicy: (agentId: string, value: { delaySecond?: number; maxRetries?: number; resumeMinute?: number }) => void;
   setComposerSeed: (value: string) => void;
   clearChat: () => void;

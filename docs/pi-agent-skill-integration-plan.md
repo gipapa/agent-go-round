@@ -1,5 +1,7 @@
 # Pi Agent 核心設計借鏡與純前端 Skill Harness 穩定化計畫
 
+> 狀態：設計計畫已於 2026-08 進入實作完成紀錄階段。本文保留原始設計決策、限制與 rollout gate；實際落地結果請見 [Pi Agent Harness 大改完成紀錄](./pi-agent-skill-integration-2026-08.md)。其中 primary native-tool real tutorial 的 10-session gate 尚未宣稱完成。
+
 ## 1. 最終判定
 
 AgentGoRound 應借鏡 Pi Agent 的單一 tool loop，但不能只複製 loop 外型。Pi 的小核心建立在 provider-native tool calls、typed model errors、argument validation、可轉換的 context 與明確 effect hooks 上。AgentGoRound 目前缺少其中數項，若直接把既有 adapter 與 `createToolSelectionExecutor` 接進新 loop，只會得到比較簡單、但仍可能誤判錯誤、重複副作用、撐爆 context 或被 inline JavaScript 卡死的 harness。
@@ -819,14 +821,18 @@ Pi Agent clone：`/Users/gipapa/work/pi-agent`
 - Pi skill loader: `packages/agent/src/harness/skills.ts`
 - Pi system skill catalog: `packages/agent/src/harness/system-prompt.ts`
 
-AgentGoRound current boundaries：
+AgentGoRound implementation boundaries after this plan：
 
-- Adapter text contract: `src/adapters/base.ts`
-- Load-balancer string outcome: `src/runtime/loadBalancerRunner.ts`
-- Legacy combined executor: `src/runtime/toolSelectionExecutor.ts`
-- MCP timeout behavior: `src/runtime/toolExecution.ts`
-- Built-in Worker/inline execution: `src/utils/runBuiltInScriptTool.ts`
-- Current App run ownership: `src/app/App.tsx`
+- Adapter and typed transport contracts: `src/adapters/`、`src/runtime/harness/transports.ts`
+- Load-balancer runner and capability: `src/runtime/loadBalancerRunner.ts`、`src/runtime/harness/capability.ts`
+- Canonical loop and transcript: `src/runtime/harness/`
+- Headless effect execution: `src/runtime/toolEffectRunner.ts`
+- MCP lifecycle and routing: `src/mcp/clientManager.ts`、`src/mcp/toolCatalog.ts`
+- Skill package and internal tools: `src/storage/skillStore.ts`、`src/runtime/harness/skillTools.ts`
+- Chat run ownership: `src/chat/useAgentHarnessController.ts`
+- Cross-domain wiring: `src/app/App.tsx`
+
+本節原先列出的 legacy executor、multi-turn skill runtime 與 prompt-template paths 已在 H3 實作中移除；若需查看原始問題，請以 git history 為準。
 
 External specifications：
 

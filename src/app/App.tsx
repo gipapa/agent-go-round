@@ -2,24 +2,17 @@ import React, { useMemo, useState } from "react";
 import {
   AgentConfig,
   BuiltInToolConfig,
-  ChatTraceEntry,
   ChatMessage,
   DetectResult,
-  LoadedSkillRuntime,
   MagiMode,
   MagiRenderState,
   MagiUnitId,
   OrchestratorMode,
   VoiceSettings,
-  SkillExecutionMode,
-  SkillStepDecision,
-  SkillPhase,
-  SkillTodoItem,
   DocItem,
   McpServerConfig,
   McpTool,
-  LoadBalancerConfig,
-  SkillConfig
+  LoadBalancerConfig
 } from "../types";
 import { loadAgents, upsertAgent, deleteAgent, saveAgents } from "../storage/agentStore";
 import { loadBuiltInTools, saveBuiltInTools } from "../storage/builtInToolStore";
@@ -33,13 +26,10 @@ import {
   upsertSkillTextFile
 } from "../storage/skillStore";
 import {
-  McpPromptTemplates,
   loadLoadBalancers,
-  loadMcpPromptTemplates,
   loadMcpServers,
   loadUiState,
   saveLoadBalancers,
-  saveMcpPromptTemplates,
   saveMcpServers,
   saveUiState
 } from "../storage/settingsStore";
@@ -51,8 +41,8 @@ import { CustomAdapter } from "../adapters/custom";
 import { runOneToOne } from "../orchestrators/oneToOne";
 import { createInitialState as createMagiRenderState, MAGI_UNIT_LAYOUT, MagiPreparedUnit, runMagi } from "../orchestrators/magi";
 import { McpClientManager } from "../mcp/clientManager";
-import { resolveMcpServerId } from "../mcp/serverResolver";
 import { McpToolCatalog } from "../mcp/toolCatalog";
+import { retainMcpToolCatalog } from "../runtime/mcpCatalogState";
 
 import AgentsPanel from "../ui/AgentsPanel";
 import BuiltInToolsPanel from "../ui/BuiltInToolsPanel";
@@ -65,7 +55,6 @@ import McpPanel from "../ui/McpPanel";
 import SkillsPanel from "../ui/SkillsPanel";
 import TutorialGuide from "../ui/TutorialGuide";
 import LoadBalancersPanel from "../ui/LoadBalancersPanel";
-import PromptTemplatesPanel from "../ui/PromptTemplatesPanel";
 import VoiceConfigPanel from "../ui/VoiceConfigPanel";
 import LogPanel from "../ui/LogPanel";
 import CredentialsPanel from "../ui/CredentialsPanel";
@@ -119,85 +108,25 @@ import {
   matchesManagedMagiUnit,
   normalizeManagedMagiAgent
 } from "../magi/managedAgents";
-import {
-  buildPromptTemplateRuntime,
-  getDefaultPromptTemplate,
-  getPromptTemplateFileId,
-  loadPromptTemplateFiles,
-  PromptTemplateBaseId,
-  PromptTemplateFileState,
-  resetPromptTemplateToDefault,
-  savePromptTemplateFiles
-} from "../promptTemplates/store";
-import {
-  buildSkillSessionSnapshot,
-  getAllowedSkillsFromSnapshot,
-  loadSkillRuntime,
-  pushSkillTrace
-} from "../runtime/skillRuntime";
-import {
-  buildSkillRefinementInput,
-  clampSkillToolLoopMax,
-  clampSkillVerifyMax,
-  pushSkillExecutionModeTrace
-} from "../runtime/skillExecutor";
-import { runMultiTurnSkillRuntime } from "../runtime/multiTurnSkillRuntime";
-import { formatBrowserObservationDigest } from "../runtime/browserObservation";
-import {
-  buildBrowserHeuristicCompletion,
-  buildBrowserHeuristicDecision,
-  buildGroundedRepoSummaryAnswer,
-  enrichActionBrowserObservation,
-  goalWantsRepoSummary,
-  hasGroundedRepoSummary,
-  normalizeBrowserWorkflowStartUrl
-} from "../runtime/browserWorkflow";
-import { bootstrapTodoList } from "../runtime/skillTodo";
-import {
-  inferExplicitToolDecision,
-  normalizeToolDecisionAgainstAvailableTools,
-  resolvePreferredBrowserHeadedMode,
-  type ToolEntry
-} from "../runtime/toolDecision";
-import {
-  classifyBuiltInToolIntent,
-  classifyMcpToolIntent,
-  type ToolIntent
-} from "../runtime/toolExecution";
+import { runHarnessChatTurn } from "../chat/harnessChatTurn";
 import { runLoadBalancedTask, runLoadBalancedTextTask } from "../runtime/loadBalancerRunner";
-import { createDecisionRunners } from "../runtime/decisionRunners";
-import {
-  createToolSelectionExecutor,
-  type ToolAugmentationResult
-} from "../runtime/toolSelectionExecutor";
-import {
-  buildPromptTemplateApiTestSpec,
-  type PromptTemplateApiTestState
-} from "../runtime/promptTemplateTests";
-import {
-  appendToolPromptSummary,
-  confirmedFromToolOutput,
-  getThinkStreamingState,
-  mergeSystemText,
-  msg,
-  stringifyAny,
-  stripPreviousToolPromptSummaries
-} from "../runtime/chatMessages";
+import { msg } from "../runtime/chatMessages";
 import { useAppLog } from "./useAppLog";
 import { useChatHistoryController } from "../chat/useChatHistoryController";
 import { useDocsController } from "../resources/useDocsController";
 import { useSkillsController } from "../resources/useSkillsController";
+import { useAgentHarnessController, type AgentHarnessTaskContext } from "../chat/useAgentHarnessController";
 import { createLogRequestId } from "../runtime/logging";
+import { getTextCapabilityRevision, normalizeToolCallingCapability, probeTextCapability } from "../runtime/harness/capability";
 import { fetchCredentialModels } from "../credentials/runtime";
 import { useCredentialController } from "../credentials/useCredentialController";
 import { generateId } from "../utils/id";
 import {
   SYSTEM_AGENT_DIRECTORY_TOOL_ID,
   SYSTEM_BUILT_IN_TOOLS,
-  SYSTEM_REQUEST_CONFIRMATION_TOOL_ID,
   SYSTEM_USER_PROFILE_TOOL_ID
 } from "../utils/systemBuiltInTools";
-import type { ToolPromptDetailMode } from "../utils/toolResultSummary";
+
 import { resetAgentGoRoundStorage } from "../utils/resetAppStorage";
 import type { ExecutionDeadline } from "../utils/deadline";
 import { combineSignals, createDeadline } from "../utils/deadline";
@@ -218,17 +147,36 @@ import {
   ResolvedLoadBalancerInstance,
   setLoadBalancerRetryPolicy
 } from "../utils/loadBalancer";
-import { buildAgentFailureContent, classifyRetryableAgentFailure, detectTerminalAgentFailure } from "../utils/agentFailure";
+import { buildAgentFailureContent, classifyRetryableAgentFailure } from "../utils/agentFailure";
 import {
   describeLoadBalancerAvailability,
   describeResolvedLoadBalancerCandidate
 } from "../utils/loadBalancerDiagnostics";
 import { errorMessage } from "../utils/errors";
-import {
-  type BuiltInToolAction,
-  type McpAction,
-  type SkillBootstrapPlan
-} from "../schemas/decisions";
+import type { HarnessEvent } from "../runtime/harness/types";
+
+const TUTORIAL_CONTEXT_BUDGET = {
+  maxSingleToolResultChars: 4_000
+} as const;
+
+function withAbortSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error("Execution aborted."));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new Error("Execution aborted."));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
 
 const DEFAULT_EXECUTION_DEADLINE_MS = 5 * 60 * 1000;
 const DEFAULT_MAGI_ROUND_TIMEOUT_MS = 60 * 1000;
@@ -246,24 +194,6 @@ function pickAdapter(a: AgentConfig) {
   return OpenAICompatAdapter;
 }
 
-type PreparedSkillExecution = {
-  baseInput: string;
-  finalInput: string;
-  toolAugmentation?: ToolAugmentationResult | null;
-  system?: string;
-  trace: ChatTraceEntry[];
-  runtime: LoadedSkillRuntime;
-  scopedBuiltInTools: BuiltInToolConfig[];
-  scopedMcpServers: McpServerConfig[];
-  scopedMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-  decisionContext?: string;
-};
-
-type AssistantResponseFormatResult = {
-  displayContent: string;
-  spokenContent?: string;
-};
-
 type OneToOneTurnResult = {
   requestId: string;
   status: "success" | "degraded" | "failure";
@@ -274,6 +204,10 @@ type OneToOneTurnResult = {
 type ActiveTab = "chat" | "chat_config" | "agents" | "profile";
 type UserProfile = { name: string; avatarUrl?: string; description?: string };
 type AppEntryMode = "landing" | "workspace";
+type PendingToolConfirmation = {
+  message: string;
+  settle: (allowed: boolean) => void;
+};
 function getUserProfileToolPayload(profile: UserProfile) {
   return {
     name: profile.name,
@@ -287,229 +221,20 @@ function clampHistoryLimit(value: number) {
   return Math.max(1, Math.min(200, Math.round(value)));
 }
 
-function compactSupportText(text: string, maxChars: number) {
-  const normalized = text.replace(/\r/g, "").trim();
-  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
-}
-
-function buildCompactSkillDecisionContext(args: {
-  instructions?: string;
-  references: Array<{ path: string; content: string }>;
-  assets: Array<{ path: string; content: string }>;
-}) {
-  const sections: string[] = [];
-
-  if (args.instructions?.trim()) {
-    sections.push(`Skill workflow:\n${compactSupportText(args.instructions, 900)}`);
-  }
-
-  if (args.references.length) {
-    sections.push(
-      `Loaded references:\n${args.references
-        .slice(0, 2)
-        .map((doc) => `[${doc.path}]\n${compactSupportText(doc.content, 320)}`)
-        .join("\n\n")}`
-    );
-  }
-
-  if (args.assets.length) {
-    sections.push(
-      `Loaded assets:\n${args.assets
-        .slice(0, 2)
-        .map((file) => `[${file.path}]\n${compactSupportText(file.content, 240)}`)
-        .join("\n\n")}`
-    );
-  }
-
-  return sections.filter(Boolean).join("\n\n");
-}
-
-function filterPreparedToolScopeByIntent(
-  prepared: PreparedSkillExecution,
-  allowedIntents: Set<ToolIntent>
-): {
-  toolEntries: ToolEntry[];
-  scopedBuiltInTools: BuiltInToolConfig[];
-  scopedMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-} {
-  const scopedBuiltInTools = prepared.scopedBuiltInTools.filter((tool) => allowedIntents.has(classifyBuiltInToolIntent(tool)));
-  const scopedMcpTools = prepared.scopedMcpTools
-    .map((entry) => ({
-      server: entry.server,
-      tools: entry.tools.filter((tool) => allowedIntents.has(classifyMcpToolIntent(tool)))
-    }))
-    .filter((entry) => entry.tools.length > 0);
-  const toolEntries: ToolEntry[] = [
-    ...scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
-    ...scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
-  ];
-  return { toolEntries, scopedBuiltInTools, scopedMcpTools };
-}
-
-function formatToolScopeSummary(toolEntries: ToolEntry[]) {
-  if (!toolEntries.length) return "沒有可用工具";
-  return toolEntries
-    .map((entry) =>
-      entry.kind === "mcp"
-        ? `MCP:${entry.server.name}/${entry.tool.name} [${classifyMcpToolIntent(entry.tool)}]`
-        : `Built-in:${entry.tool.name} [${classifyBuiltInToolIntent(entry.tool)}]`
-    )
-    .join("\n");
-}
-
-function formatSkillPhaseStatus(phase: SkillPhase) {
-  switch (phase) {
-    case "skill_load":
-      return "正在載入 skill…";
-    case "bootstrap_plan":
-      return "正在建立多輪 todo…";
-    case "observe":
-      return "正在觀察目前狀態…";
-    case "plan_next_step":
-      return "正在規劃下一步…";
-    case "act":
-      return "正在執行下一步操作…";
-    case "sync_state":
-      return "正在同步 skill 狀態…";
-    case "completion_gate":
-      return "正在檢查任務是否完成…";
-    case "manual_gate":
-      return "正在等待使用者確認…";
-    case "verify_refine":
-      return "正在驗證與修正結果…";
-    case "final_answer":
-    default:
-      return "正在整理最終回覆…";
-  }
-}
-
-function isSequentialThinkingSkill(skill?: SkillConfig | null) {
-  if (!skill) return false;
-  const id = String(skill.id ?? "").toLowerCase();
-  const name = String(skill.name ?? "").toLowerCase();
-  return (
-    id.includes("sequential-thinking") ||
-    id.includes(TUTORIAL_SEQUENTIAL_SKILL_ROOT) ||
-    name.includes("sequential-thinking") ||
-    name.includes("sequential thinking")
-  );
-}
-
-function buildSequentialThinkingFallbackContent(task: string) {
-  const normalized = String(task ?? "").trim();
-
-  if (/模板整理|格式化|【問題】|【拆解】|【最終回答】/.test(normalized)) {
-    return [
-      "模型沒有回傳文字內容，因此以下依照目前的 Sequential Thinking 模板補上：",
-      "",
-      "【問題】",
-      normalized,
-      "",
-      "【拆解】",
-      "1. 先確認問題真正要問的是什麼。",
-      "2. 把答案拆成幾個最小、最穩定的步驟。",
-      "3. 用簡單語句把每一步重新串起來。",
-      "",
-      "【關鍵依據】",
-      "這裡採用的是 calm + structured 的回答方式：先重述問題，再分步拆解，最後給出直接結論。",
-      "",
-      "【最終回答】",
-      /1\s*\+\s*1\s*=\s*2/.test(normalized)
-        ? "因為第一個 1 代表一個單位，第二個 1 再加入後，總數就會從 1 增加到 2，所以 1+1=2。"
-        : "以上已先依模板整理出穩定的回答框架；如果你要，我也可以再把它改寫成更短或更口語的版本。"
-    ].join("\n");
-  }
-
-  if (/進階模式|revi(?:se|sion)|branch|實戰範例|範例/.test(normalized)) {
-    return [
-      "模型沒有回傳文字內容，因此以下先用 Sequential Thinking 的方式補一版簡短回答：",
-      "",
-      "1. 如果原本的方向已經明顯錯了，就用 revise，重新修正問題框架或假設。",
-      "2. 如果有兩條以上都合理的路線要比較，就用 branch，把各自的成本、速度與風險列出來。",
-      "3. 實戰上可以先各做一個最小版本，再根據結果決定保留哪一條路。",
-      "",
-      "簡單例子：如果 production 壞掉而你一開始懷疑是 API key，但後來發現其實是環境變數名稱不同，這就是 revise；如果你在比較兩種都可行的部署方式，那就是 branch。"
-    ].join("\n");
-  }
-
-  if (/1\s*\+\s*1\s*=\s*2/.test(normalized)) {
-    return [
-      "模型沒有回傳文字內容，因此以下先用冷靜、有條理的方式補上說明：",
-      "",
-      "1. 先把第一個 1 看成一個單位。",
-      "2. 再把第二個 1 加進來，代表總數多了一個單位。",
-      "3. 原本有 1 個，現在再加 1 個，所以總數會變成 2 個。",
-      "",
-      "所以 1+1=2，意思就是把兩個單位合在一起計數，最後得到 2。"
-    ].join("\n");
-  }
-
-  return [
-    "模型沒有回傳文字內容，因此以下先用 Sequential Thinking 的方式補一版簡短回答：",
-    "",
-    "1. 先把問題拆成最小步驟。",
-    "2. 每一步只處理一個重點。",
-    "3. 最後再把這些步驟整理成清楚結論。",
-    "",
-    `原始問題：${normalized || "（未提供）"}`
-  ].join("\n");
-}
-
-function buildEmptyResponseFallbackContent(task: string, toolResult?: ToolAugmentationResult | null, skill?: SkillConfig | null) {
-  if (toolResult?.status === "tool_called") {
-    const label = toolResult.toolLabel?.trim() || "最近一次工具";
-    const output = toolResult.toolOutput;
-
-    if (label.includes("get_user_profile") && output && typeof output === "object" && !Array.isArray(output)) {
-      const name = typeof (output as { name?: unknown }).name === "string" ? String((output as { name?: string }).name).trim() : "";
-      const description =
-        typeof (output as { description?: unknown }).description === "string"
-          ? String((output as { description?: string }).description).trim()
-          : "";
-      if (name || description) {
-        return [
-          "【工具已成功執行】",
-          "模型沒有回傳文字內容，因此以下直接根據工具結果整理：",
-          "",
-          description ? `你是 ${name || "這位使用者"}，${description}` : `你是 ${name || "這位使用者"}。`
-        ].join("\n");
-      }
-    }
-
-    if (output && typeof output === "object" && !Array.isArray(output)) {
-      const timezone =
-        typeof (output as { timezone?: unknown }).timezone === "string"
-          ? String((output as { timezone?: string }).timezone).trim()
-          : "";
-      const now = typeof (output as { now?: unknown }).now === "string" ? String((output as { now?: string }).now).trim() : "";
-      if (timezone || now) {
-        return [
-          "【工具已成功執行】",
-          "模型沒有回傳文字內容，因此以下直接根據工具結果整理：",
-          "",
-          now && timezone ? `時鐘 dashboard 已打開，目前時間是 ${now}，時區是 ${timezone}。` : `目前時區是 ${timezone || "未知"}。`
-        ].join("\n");
-      }
-    }
-
-    return [
-      "【工具已成功執行】",
-      "模型沒有回傳文字內容，因此以下直接保留最近一次工具結果：",
-      "",
-      `工具：${label}`,
-      output !== undefined ? `結果：\n${stringifyAny(output)}` : toolResult.detail?.trim() || "（沒有可顯示的工具內容）"
-    ].join("\n");
-  }
-
-  if (isSequentialThinkingSkill(skill)) {
-    return buildSequentialThinkingFallbackContent(task);
-  }
-
-  return buildAgentFailureContent("模型沒有回傳任何內容。", task);
-}
-
 function isCategoryEnabled(flag: boolean | undefined) {
   return flag !== false;
+}
+
+function sameMcpCatalogConfig(left: McpServerConfig, right: McpServerConfig) {
+  return (
+    left.id === right.id &&
+    left.sseUrl === right.sseUrl &&
+    left.transport === right.transport &&
+    left.authToken === right.authToken &&
+    left.useLocalProxy === right.useLocalProxy &&
+    JSON.stringify(left.customHeaders ?? {}) === JSON.stringify(right.customHeaders ?? {}) &&
+    JSON.stringify(left.toolPolicies ?? {}) === JSON.stringify(right.toolPolicies ?? {})
+  );
 }
 
 export default function App() {
@@ -553,22 +278,17 @@ export default function App() {
     if (storedMode === "magi_vote" || storedMode === "magi_consensus" || storedMode === "one_to_one") return storedMode;
     return "one_to_one";
   });
-  const [skillExecutionMode, setSkillExecutionMode] = useState<SkillExecutionMode>(() =>
-    initialUi.skillExecutionMode === "multi_turn" ? "multi_turn" : "single_turn"
-  );
-  const [skillVerifyMax, setSkillVerifyMax] = useState<number>(() => clampSkillVerifyMax(initialUi.skillVerifyMax ?? 1));
-  const [skillToolLoopMax, setSkillToolLoopMax] = useState<number>(() => clampSkillToolLoopMax(initialUi.skillToolLoopMax ?? 6));
-  const [skillVerifierAgentId, setSkillVerifierAgentId] = useState<string>(() => initialUi.skillVerifierAgentId ?? "");
   const [historyMessageLimit, setHistoryMessageLimit] = useState<number>(() => clampHistoryLimit(initialUi.historyMessageLimit ?? 10));
   const [userName, setUserName] = useState<string>(() => initialUi.userName ?? "You");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | undefined>(() => initialUi.userAvatarUrl);
   const [userDescription, setUserDescription] = useState<string>(() => initialUi.userDescription ?? "");
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>(() => normalizeVoiceSettings(initialUi.voiceSettings ?? initialUi.radioSettings));
-  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "prompts" | "voice" | null;
+  type ConfigModalKey = "agent" | "credentials" | "mode" | "history" | "docs" | "mcp" | "skills" | "tools" | "team" | "load_balancers" | "voice" | null;
   const [configModal, setConfigModal] = useState<ConfigModalKey>(null);
   const [loadBalancerDraftSeed, setLoadBalancerDraftSeed] = useState<{ token: number; draft: LoadBalancerConfig } | null>(null);
 
   const [builtInTools, setBuiltInTools] = useState<BuiltInToolConfig[]>(() => loadBuiltInTools());
+  const [explicitSkillId, setExplicitSkillId] = useState<string | null>(null);
   const [loadBalancers, setLoadBalancers] = useState<LoadBalancerConfig[]>(() => loadLoadBalancers());
   const [loadBalancerPanelSelectedId, setLoadBalancerPanelSelectedId] = useState<string | null>(null);
   const systemBuiltInTools = useMemo(() => SYSTEM_BUILT_IN_TOOLS, []);
@@ -578,12 +298,12 @@ export default function App() {
   );
 
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => loadMcpServers());
-  const [mcpPromptTemplates, setMcpPromptTemplates] = useState<McpPromptTemplates>(() => loadMcpPromptTemplates());
-  const [promptTemplateFiles, setPromptTemplateFiles] = useState<PromptTemplateFileState[]>(() => loadPromptTemplateFiles());
-  const [promptTemplateTestStates, setPromptTemplateTestStates] = useState<Record<string, PromptTemplateApiTestState>>({});
-  const [promptTemplateTestsRunning, setPromptTemplateTestsRunning] = useState(false);
   const [mcpPanelActiveId, setMcpPanelActiveId] = useState<string | null>(null);
   const [mcpToolsByServer, setMcpToolsByServer] = useState<Record<string, McpTool[]>>({});
+  const mcpServersRef = React.useRef(mcpServers);
+  const mcpToolsByServerRef = React.useRef(mcpToolsByServer);
+  mcpServersRef.current = mcpServers;
+  mcpToolsByServerRef.current = mcpToolsByServer;
   const mcpClientManager = useMemo(() => new McpClientManager(), []);
   const mcpToolCatalogCache = useMemo(() => new McpToolCatalog(), []);
   const globalMcpToolCatalog = useMemo(
@@ -621,6 +341,33 @@ export default function App() {
     removeTextFile: onDeleteSkillTextFile,
     exportSkill: onExportSkill
   } = useSkillsController({ pushLog });
+  const harnessController = useAgentHarnessController();
+  const [pendingToolConfirmation, setPendingToolConfirmation] = useState<PendingToolConfirmation | null>(null);
+  const pendingToolConfirmationRef = React.useRef<PendingToolConfirmation | null>(null);
+
+  function requestToolConfirmation(message: string, signal: AbortSignal): Promise<boolean> {
+    if (signal.aborted) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let pending!: PendingToolConfirmation;
+      const onAbort = () => settle(false);
+      const settle = (allowed: boolean) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        if (pendingToolConfirmationRef.current === pending) {
+          pendingToolConfirmationRef.current = null;
+          setPendingToolConfirmation(null);
+        }
+        resolve(allowed);
+      };
+      pending = { message: message.slice(0, 8_000), settle };
+      pendingToolConfirmationRef.current = pending;
+      setPendingToolConfirmation(pending);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) settle(false);
+    });
+  }
   const chatHistoryController = useChatHistoryController({
     activeTab,
     historyMessageLimit,
@@ -670,7 +417,6 @@ export default function App() {
     configuredCredentialCount,
     credentialTestResults
   } = credentialController;
-  const promptTemplateRuntime = useMemo(() => buildPromptTemplateRuntime(promptTemplateFiles), [promptTemplateFiles]);
   const tutorialRuntimeBase = useMemo(
     () => ({
       agents,
@@ -742,19 +488,12 @@ export default function App() {
     () => ({ name: userName.trim() || "You", avatarUrl: userAvatarUrl, description: userDescription.trim() }),
     [userName, userAvatarUrl, userDescription]
   );
-  const executeResolvedToolSelection = createToolSelectionExecutor({
-    appendMessage: append,
-    pushLog: logNow,
-    mcpClientManager,
-    getUserProfilePayload: () => getUserProfileToolPayload(userProfile)
-  });
   const mcpCountRef = React.useRef(mcpServers.length);
   const tutorialSnapshotRef = React.useRef<TutorialWorkspaceSnapshot | null>(null);
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
   const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
   const activeChatAbortRef = React.useRef<AbortController | null>(null);
-  const skillExecutionLocksRef = React.useRef<Map<string, AbortController>>(new Map());
   const tutorialRestoringRef = React.useRef(false);
   const tutorialKeepChangesHint = "即使選擇保留這次教學變更，系統仍會刪除「教學用DOC」，避免之後的問答持續被案例 2 的人格設定影響。";
 
@@ -817,10 +556,6 @@ export default function App() {
     saveUiState({
       activeTab,
       mode,
-      skillExecutionMode,
-      skillVerifyMax,
-      skillToolLoopMax,
-      skillVerifierAgentId,
       activeAgentId,
       executionDeadlineMs,
       historyMessageLimit,
@@ -829,7 +564,7 @@ export default function App() {
       userDescription,
       voiceSettings
     });
-  }, [activeTab, mode, skillExecutionMode, skillVerifyMax, skillToolLoopMax, skillVerifierAgentId, activeAgentId, executionDeadlineMs, historyMessageLimit, userName, userAvatarUrl, userDescription, voiceSettings]);
+  }, [activeTab, mode, activeAgentId, executionDeadlineMs, historyMessageLimit, userName, userAvatarUrl, userDescription, voiceSettings]);
 
   React.useEffect(() => {
     saveMcpServers(mcpServers);
@@ -842,21 +577,16 @@ export default function App() {
   }, [mcpClientManager]);
 
   React.useEffect(() => {
-    saveMcpPromptTemplates(mcpPromptTemplates);
-  }, [mcpPromptTemplates]);
-
-  React.useEffect(() => {
-    const nextZh = promptTemplateRuntime.resolve("tool-decision", "zh").template;
-    const nextEn = promptTemplateRuntime.resolve("tool-decision", "en").template;
-    setMcpPromptTemplates((prev) => {
-      if (prev.zh === nextZh && prev.en === nextEn) return prev;
-      return { ...prev, zh: nextZh, en: nextEn };
-    });
-  }, [promptTemplateRuntime]);
-
-  React.useEffect(() => {
-    savePromptTemplateFiles(promptTemplateFiles);
-  }, [promptTemplateFiles]);
+    const abortActiveRun = () => {
+      const controller = activeChatAbortRef.current;
+      if (controller && !controller.signal.aborted) controller.abort(new Error("Page lifecycle ended the active chat run."));
+    };
+    globalThis.addEventListener?.("pagehide", abortActiveRun);
+    return () => {
+      globalThis.removeEventListener?.("pagehide", abortActiveRun);
+      abortActiveRun();
+    };
+  }, []);
 
   React.useEffect(() => {
     saveBuiltInTools(builtInTools);
@@ -902,9 +632,6 @@ export default function App() {
       setConfigModal: (modal) => setConfigModal(modal),
       setActiveAgentId,
       setSelectedAgentId,
-      setSkillExecutionMode,
-      setSkillVerifyMax: (value) => setSkillVerifyMax(clampSkillVerifyMax(value)),
-      setSkillToolLoopMax: (value) => setSkillToolLoopMax(clampSkillToolLoopMax(value)),
       setAgentLoadBalancerRetryPolicy: (agentId, value) =>
         setAgentLoadBalancerRetryPolicy(agentId, {
           delaySecond:
@@ -1093,12 +820,12 @@ export default function App() {
     return allBuiltInTools.filter((tool) => allowed.has(tool.id));
   }, [activeAgent, allBuiltInTools]);
 
-  const skillSessionSnapshot = useMemo(() => buildSkillSessionSnapshot({ agent: activeAgent, skills }), [activeAgent, skills]);
-  const availableSkillsForAgent = useMemo(() => getAllowedSkillsFromSnapshot(skillSessionSnapshot, skills), [skillSessionSnapshot, skills]);
-  const configuredSkillVerifierAgent = useMemo(
-    () => (skillVerifierAgentId ? agents.find((agent) => agent.id === skillVerifierAgentId) ?? null : null),
-    [agents, skillVerifierAgentId]
-  );
+  const availableSkillsForAgent = useMemo(() => {
+    if (!activeAgent?.enableSkills) return [];
+    if (!activeAgent.allowedSkillIds) return skills;
+    const allowed = new Set(activeAgent.allowedSkillIds);
+    return skills.filter((skill) => allowed.has(skill.id));
+  }, [activeAgent, skills]);
 
   const loadBalancerSlots = useMemo(() => loadBalancers.slice().sort((a, b) => a.name.localeCompare(b.name)), [loadBalancers]);
   const configuredLoadBalancerCount = useMemo(
@@ -1163,10 +890,6 @@ export default function App() {
     return primary?.hydratedAgent ?? agent;
   }
 
-  function resolveSkillVerifierAgent(active: AgentConfig) {
-    return configuredSkillVerifierAgent ? hydrateAgentCredentials(configuredSkillVerifierAgent) : hydrateAgentCredentials(active);
-  }
-
   const magiSetup = useMemo(() => {
     return MAGI_UNIT_LAYOUT.map(({ unitId, unitNumber }) => {
       const matches = agents.filter((agent) => matchesManagedMagiUnit(agent, unitId));
@@ -1217,18 +940,17 @@ export default function App() {
 
   function buildMagiUnitSystem(unitId: MagiUnitId, agent: AgentConfig, question: string) {
     const bundle = getMagiSkillBundle(unitId);
-    const prepared = loadSkillRuntime({
-      skill: bundle.skill,
-      skillDocs: bundle.docs,
-      skillFiles: bundle.files,
-      agentDocs: [],
-      availableMcpServers: [],
-      availableMcpTools: [],
-      availableBuiltinTools: [],
-      userInput: question,
-      skillInput: {},
-      systemPromptTemplate: promptTemplateRuntime.resolve("skill-runtime-system", mcpPromptTemplates.activeId).template
-    });
+    const skillContext = [
+      `Skill: ${bundle.skill.name}`,
+      bundle.skill.skillMarkdown,
+      ...bundle.docs.map((doc) => `[UNTRUSTED_SKILL_REFERENCE:${doc.path}]\n${doc.content}`),
+      ...bundle.files
+        .filter((file) => typeof file.content === "string")
+        .map((file) => `[UNTRUSTED_SKILL_ASSET:${file.path}]\n${file.content}`),
+      `Question:\n${question}`
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     const profileLines = [
       `S.C. MAGI unit: ${unitId}`,
@@ -1240,7 +962,7 @@ export default function App() {
       .filter(Boolean)
       .join("\n\n");
 
-    return [profileLines, prepared.system].filter(Boolean).join("\n\n");
+    return [profileLines, skillContext].filter(Boolean).join("\n\n");
   }
 
   function buildMagiPreparedUnits(question: string): { ok: true; units: MagiPreparedUnit[] } | { ok: false; reason: string; state: MagiRenderState } {
@@ -1335,7 +1057,9 @@ export default function App() {
             instances: [
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
-                description: "Primary tutorial instance"
+                description: "Primary tutorial instance",
+                toolCallingCapability: "native",
+                contextBudget: TUTORIAL_CONTEXT_BUDGET
               })
             ]
           }
@@ -1345,15 +1069,21 @@ export default function App() {
             instances: [
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
-                description: "Primary provider / model baseline"
+                description: "Primary provider / model baseline",
+                toolCallingCapability: "native",
+                contextBudget: TUTORIAL_CONTEXT_BUDGET
               }),
               createLoadBalancerInstance({
                 model: TUTORIAL_SECONDARY_MODEL,
-                description: "Same key with alternate model"
+                description: "Same key with alternate model",
+                toolCallingCapability: "native",
+                contextBudget: TUTORIAL_CONTEXT_BUDGET
               }),
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
-                description: "Different key or provider with primary model"
+                description: "Different key or provider with primary model",
+                toolCallingCapability: "native",
+                contextBudget: TUTORIAL_CONTEXT_BUDGET
               })
             ]
           };
@@ -1390,6 +1120,8 @@ export default function App() {
           failure: false,
           failureCount: 0,
           nextCheckTime: null,
+          toolCallingCapability: "native",
+          contextBudget: TUTORIAL_CONTEXT_BUDGET,
           updatedAt: now
         }
       ],
@@ -1404,6 +1136,8 @@ export default function App() {
       existing.instances[0]?.credentialKeyId === nextEntry.instances[0]?.credentialKeyId &&
       existing.instances[0]?.model === nextEntry.instances[0]?.model &&
       existing.instances[0]?.description === nextEntry.instances[0]?.description &&
+      existing.instances[0]?.toolCallingCapability === nextEntry.instances[0]?.toolCallingCapability &&
+      JSON.stringify(existing.instances[0]?.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
       existing.instances[0]?.failure === false &&
       existing.instances[0]?.failureCount === 0 &&
       existing.instances[0]?.nextCheckTime === null;
@@ -1472,6 +1206,8 @@ export default function App() {
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
+        toolCallingCapability: "native",
+        contextBudget: TUTORIAL_CONTEXT_BUDGET,
         createdAt: existing?.instances[0]?.createdAt
       }),
       createLoadBalancerInstance({
@@ -1486,6 +1222,8 @@ export default function App() {
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
+        toolCallingCapability: "native",
+        contextBudget: TUTORIAL_CONTEXT_BUDGET,
         createdAt: existing?.instances[1]?.createdAt
       }),
       createLoadBalancerInstance({
@@ -1501,6 +1239,8 @@ export default function App() {
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
+        toolCallingCapability: "native",
+        contextBudget: TUTORIAL_CONTEXT_BUDGET,
         createdAt: existing?.instances[2]?.createdAt
       })
     ];
@@ -1524,6 +1264,8 @@ export default function App() {
           instance.credentialKeyId === nextInstance.credentialKeyId &&
           instance.model === nextInstance.model &&
           instance.description === nextInstance.description &&
+          instance.toolCallingCapability === nextInstance.toolCallingCapability &&
+          JSON.stringify(instance.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
           instance.failure === false &&
           instance.failureCount === 0 &&
           instance.nextCheckTime === null
@@ -1746,25 +1488,31 @@ export default function App() {
 
   async function ensureMcpToolsLoadedForServers(
     servers: McpServerConfig[],
-    options?: { onStatus?: (text: string) => void; requestId?: string }
+    options?: { onStatus?: (text: string) => void; requestId?: string; signal?: AbortSignal }
   ) {
-    const unknownServers = servers.filter((server) => !Object.prototype.hasOwnProperty.call(mcpToolsByServer, server.id));
+    if (options?.signal?.aborted) return [];
+    const cachedCatalog = mcpToolsByServerRef.current;
+    const unknownServers = servers.filter((server) => !Object.prototype.hasOwnProperty.call(cachedCatalog, server.id));
     if (!unknownServers.length) {
       return servers
-        .map((server) => ({ server, tools: mcpToolsByServer[server.id] ?? [] }))
+        .map((server) => ({ server, tools: cachedCatalog[server.id] ?? [] }))
         .filter((entry) => entry.tools.length > 0);
     }
 
-    options?.onStatus?.("正在同步 MCP 工具清單中…");
+    if (!options?.signal?.aborted) options?.onStatus?.("正在同步 MCP 工具清單中…");
 
     const loadedEntries = await Promise.all(
       unknownServers.map(async (server) => {
         try {
-          const tools = await mcpToolCatalogCache.load(
-            server,
-            mcpClientManager,
-            (text) => pushLog({ category: "mcp", agent: server.name, requestId: options?.requestId, stage: "mcp_connect", message: text })
+          const tools = await withAbortSignal(
+            mcpToolCatalogCache.load(
+              server,
+              mcpClientManager,
+              (text) => pushLog({ category: "mcp", agent: server.name, requestId: options?.requestId, stage: "mcp_connect", message: text })
+            ),
+            options?.signal
           );
+          if (options?.signal?.aborted) return null;
           logNow({
             category: "mcp",
             agent: server.name,
@@ -1776,6 +1524,7 @@ export default function App() {
           });
           return { serverId: server.id, tools };
         } catch (error) {
+          if (options?.signal?.aborted) return null;
           logNow({
             category: "mcp",
             agent: server.name,
@@ -1796,14 +1545,28 @@ export default function App() {
       return acc;
     }, {});
 
-    if (Object.keys(loadedMap).length > 0) {
-      setMcpToolsByServer((prev) => ({ ...prev, ...loadedMap }));
+    if (options?.signal?.aborted) return [];
+    const currentServers = mcpServersRef.current;
+    const validLoadedMap = Object.fromEntries(
+      Object.entries(loadedMap).filter(([serverId]) => {
+        const requested = servers.find((server) => server.id === serverId);
+        const current = currentServers.find((server) => server.id === serverId);
+        return !!requested && !!current && sameMcpCatalogConfig(requested, current);
+      })
+    );
+    const mergedCatalog = {
+      ...retainMcpToolCatalog(mcpToolsByServerRef.current, currentServers),
+      ...validLoadedMap
+    };
+    mcpToolsByServerRef.current = mergedCatalog;
+    if (Object.keys(validLoadedMap).length > 0) {
+      setMcpToolsByServer(() => mergedCatalog);
     }
 
     return servers
       .map((server) => ({
         server,
-        tools: loadedMap[server.id] ?? mcpToolsByServer[server.id] ?? []
+        tools: validLoadedMap[server.id] ?? mergedCatalog[server.id] ?? []
       }))
       .filter((entry) => entry.tools.length > 0);
   }
@@ -1867,6 +1630,12 @@ export default function App() {
     return true;
   }
 
+  function abortActiveRuns(reason: string) {
+    harnessController.abort(reason);
+    const controller = activeChatAbortRef.current;
+    if (controller && !controller.signal.aborted) controller.abort(new Error(reason));
+  }
+
   async function startTutorial(scenarioId: string) {
     const scenario = getTutorialScenario(scenarioId);
     if (!scenario) {
@@ -1878,77 +1647,95 @@ export default function App() {
     }
     const scenarioIndex = tutorialCatalog.findIndex((item) => item.id === scenarioId);
 
-    const snapshot = await captureTutorialWorkspaceSnapshot(tutorialRuntimeState);
-    tutorialSnapshotRef.current = snapshot;
-    tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(scenario) ? historyMessageLimit : null;
-    tutorialLoadBalancerRetryRestoreRef.current = scenarioRequiresLoadBalancerRetryOverride(scenario) ? {} : null;
-    tutorialStepKeyRef.current = "";
-    setTutorialScenario(scenario);
-    setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
-    setTutorialStepIndex(0);
-    setTutorialOpenedToolResultMessageIds([]);
-    setShowTutorialExitPrompt(false);
-    setConfigModal(null);
-    setIsChatFullscreen(false);
-    setAppEntryMode("workspace");
-    logNow({ category: "tutorial", ok: true, message: `Tutorial started: ${scenario.title}` });
+    tutorialRestoringRef.current = true;
+    abortActiveRuns("Tutorial transition started.");
+    try {
+      const snapshot = await captureTutorialWorkspaceSnapshot(tutorialRuntimeState);
+      tutorialSnapshotRef.current = snapshot;
+      tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(scenario) ? historyMessageLimit : null;
+      tutorialLoadBalancerRetryRestoreRef.current = scenarioRequiresLoadBalancerRetryOverride(scenario) ? {} : null;
+      tutorialStepKeyRef.current = "";
+      setTutorialScenario(scenario);
+      setTutorialScenarioIndex(scenarioIndex >= 0 ? scenarioIndex : 0);
+      setTutorialStepIndex(0);
+      setTutorialOpenedToolResultMessageIds([]);
+      setShowTutorialExitPrompt(false);
+      setConfigModal(null);
+      setIsChatFullscreen(false);
+      setAppEntryMode("workspace");
+      logNow({ category: "tutorial", ok: true, message: `Tutorial started: ${scenario.title}` });
+    } finally {
+      tutorialRestoringRef.current = false;
+    }
   }
 
   async function moveToNextTutorialScenario() {
-    const restoredHistoryLimit = restoreTutorialHistoryLimitIfNeeded();
-    restoreTutorialLoadBalancerRetryIfNeeded();
-    if (tutorialScenarioIndex === null) {
-      setShowTutorialExitPrompt(true);
-      return;
+    tutorialRestoringRef.current = true;
+    abortActiveRuns("Tutorial case transition started.");
+    try {
+      const restoredHistoryLimit = restoreTutorialHistoryLimitIfNeeded();
+      restoreTutorialLoadBalancerRetryIfNeeded();
+      if (tutorialScenarioIndex === null) {
+        setShowTutorialExitPrompt(true);
+        return;
+      }
+      const nextScenario = tutorialCatalog[tutorialScenarioIndex + 1] ?? null;
+      if (!nextScenario) {
+        setShowTutorialExitPrompt(true);
+        return;
+      }
+      if (nextScenario.id !== "docs-persona-chat") {
+        await removeTutorialDocIfPresent(`left case 2 before entering ${nextScenario.title}`);
+      }
+      tutorialStepKeyRef.current = "";
+      tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(nextScenario)
+        ? restoredHistoryLimit ?? historyMessageLimit
+        : null;
+      tutorialLoadBalancerRetryRestoreRef.current = scenarioRequiresLoadBalancerRetryOverride(nextScenario) ? {} : null;
+      setTutorialScenario(nextScenario);
+      setTutorialScenarioIndex(tutorialScenarioIndex + 1);
+      setTutorialStepIndex(0);
+      setTutorialComposerSeed(null);
+      setTutorialOpenedToolResultMessageIds([]);
+      setConfigModal(null);
+      setIsChatFullscreen(false);
+      logNow({ category: "tutorial", ok: true, message: `Tutorial case switched: ${nextScenario.title}` });
+    } finally {
+      tutorialRestoringRef.current = false;
     }
-    const nextScenario = tutorialCatalog[tutorialScenarioIndex + 1] ?? null;
-    if (!nextScenario) {
-      setShowTutorialExitPrompt(true);
-      return;
-    }
-    if (nextScenario.id !== "docs-persona-chat") {
-      await removeTutorialDocIfPresent(`left case 2 before entering ${nextScenario.title}`);
-    }
-    tutorialStepKeyRef.current = "";
-    tutorialHistoryLimitRestoreRef.current = scenarioRequiresHistoryLimitOne(nextScenario)
-      ? restoredHistoryLimit ?? historyMessageLimit
-      : null;
-    tutorialLoadBalancerRetryRestoreRef.current = scenarioRequiresLoadBalancerRetryOverride(nextScenario) ? {} : null;
-    setTutorialScenario(nextScenario);
-    setTutorialScenarioIndex(tutorialScenarioIndex + 1);
-    setTutorialStepIndex(0);
-    setTutorialComposerSeed(null);
-    setTutorialOpenedToolResultMessageIds([]);
-    setConfigModal(null);
-    setIsChatFullscreen(false);
-    logNow({ category: "tutorial", ok: true, message: `Tutorial case switched: ${nextScenario.title}` });
   }
 
   async function finishTutorial(keepWorkspaceChanges: boolean) {
-    restoreTutorialHistoryLimitIfNeeded();
-    restoreTutorialLoadBalancerRetryIfNeeded();
-    if (!keepWorkspaceChanges && tutorialSnapshotRef.current) {
-      await restoreTutorialWorkspaceSnapshot(tutorialSnapshotRef.current);
-      setBuiltInTools(tutorialSnapshotRef.current.builtInTools);
-      await reloadSkillsFromStore(skillPanelSelectedId);
-      const tutorialDocs = (await listDocs()).filter((doc) => doc.title === TUTORIAL_DOC_NAME);
-      if (tutorialDocs.length) {
-        await Promise.all(tutorialDocs.map((doc) => deleteDoc(doc.id)));
-        await reloadDocs();
+    tutorialRestoringRef.current = true;
+    abortActiveRuns("Tutorial workspace restore started.");
+    try {
+      restoreTutorialHistoryLimitIfNeeded();
+      restoreTutorialLoadBalancerRetryIfNeeded();
+      if (!keepWorkspaceChanges && tutorialSnapshotRef.current) {
+        await restoreTutorialWorkspaceSnapshot(tutorialSnapshotRef.current);
+        setBuiltInTools(tutorialSnapshotRef.current.builtInTools);
+        await reloadSkillsFromStore(skillPanelSelectedId);
+        const tutorialDocs = (await listDocs()).filter((doc) => doc.title === TUTORIAL_DOC_NAME);
+        if (tutorialDocs.length) {
+          await Promise.all(tutorialDocs.map((doc) => deleteDoc(doc.id)));
+          await reloadDocs();
+        }
+        setMcpServers((prev) => prev.filter((server) => server.name !== TUTORIAL_MCP_NAME));
+        logNow({ category: "tutorial", ok: true, message: "Tutorial changes discarded for docs, MCP, tools, and skills" });
+      } else if (tutorialScenario) {
+        await removeTutorialDocIfPresent("tutorial finished");
+        logNow({ category: "tutorial", ok: true, message: `Tutorial ended: ${tutorialScenario.title}` });
       }
-      setMcpServers((prev) => prev.filter((server) => server.name !== TUTORIAL_MCP_NAME));
-      logNow({ category: "tutorial", ok: true, message: "Tutorial changes discarded for docs, MCP, tools, and skills" });
-    } else if (tutorialScenario) {
-      await removeTutorialDocIfPresent("tutorial finished");
-      logNow({ category: "tutorial", ok: true, message: `Tutorial ended: ${tutorialScenario.title}` });
-    }
 
-    tutorialSnapshotRef.current = null;
-    tutorialHistoryLimitRestoreRef.current = null;
-    tutorialLoadBalancerRetryRestoreRef.current = null;
-    tutorialStepKeyRef.current = "";
-    resetTutorialSession();
-    setConfigModal(null);
+      tutorialSnapshotRef.current = null;
+      tutorialHistoryLimitRestoreRef.current = null;
+      tutorialLoadBalancerRetryRestoreRef.current = null;
+      tutorialStepKeyRef.current = "";
+      resetTutorialSession();
+      setConfigModal(null);
+    } finally {
+      tutorialRestoringRef.current = false;
+    }
   }
 
   function advanceTutorialStep() {
@@ -1987,7 +1774,13 @@ export default function App() {
       setAgents(next);
       setActiveAgentId(normalizedAgent.id);
       setSelectedAgentId(normalizedAgent.id);
-      logNow({ category: "agents", agent: normalizedAgent.name, ok: true, message: "Agent saved", details: JSON.stringify(normalizedAgent, null, 2) });
+      logNow({
+        category: "agents",
+        agent: normalizedAgent.name,
+        ok: true,
+        message: "Agent saved",
+        details: `type=${normalizedAgent.type}\nload_balancer=${normalizedAgent.loadBalancerId ?? "none"}\nmodel=${normalizedAgent.model ?? "-"}`
+      });
     } catch (e) {
       logNow({ category: "agents", agent: a.name, ok: false, message: "Agent save failed", details: errorMessage(e) });
     }
@@ -2008,970 +1801,15 @@ export default function App() {
   }
 
   function stopActiveChatExecution() {
+    if (harnessController.active) {
+      abortActiveRuns("使用者中斷目前執行。");
+      logNow({ category: "chat", ok: false, outcome: "degraded", message: "Active chat execution aborted by user" });
+      return;
+    }
     const controller = activeChatAbortRef.current;
     if (!controller || controller.signal.aborted) return;
     controller.abort(new Error("使用者中斷目前執行。"));
     logNow({ category: "chat", ok: false, outcome: "degraded", message: "Active chat execution aborted by user" });
-  }
-
-  const {
-    runToolDecision,
-    runSkillDecision,
-    runSkillVerifyDecision,
-    runSkillBootstrapPlan,
-    runSkillStepPlanner,
-    runSkillCompletionGate
-  } = createDecisionRunners({
-    invoke: (args) => runOneToOneWithLoadBalancer({
-      logicalAgent: args.agent,
-      input: args.input,
-      history: [],
-      requestId: args.requestId,
-      requestLabel: args.requestLabel,
-      deadline: args.deadline,
-      onDelta: () => {},
-      onLog: args.onLog
-    }),
-    pushLog: logNow
-  });
-
-  async function resolveToolAugmentedInputDetailed(args: {
-    input: string;
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    availableBuiltinTools: BuiltInToolConfig[];
-    availableMcpServers: McpServerConfig[];
-    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-    toolEntries: ToolEntry[];
-    decisionContext?: string;
-    onStatus?: (text: string) => void;
-    promptDetail?: ToolPromptDetailMode;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }): Promise<ToolAugmentationResult> {
-    if (args.toolEntries.length === 0) {
-      if (args.availableBuiltinTools.length > 0) {
-        logNow({ category: "tool", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision skipped: no available tool entries" });
-      } else if (args.availableMcpServers.length === 0) {
-        return { input: args.input, status: "no_entries", detail: "沒有可用的工具或 MCP server。" };
-      } else if (args.availableMcpTools.length === 0) {
-        logNow({ category: "mcp", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision skipped: no MCP tools loaded yet" });
-      }
-      return { input: args.input, status: "no_entries", detail: "目前沒有可用的工具項目。" };
-    }
-
-    const explicitDecision = inferExplicitToolDecision({
-      input: args.input,
-      availableBuiltinTools: args.availableBuiltinTools,
-      availableMcpTools: args.availableMcpTools
-    });
-    if (explicitDecision) {
-      logNow({
-        category: explicitDecision.type === "mcp_call" ? "mcp" : "tool",
-        agent: args.agent.name,
-        requestId: args.requestId,
-        stage: "tool decision",
-        outcome: "success",
-        message: `Tool decision bypassed by explicit request: ${explicitDecision.tool}`,
-        details: JSON.stringify(explicitDecision, null, 2)
-      });
-      return executeResolvedToolSelection({
-        selection: explicitDecision,
-        input: args.input,
-        agent: args.agent,
-        availableBuiltinTools: args.availableBuiltinTools,
-        availableMcpServers: args.availableMcpServers,
-        availableMcpTools: args.availableMcpTools,
-        onStatus: args.onStatus,
-        promptDetail: args.promptDetail ?? "default",
-        requestId: args.requestId,
-        deadline: args.deadline
-      });
-    }
-
-    args.onStatus?.("正在判斷是否需要呼叫工具中…");
-    const decision = await runToolDecision({
-      agent: args.agent,
-      userInput: args.decisionContext ? `${args.input}\n\nCurrent loaded skill context (internal only):\n${args.decisionContext}` : args.input,
-      retry: getRetryPolicyForAgent(args.agent),
-      toolEntries: args.toolEntries,
-      promptTemplate: promptTemplateRuntime.resolve("tool-decision", mcpPromptTemplates.activeId).template,
-      fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`),
-      requestId: args.requestId,
-      deadline: args.deadline
-    });
-
-    if (!decision) {
-      logNow({ category: "tool", agent: args.agent.name, ok: false, requestId: args.requestId, stage: "tool decision", message: "Tool decision failed after retries; continue without tools" });
-      return { input: args.input, status: "decision_failed", detail: "工具判斷在重試後仍失敗，已略過。" };
-    }
-
-    const normalizedDecision = normalizeToolDecisionAgainstAvailableTools({
-      decision,
-      availableBuiltinTools: args.availableBuiltinTools,
-      availableMcpServers: args.availableMcpServers,
-      availableMcpTools: args.availableMcpTools
-    });
-
-    if (decision.type === "mcp_call" && normalizedDecision.type === "builtin_tool_call") {
-      logNow({
-        category: "tool",
-        agent: args.agent.name,
-        ok: true,
-        requestId: args.requestId,
-        stage: "tool decision",
-        message: `Tool decision normalized from MCP to built-in: ${decision.tool}`,
-        details: JSON.stringify({ original: decision, normalized: normalizedDecision }, null, 2)
-      });
-    }
-
-    if (normalizedDecision.type === "no_tool") {
-      logNow({ category: "tool", agent: args.agent.name, requestId: args.requestId, stage: "tool decision", message: "Tool decision resolved: no_tool" });
-      return { input: args.input, status: "no_tool", detail: "模型判斷這一輪不需要工具。" };
-    }
-
-    return executeResolvedToolSelection({
-      selection: normalizedDecision,
-      input: args.input,
-      agent: args.agent,
-      availableBuiltinTools: args.availableBuiltinTools,
-      availableMcpServers: args.availableMcpServers,
-      availableMcpTools: args.availableMcpTools,
-      onStatus: args.onStatus,
-      promptDetail: args.promptDetail ?? "default",
-      requestId: args.requestId,
-      deadline: args.deadline
-    });
-  }
-
-  async function prepareSkillExecution(args: {
-    skill: SkillConfig;
-    skillInput: unknown;
-    userInput: string;
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    availableBuiltinTools: BuiltInToolConfig[];
-    availableMcpServers: McpServerConfig[];
-    availableMcpTools: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-    deferToolDecision?: boolean;
-    onStatus?: (text: string) => void;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }): Promise<PreparedSkillExecution> {
-    args.onStatus?.(`正在載入 skill「${args.skill.name}」中…`);
-    const loaded = loadSkillRuntime({
-      skill: args.skill,
-      skillDocs: args.skill.workflow.useSkillDocs !== false ? await listSkillDocs(args.skill.id) : [],
-      skillFiles: await listSkillFiles(args.skill.id),
-      agentDocs: docsForAgent,
-      availableMcpServers: args.availableMcpServers,
-      availableMcpTools: args.availableMcpTools,
-      availableBuiltinTools: args.availableBuiltinTools,
-      userInput: args.userInput,
-      skillInput: args.skillInput,
-      systemPromptTemplate: promptTemplateRuntime.resolve("skill-runtime-system", mcpPromptTemplates.activeId).template
-    });
-
-    const scopedMcpServers = loaded.runtime.allowMcp
-      ? loaded.runtime.allowedMcpServerIds?.length
-        ? args.availableMcpServers.filter((server) => loaded.runtime.allowedMcpServerIds?.includes(server.id))
-        : args.availableMcpServers
-      : [];
-
-    const scopedMcpTools = loaded.runtime.allowMcp
-      ? args.availableMcpTools.filter((entry) => scopedMcpServers.some((server) => server.id === entry.server.id))
-      : [];
-
-    const scopedBuiltInTools = loaded.runtime.allowBuiltInTools
-      ? loaded.runtime.allowedBuiltInToolIds?.length
-        ? args.availableBuiltinTools.filter((tool) => loaded.runtime.allowedBuiltInToolIds?.includes(tool.id))
-        : args.availableBuiltinTools
-      : [];
-
-    const scopedToolEntries: ToolEntry[] = [
-      ...scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
-      ...scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
-    ];
-
-    const decisionContext = buildCompactSkillDecisionContext({
-      instructions: loaded.runtime.instructions,
-      references: loaded.runtime.loadedReferences,
-      assets: loaded.runtime.loadedAssets
-    });
-
-    let toolAugmentation: ToolAugmentationResult | null = null;
-    const finalInput = args.deferToolDecision
-      ? loaded.finalInput
-      : await (async () => {
-          const result = await resolveToolAugmentedInputDetailed({
-            input: loaded.finalInput,
-            agent: args.agent,
-            adapter: args.adapter,
-            availableBuiltinTools: scopedBuiltInTools,
-            availableMcpServers: scopedMcpServers,
-            availableMcpTools: scopedMcpTools,
-            toolEntries: scopedToolEntries,
-            decisionContext,
-            onStatus: args.onStatus,
-            requestId: args.requestId,
-            deadline: args.deadline
-          });
-          toolAugmentation = result.status === "tool_called" ? result : null;
-          return result.input;
-        })();
-
-    return {
-      baseInput: loaded.finalInput,
-      finalInput,
-      toolAugmentation,
-      system: loaded.system,
-      trace: loaded.trace,
-      runtime: loaded.runtime,
-      scopedBuiltInTools,
-      scopedMcpServers,
-      scopedMcpTools,
-      decisionContext
-    };
-  }
-
-  async function executeMultiTurnSkill(args: {
-    initialTrace: ChatTraceEntry[];
-    prepared: PreparedSkillExecution;
-    skill: SkillConfig;
-    agent: AgentConfig;
-    adapter: ReturnType<typeof pickAdapter>;
-    userInput: string;
-    assistantMessageId: string;
-    onStatus?: (text: string) => void;
-    requestId?: string;
-    deadline?: ExecutionDeadline;
-  }): Promise<{ finalInput: string; trace: ChatTraceEntry[]; todo: SkillTodoItem[]; phase: SkillPhase; finalAnswerOverride?: string }> {
-    if (skillExecutionLocksRef.current.has(args.skill.id)) {
-      throw new Error(`Skill「${args.skill.name}」正在執行中，請等待目前執行完成或先停止。`);
-    }
-    const lockController = new AbortController();
-    skillExecutionLocksRef.current.set(args.skill.id, lockController);
-    const skillDeadline = args.deadline
-      ? createDeadline({
-          totalMs: Math.max(1, args.deadline.remainingMs()),
-          externalSignal: combineSignals(args.deadline.signal, lockController.signal),
-          label: `skill ${args.skill.name}`
-        })
-      : undefined;
-    const verifierAgent = resolveSkillVerifierAgent(args.agent);
-    const scopedToolEntries: ToolEntry[] = [
-      ...args.prepared.scopedMcpTools.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
-      ...args.prepared.scopedBuiltInTools.map((tool) => ({ kind: "builtin" as const, tool }))
-    ];
-
-    const updateAssistantProgress = (todo: SkillTodoItem[], phase: SkillPhase, trace?: ChatTraceEntry[]) => {
-      const patch: Partial<ChatMessage> = {
-        skillGoal: args.userInput,
-        skillTodo: todo.length ? todo : undefined,
-        skillPhase: phase,
-        statusText: formatSkillPhaseStatus(phase),
-        isStreaming: true,
-        hideWhileStreaming: false
-      };
-      if (trace) {
-        patch.skillTrace = trace.length ? trace : undefined;
-      }
-      patchMessage(args.assistantMessageId, patch);
-    };
-
-    let bootstrapPlanMeta: SkillBootstrapPlan | null = null;
-
-    const resolveScopedMcpServerId = (toolName: string, preferredServerId?: string | null) => {
-      const resolution = resolveMcpServerId({
-        requestedServerId: preferredServerId,
-        toolName,
-        availableMcpTools: args.prepared.scopedMcpTools
-      });
-      return resolution.ok ? resolution.serverId : null;
-    };
-
-    const chooseObservationSelection = (preferredServerId?: string | null): BuiltInToolAction | McpAction | null => {
-      const observeScope = filterPreparedToolScopeByIntent(args.prepared, new Set<ToolIntent>(["observe"]));
-      const ranked = observeScope.toolEntries
-        .map((entry) => {
-          const name = entry.kind === "mcp" ? entry.tool.name : entry.tool.name;
-          const description = entry.kind === "mcp" ? entry.tool.description ?? "" : entry.tool.description ?? "";
-          const haystack = `${name} ${description}`.toLowerCase();
-          let score = 0;
-          if (haystack.includes("snapshot")) score += 100;
-          if (haystack.includes("get text") || haystack.includes("get_text") || haystack.includes("content") || haystack.includes("read")) score += 80;
-          if (haystack.includes("url") || haystack.includes("status") || haystack.includes("state")) score += 60;
-          if (haystack.includes("list") || haystack.includes("query") || haystack.includes("inspect")) score += 40;
-          if (haystack.includes("screenshot")) score += 20;
-          if (entry.kind === "mcp") score += 10;
-          if (preferredServerId && entry.kind === "mcp" && entry.server.id === preferredServerId) score += 500;
-          return { entry, score };
-        })
-        .sort((a, b) => b.score - a.score);
-
-      const candidate = ranked[0]?.entry;
-      if (!candidate) return null;
-
-      if (candidate.kind === "builtin") {
-        return {
-          type: "builtin_tool_call",
-          tool: candidate.tool.name,
-          input: {}
-        };
-      }
-
-      return {
-        type: "mcp_call",
-        serverId: candidate.server.id,
-        tool: candidate.tool.name,
-        input: {}
-      };
-    };
-
-    const buildSelectionForDecision = (
-      decision: Extract<SkillStepDecision, { type: "act" }>,
-      preferredServerId?: string | null
-    ): BuiltInToolAction | McpAction | null => {
-      if (decision.toolKind === "builtin") {
-        const tool = args.prepared.scopedBuiltInTools.find((item) => item.name === decision.toolName);
-        return tool ? { type: "builtin_tool_call", tool: tool.name, input: decision.input ?? {} } : null;
-      }
-      const serverId = resolveScopedMcpServerId(decision.toolName, preferredServerId);
-      return serverId ? { type: "mcp_call", serverId, tool: decision.toolName, input: decision.input ?? {} } : null;
-    };
-
-    const convertToolDecisionToSkillStep = (
-      selection: BuiltInToolAction | McpAction | { type: "no_tool" } | null,
-      reason: string
-    ): SkillStepDecision | null => {
-      if (!selection || selection.type === "no_tool") return null;
-      if (selection.type === "builtin_tool_call") {
-        const requestConfirmationTool =
-          args.prepared.scopedBuiltInTools.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
-          SYSTEM_BUILT_IN_TOOLS.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
-          null;
-        if (requestConfirmationTool && selection.tool === requestConfirmationTool.name) {
-          const input = selection.input && typeof selection.input === "object" ? (selection.input as Record<string, unknown>) : {};
-          const message = String(input.message ?? reason).trim() || reason;
-          return {
-            type: "ask_user",
-            reason,
-            message
-          };
-        }
-        return {
-          type: "act",
-          reason,
-          toolKind: "builtin",
-          toolName: selection.tool,
-          input: selection.input ?? {}
-        };
-      }
-      return {
-        type: "act",
-        reason,
-        toolKind: "mcp",
-        toolName: selection.tool,
-        input: selection.input ?? {}
-      };
-    };
-
-    let trace = [...args.initialTrace];
-
-    async function runRuntimePass(initialInput: string, initialTrace: ChatTraceEntry[]) {
-      return await runMultiTurnSkillRuntime({
-        skill: args.skill,
-        runtime: args.prepared.runtime,
-        userInput: args.userInput,
-        initialInput,
-        initialTrace,
-        toolLoopMax: skillToolLoopMax,
-        deadline: skillDeadline ?? args.deadline,
-        callbacks: {
-          onStatus: args.onStatus,
-          onStateChange: (state) => updateAssistantProgress(state.todo, state.phase),
-          buildToolScopeSummary: () => ({
-            summary: formatToolScopeSummary(scopedToolEntries),
-            toolCount: scopedToolEntries.length
-          }),
-          bootstrapPlan: async () => {
-            const bootstrap = await runSkillBootstrapPlan({
-              agent: args.agent,
-              retry: getRetryPolicyForAgent(args.agent),
-              skill: args.skill,
-              runtime: args.prepared.runtime,
-              userInput: args.userInput,
-              promptTemplate: promptTemplateRuntime.resolve("skill-bootstrap-plan", mcpPromptTemplates.activeId).template,
-              requestId: args.requestId,
-              deadline: skillDeadline ?? args.deadline,
-              onTrace: (label, content) => {
-                pushSkillTrace(trace, label, content);
-                updateAssistantProgress(bootstrapPlanMeta?.todo?.length ? bootstrapTodoList(bootstrapPlanMeta.todo) : [], "bootstrap_plan", trace);
-              }
-            });
-            bootstrapPlanMeta = bootstrap;
-            return bootstrapTodoList(bootstrap.todo);
-          },
-          decideNextStep: async ({ state, currentContext, toolScopeSummary, mustObserve, mustAct, phaseHint }) => {
-            pushSkillTrace(
-              trace,
-              `Runtime snapshot ${state.stepIndex + 1}`,
-              [
-                `phase=${state.phase}`,
-                `mustObserve=${mustObserve}`,
-                `mustAct=${mustAct}`,
-                `manualGate=${state.manualGate}`,
-                `completionStatus=${state.completionStatus}`,
-                state.preferredMcpServerId ? `preferredMcpServerId=${state.preferredMcpServerId}` : "",
-                state.latestReason ? `latestReason=${state.latestReason}` : "",
-                state.recentActionSignatures.length ? `recentActionSignatures=${state.recentActionSignatures.join(" | ")}` : "",
-                state.recentObservationSignatures.length ? `recentObservationSignatures=${state.recentObservationSignatures.join(" | ")}` : "",
-                state.lastBrowserObservation ? `lastBrowserObservation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : "",
-                bootstrapPlanMeta?.taskSummary ? `taskSummary=${bootstrapPlanMeta.taskSummary}` : "",
-                bootstrapPlanMeta?.startUrl ? `startUrl=${bootstrapPlanMeta.startUrl}` : "",
-                phaseHint ? `phaseHint=${phaseHint}` : "",
-                `currentContext:\n${String(currentContext ?? "").slice(0, 2200)}`
-              ]
-                .filter(Boolean)
-                .join("\n")
-            );
-
-            if (mustObserve) {
-              return {
-                type: "observe",
-                reason: phaseHint?.trim() || "Runtime requires an observation step immediately after a state-changing action."
-              };
-            }
-
-            const heuristicDecision = buildBrowserHeuristicDecision({
-              state,
-              userInput: args.userInput,
-              resolveMcpServerId: (toolName) => resolveScopedMcpServerId(toolName, state.preferredMcpServerId)
-            });
-            if (heuristicDecision) {
-              pushSkillTrace(
-                trace,
-                `Heuristic step ${state.stepIndex + 1}`,
-                [
-                  `Decision: ${heuristicDecision.type}`,
-                  `Reason: ${heuristicDecision.reason}`,
-                  state.lastBrowserObservation ? `Observation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : ""
-                ]
-                  .filter(Boolean)
-                  .join("\n")
-              );
-              return heuristicDecision;
-            }
-
-            const fastPathScope = mustAct
-              ? filterPreparedToolScopeByIntent(args.prepared, new Set<ToolIntent>(["state_change", "control"]))
-              : { toolEntries: scopedToolEntries, scopedBuiltInTools: args.prepared.scopedBuiltInTools, scopedMcpTools: args.prepared.scopedMcpTools };
-
-            const shouldUseFastToolDecision =
-              fastPathScope.toolEntries.length > 0 &&
-              ((state.stepIndex === 0 && state.recentActionSignatures.length === 0 && state.recentObservationSignatures.length === 0) || mustAct);
-
-            if (
-              state.stepIndex === 0 &&
-              !mustAct &&
-              args.prepared.runtime.bootstrapAction &&
-              fastPathScope.toolEntries.length > 0
-            ) {
-              const bootstrap = args.prepared.runtime.bootstrapAction;
-              const toolExists =
-                bootstrap.toolKind === "builtin"
-                  ? fastPathScope.scopedBuiltInTools.some((tool) => tool.name === bootstrap.toolName)
-                  : fastPathScope.scopedMcpTools.some((entry) => entry.tools.some((tool) => tool.name === bootstrap.toolName));
-              if (toolExists) {
-                return {
-                  type: "act",
-                  reason: bootstrap.reason ?? "Use the skill bootstrap action to begin the multi-turn workflow.",
-                  toolKind: bootstrap.toolKind,
-                  toolName: bootstrap.toolName,
-                  input: bootstrap.input ?? {}
-                };
-              }
-            }
-
-            if (state.stepIndex === 0 && !mustAct && bootstrapPlanMeta?.startUrl && fastPathScope.toolEntries.length > 0) {
-              const browserOpenServerId = resolveScopedMcpServerId("browser_open", state.preferredMcpServerId);
-              if (browserOpenServerId) {
-                const normalizedStartUrl = normalizeBrowserWorkflowStartUrl(args.userInput, bootstrapPlanMeta.startUrl);
-                return {
-                  type: "act",
-                  reason:
-                    bootstrapPlanMeta.taskSummary?.trim() ||
-                    "Use the bootstrap plan start URL to begin the browser workflow with the most direct stable page.",
-                  toolKind: "mcp",
-                  toolName: "browser_open",
-                  input: {
-                    url: normalizedStartUrl,
-                    headed: resolvePreferredBrowserHeadedMode(args.userInput)
-                  }
-                };
-              }
-            }
-
-            if (shouldUseFastToolDecision) {
-              const fastReason =
-                state.stepIndex === 0
-                  ? "Initial multi-turn step should start with a concrete tool action when tools are available."
-                  : "Repeated observation did not advance the workflow, so choose a concrete action or ask_user.";
-              const fastPrompt = [
-                stripPreviousToolPromptSummaries(currentContext),
-                state.stepIndex === 0
-                  ? "Internal runtime request: choose the first concrete tool step for this multi-turn workflow."
-                  : "Internal runtime request: repeated observation did not advance the workflow. Choose one concrete action or ask_user. Do not choose observe."
-              ]
-                .filter(Boolean)
-                .join("\n\n");
-
-              const fastDecision = await runToolDecision({
-                agent: args.agent,
-                userInput: args.prepared.decisionContext ? `${fastPrompt}\n\nCurrent loaded skill context (internal only):\n${args.prepared.decisionContext}` : fastPrompt,
-                retry: getRetryPolicyForAgent(args.agent),
-                toolEntries: fastPathScope.toolEntries,
-                promptTemplate: promptTemplateRuntime.resolve("tool-decision", mcpPromptTemplates.activeId).template,
-                fallbackPromptTemplate: getDefaultPromptTemplate(`tool-decision.${mcpPromptTemplates.activeId}`),
-                requestId: args.requestId,
-                deadline: skillDeadline ?? args.deadline
-              });
-
-              if (fastDecision) {
-                const normalizedFastDecision = normalizeToolDecisionAgainstAvailableTools({
-                  decision: fastDecision,
-                  availableBuiltinTools: fastPathScope.scopedBuiltInTools,
-                  availableMcpServers: args.prepared.scopedMcpServers,
-                  availableMcpTools: fastPathScope.scopedMcpTools
-                });
-                const stepDecision = convertToolDecisionToSkillStep(normalizedFastDecision, fastReason);
-                if (stepDecision) {
-                  return stepDecision;
-                }
-              }
-            }
-
-            return await runSkillStepPlanner({
-              agent: args.agent,
-              retry: getRetryPolicyForAgent(args.agent),
-              state,
-              skill: args.skill,
-              runtime: args.prepared.runtime,
-              userInput: args.userInput,
-              currentContext,
-              toolScopeSummary,
-              mustObserve,
-              mustAct,
-              phaseHint,
-              promptTemplate: promptTemplateRuntime.resolve("skill-planner-step", mcpPromptTemplates.activeId).template,
-              requestId: args.requestId,
-              deadline: skillDeadline ?? args.deadline,
-              onTrace: (label, content) => {
-                pushSkillTrace(trace, label, content);
-                updateAssistantProgress(state.todo, "plan_next_step", trace);
-              }
-            });
-          },
-          runObservation: async ({ state, currentContext }) => {
-            const selection = chooseObservationSelection(state.preferredMcpServerId);
-            if (!selection) {
-              return {
-                context: currentContext,
-                detail: "目前沒有可用的 observation 工具。"
-              };
-            }
-            const result = await executeResolvedToolSelection({
-              selection,
-              input: currentContext,
-              agent: args.agent,
-              availableBuiltinTools: args.prepared.scopedBuiltInTools,
-              availableMcpServers: args.prepared.scopedMcpServers,
-              availableMcpTools: args.prepared.scopedMcpTools,
-              onStatus: args.onStatus,
-              promptDetail: "actionable",
-              deadline: skillDeadline ?? args.deadline
-            });
-
-            return {
-              context: result.input,
-              failed: result.ok === false,
-              detail: result.browserObservation
-                ? [result.detail, formatBrowserObservationDigest(result.browserObservation)].filter(Boolean).join("\n\n")
-                : result.detail,
-              observationSignature: result.observationSignature,
-              actionSignature: result.actionSignature,
-              browserObservation: result.browserObservation,
-              preferredMcpServerId: result.serverId
-            };
-          },
-          runAction: async ({ decision, state, currentContext }) => {
-            const selection = buildSelectionForDecision(decision, state.preferredMcpServerId);
-            if (!selection) {
-              const detail = `找不到可用工具：${decision.toolKind}/${decision.toolName}`;
-              return {
-                context: appendToolPromptSummary(currentContext, detail),
-                detail,
-                toolLabel: `${decision.toolKind}:${decision.toolName}`
-              };
-            }
-
-            const result = await executeResolvedToolSelection({
-              selection,
-              input: currentContext,
-              agent: args.agent,
-              availableBuiltinTools: args.prepared.scopedBuiltInTools,
-              availableMcpServers: args.prepared.scopedMcpServers,
-              availableMcpTools: args.prepared.scopedMcpTools,
-              onStatus: args.onStatus,
-              promptDetail: "actionable",
-              deadline: skillDeadline ?? args.deadline
-            });
-
-            const enrichedBrowserObservation = enrichActionBrowserObservation({
-              state,
-              decision,
-              browserObservation: result.browserObservation
-            });
-
-            return {
-              context: result.input,
-              failed: result.ok === false,
-              detail: enrichedBrowserObservation
-                ? [result.detail, formatBrowserObservationDigest(enrichedBrowserObservation)].filter(Boolean).join("\n\n")
-                : result.detail,
-              toolLabel: result.toolLabel,
-              actionSignature: result.actionSignature,
-              observationSignature: result.observationSignature,
-              confirmed: confirmedFromToolOutput(result.toolOutput),
-              browserObservation: enrichedBrowserObservation,
-              preferredMcpServerId: result.serverId
-            };
-          },
-          runManualGate: async ({ decision, currentContext }) => {
-            const requestTool =
-              args.prepared.scopedBuiltInTools.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
-              SYSTEM_BUILT_IN_TOOLS.find((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID) ??
-              null;
-            if (!requestTool) {
-              return {
-                context: currentContext,
-                detail: decision.message,
-                confirmed: false
-              };
-            }
-
-            const manualResult = await executeResolvedToolSelection({
-              selection: {
-                type: "builtin_tool_call",
-                tool: requestTool.name,
-                input: { message: decision.message }
-              },
-              input: currentContext,
-              agent: args.agent,
-              availableBuiltinTools: args.prepared.scopedBuiltInTools.some((tool) => tool.id === SYSTEM_REQUEST_CONFIRMATION_TOOL_ID)
-                ? args.prepared.scopedBuiltInTools
-                : [...args.prepared.scopedBuiltInTools, requestTool],
-              availableMcpServers: args.prepared.scopedMcpServers,
-              availableMcpTools: args.prepared.scopedMcpTools,
-              onStatus: args.onStatus,
-              promptDetail: "actionable",
-              deadline: skillDeadline ?? args.deadline
-            });
-
-            return {
-              context: manualResult.input,
-              failed: manualResult.ok === false,
-              detail: manualResult.detail ?? decision.message,
-              toolLabel: manualResult.toolLabel,
-              actionSignature: manualResult.actionSignature,
-              confirmed: confirmedFromToolOutput(manualResult.toolOutput),
-              browserObservation: manualResult.browserObservation,
-              preferredMcpServerId: manualResult.serverId
-            };
-          },
-          checkCompletion: async ({ state, currentContext, toolScopeSummary }) =>
-            {
-              if (
-                goalWantsRepoSummary(args.userInput) &&
-                state.lastBrowserObservation?.pageKind === "repo_page" &&
-                !hasGroundedRepoSummary(state.lastBrowserObservation)
-              ) {
-                pushSkillTrace(
-                  trace,
-                  `Heuristic completion ${state.stepIndex}`,
-                  [
-                    "Decision: incomplete",
-                    "Reason: Reached repository page, but grounded repo summary fields are still insufficient.",
-                    "Suggested focus: Read visible README or repo description before finishing.",
-                    state.lastBrowserObservation ? `Observation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : ""
-                  ]
-                    .filter(Boolean)
-                    .join("\n")
-                );
-                return {
-                  type: "incomplete" as const,
-                  reason: "已到達 repository 頁面，但還沒有足夠的 grounded 內容可直接整理摘要。",
-                  suggestedFocus: "請優先讀取目前頁面可見的 README 或 repo 描述，再決定是否完成。"
-                };
-              }
-              const heuristicCompletion = buildBrowserHeuristicCompletion({
-                state,
-                userInput: args.userInput
-              });
-              if (heuristicCompletion) {
-                pushSkillTrace(
-                  trace,
-                  `Heuristic completion ${state.stepIndex}`,
-                  [
-                    `Decision: ${heuristicCompletion.type}`,
-                    heuristicCompletion.reason ? `Reason: ${heuristicCompletion.reason}` : "",
-                    state.lastBrowserObservation ? `Observation:\n${formatBrowserObservationDigest(state.lastBrowserObservation)}` : ""
-                  ]
-                    .filter(Boolean)
-                    .join("\n")
-                );
-                return heuristicCompletion;
-              }
-              return await runSkillCompletionGate({
-                agent: args.agent,
-                retry: getRetryPolicyForAgent(args.agent),
-                state,
-                skill: args.skill,
-                runtime: args.prepared.runtime,
-                userInput: args.userInput,
-                currentContext,
-                toolScopeSummary,
-                promptTemplate: promptTemplateRuntime.resolve("skill-completion-gate", mcpPromptTemplates.activeId).template,
-                requestId: args.requestId,
-                deadline: skillDeadline ?? args.deadline,
-                onTrace: (label, content) => {
-                  pushSkillTrace(trace, label, content);
-                  updateAssistantProgress(state.todo, "completion_gate", trace);
-                }
-              });
-            }
-        }
-      });
-    }
-
-    try {
-    pushSkillExecutionModeTrace(trace, {
-      mode: "multi_turn",
-      verifyMax: skillVerifyMax,
-      toolLoopMax: skillToolLoopMax,
-      verifierName: verifierAgent.name
-    });
-    updateAssistantProgress([], "skill_load", trace);
-
-    args.onStatus?.("正在依 skill 規劃多步工具流程中…");
-    let runtimeResult = await runRuntimePass(args.prepared.finalInput, trace);
-    trace = runtimeResult.trace;
-    updateAssistantProgress(runtimeResult.todo, runtimeResult.phase, trace);
-
-    let currentInput = runtimeResult.finalInput;
-    let currentTodo = runtimeResult.todo;
-    let currentPhase = runtimeResult.phase;
-    const completeRemainingTodo = (todo: SkillTodoItem[], reason: string) =>
-      todo.map((item) =>
-        item.status === "completed" || item.status === "blocked"
-          ? item
-          : {
-              ...item,
-              status: "completed" as const,
-              reason: item.reason ?? reason,
-              updatedAt: Date.now()
-            }
-      );
-
-    if (runtimeResult.finalAnswerOverride) {
-      pushSkillTrace(trace, "Final answer", "已由 multi-turn runtime 直接產生 blocked/manual summary。");
-      currentPhase = "final_answer";
-      updateAssistantProgress(currentTodo, currentPhase, trace);
-      return {
-        finalInput: currentInput,
-        trace,
-        todo: currentTodo,
-        phase: currentPhase,
-        finalAnswerOverride: runtimeResult.finalAnswerOverride
-      };
-    }
-
-    const groundedHeuristicAnswer = buildGroundedRepoSummaryAnswer(runtimeResult.lastBrowserObservation);
-    if (groundedHeuristicAnswer && goalWantsRepoSummary(args.userInput)) {
-      pushSkillTrace(trace, "Final answer", "已由 grounded browser observation 直接產生最終摘要，避免 LLM 脫離實際頁面內容。");
-      currentTodo = completeRemainingTodo(currentTodo, "Grounded browser observation produced the final answer.");
-      currentPhase = "final_answer";
-      updateAssistantProgress(currentTodo, currentPhase, trace);
-      return {
-        finalInput: currentInput,
-        trace,
-        todo: currentTodo,
-        phase: currentPhase,
-        finalAnswerOverride: groundedHeuristicAnswer
-      };
-    }
-
-    args.onStatus?.("正在依 skill 產生初版回答中…");
-    let currentAnswer = await runOneToOneWithLoadBalancer({
-      logicalAgent: args.agent,
-      input: currentInput,
-      history: limitHistory(history),
-      system: args.prepared.system,
-      requestId: args.requestId,
-      requestLabel: "skill final answer round 1",
-      deadline: skillDeadline ?? args.deadline,
-      onDelta: () => {},
-      onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: "skill final answer round 1", message: t })
-    });
-
-    const firstAnswerFailure = detectTerminalAgentFailure(currentAnswer);
-    if (firstAnswerFailure) {
-      pushSkillTrace(trace, "Final answer", `最終回答模型呼叫失敗，已直接回傳錯誤內容。\n${firstAnswerFailure}`);
-      return {
-        finalInput: currentInput,
-        trace,
-        todo: currentTodo,
-        phase: "final_answer",
-        finalAnswerOverride: buildAgentFailureContent(firstAnswerFailure, args.userInput)
-      };
-    }
-
-    pushSkillTrace(trace, "Skill answer round 1", currentAnswer);
-    currentPhase = "final_answer";
-    updateAssistantProgress(currentTodo, currentPhase, trace);
-
-    if (skillVerifyMax === 0) {
-      pushSkillTrace(trace, "Verify/refine", "已設定 verify 次數為 0，略過 refine。");
-      return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
-    }
-
-    for (let round = 1; round <= skillVerifyMax; round++) {
-      updateAssistantProgress(currentTodo, "verify_refine", trace);
-      args.onStatus?.(`正在進行 skill verify 第 ${round} 輪…`);
-      const verifyDecision = await runSkillVerifyDecision({
-        answeringAgent: args.agent,
-        verifierAgent,
-        userInput: args.userInput,
-        currentInput,
-        answer: currentAnswer,
-        skill: args.skill,
-        runtime: args.prepared.runtime,
-        round,
-        retry: getRetryPolicyForAgent(verifierAgent),
-        promptTemplate: promptTemplateRuntime.resolve("skill-verify", mcpPromptTemplates.activeId).template,
-        requestId: args.requestId,
-        deadline: skillDeadline ?? args.deadline
-      });
-
-      if (!verifyDecision) {
-        pushSkillTrace(trace, `Verify/refine`, `第 ${round} 輪 verifier 未回傳合法 JSON，停止 refine。`);
-        break;
-      }
-
-      if (verifyDecision.type === "pass") {
-        pushSkillTrace(
-          trace,
-          "Verify/refine",
-          [`第 ${round} 輪結果：通過`, verifyDecision.reason ? `原因：${verifyDecision.reason}` : ""].filter(Boolean).join("\n")
-        );
-        currentPhase = "final_answer";
-        updateAssistantProgress(currentTodo, currentPhase, trace);
-        return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
-      }
-
-      pushSkillTrace(
-        trace,
-        "Verify/refine",
-        [
-          `第 ${round} 輪結果：需要 refine`,
-          `原因：${verifyDecision.reason}`,
-          verifyDecision.revisionPrompt ? `Revision prompt:\n${verifyDecision.revisionPrompt}` : ""
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-
-      const refinedBaseInput = buildSkillRefinementInput({
-        currentInput: args.prepared.baseInput,
-        verifyDecision,
-        round
-      });
-
-      args.onStatus?.(`正在依 verifier 建議進行第 ${round} 輪修正…`);
-      runtimeResult = await runRuntimePass(refinedBaseInput, trace);
-      trace = runtimeResult.trace;
-      currentInput = runtimeResult.finalInput;
-      currentTodo = runtimeResult.todo;
-      currentPhase = runtimeResult.phase;
-      updateAssistantProgress(currentTodo, currentPhase, trace);
-
-      if (runtimeResult.finalAnswerOverride) {
-        pushSkillTrace(trace, "Final answer", "refine 後由 multi-turn runtime 直接產生 blocked/manual summary。");
-        currentPhase = "final_answer";
-        updateAssistantProgress(currentTodo, currentPhase, trace);
-        return {
-          finalInput: currentInput,
-          trace,
-          todo: currentTodo,
-          phase: currentPhase,
-          finalAnswerOverride: runtimeResult.finalAnswerOverride
-        };
-      }
-
-      const refinedGroundedAnswer = buildGroundedRepoSummaryAnswer(runtimeResult.lastBrowserObservation);
-      if (refinedGroundedAnswer && goalWantsRepoSummary(args.userInput)) {
-        pushSkillTrace(trace, "Final answer", "refine 後已由 grounded browser observation 直接產生最終摘要。");
-        currentTodo = completeRemainingTodo(currentTodo, "Grounded browser observation produced the final answer.");
-        currentPhase = "final_answer";
-        updateAssistantProgress(currentTodo, currentPhase, trace);
-        return {
-          finalInput: currentInput,
-          trace,
-          todo: currentTodo,
-          phase: currentPhase,
-          finalAnswerOverride: refinedGroundedAnswer
-        };
-      }
-
-      args.onStatus?.(`正在產生第 ${round + 1} 輪回答中…`);
-      currentAnswer = await runOneToOneWithLoadBalancer({
-        logicalAgent: args.agent,
-        input: currentInput,
-        history: limitHistory(history),
-        system: args.prepared.system,
-        requestId: args.requestId,
-        requestLabel: `skill final answer round ${round + 1}`,
-        deadline: skillDeadline ?? args.deadline,
-        onDelta: () => {},
-        onLog: (t) => pushLog({ category: "retry", agent: args.agent.name, requestId: args.requestId, stage: `skill final answer round ${round + 1}`, message: t })
-      });
-
-      const refinedAnswerFailure = detectTerminalAgentFailure(currentAnswer);
-      if (refinedAnswerFailure) {
-        pushSkillTrace(trace, "Final answer", `refine 後最終回答模型呼叫失敗，已直接回傳錯誤內容。\n${refinedAnswerFailure}`);
-        return {
-          finalInput: currentInput,
-          trace,
-          todo: currentTodo,
-          phase: "final_answer",
-          finalAnswerOverride: buildAgentFailureContent(refinedAnswerFailure, args.userInput)
-        };
-      }
-
-      pushSkillTrace(trace, `Skill answer round ${round + 1}`, currentAnswer);
-      currentPhase = "final_answer";
-      updateAssistantProgress(currentTodo, currentPhase, trace);
-    }
-
-    pushSkillTrace(trace, "Verify/refine", `已達最大 verify 次數 ${skillVerifyMax}，回傳最後一次 refine 的結果。`);
-    return { finalInput: currentInput, trace, todo: currentTodo, phase: currentPhase };
-    } finally {
-      skillDeadline?.dispose();
-      const currentLock = skillExecutionLocksRef.current.get(args.skill.id);
-      if (currentLock === lockController) {
-        skillExecutionLocksRef.current.delete(args.skill.id);
-      }
-    }
   }
 
   function readUserAvatar(file: File | undefined) {
@@ -2992,47 +1830,65 @@ export default function App() {
     startedAt?: number;
     extraSystem?: string;
     modeForLog?: "one_to_one";
-    responseFormatter?: (raw: string) => AssistantResponseFormatResult;
     statusText?: {
       preparing?: string;
       responding?: string;
     };
     deadline?: ExecutionDeadline;
+    signal?: AbortSignal;
+    generation?: number;
+    runId?: string;
+    isCurrent?: () => boolean;
+    emit?: (event: HarnessEvent) => void;
   }): Promise<OneToOneTurnResult> {
     const oneToOneAgent = activeAgent;
     if (!oneToOneAgent) {
       throw new Error("No active agent selected.");
     }
 
-    const startedAt = args.startedAt ?? Date.now();
     const requestId = args.requestId ?? createLogRequestId("chat");
     const input = args.displayInput;
     const modelInput = args.modelInput ?? args.displayInput;
-    const logMode = args.modeForLog ?? "one_to_one";
-    const docBlocks = docsForAgent.map((d) => `[DOC:${d.title}]\n${d.content}`).join("\n\n");
-    const userSystem = docBlocks ? `You may use these documents as context:\n\n${docBlocks}` : undefined;
-    const baseSystem = mergeSystemText(userSystem, args.extraSystem);
+    const preflightSignal = combineSignals(args.signal, args.deadline?.signal);
+    const skillIdForTurn = explicitSkillId;
+    setExplicitSkillId(null);
+    const resolvedActiveAgent = hydrateAgentCredentials(oneToOneAgent);
+    const adapter = pickAdapter(resolvedActiveAgent);
+    const assistantId = generateId();
+    const resolvedCandidates = resolveLoadBalancerPlanForAgent(oneToOneAgent);
+    const candidateCapabilities = new Map(resolvedCandidates.map((candidate) => {
+      const capability = normalizeToolCallingCapability(
+        candidate.instance.toolCallingCapability ?? candidate.hydratedAgent.capabilities?.toolCallingCapability
+      );
+      return [candidate.instance.id, capability] as const;
+    }));
+    let candidates = resolvedCandidates.filter((candidate) => {
+      const capability = candidateCapabilities.get(candidate.instance.id);
+      const candidateAdapter = pickAdapter(candidate.hydratedAgent);
+      return capability !== "none" && !(capability === "native" && !candidateAdapter.nativeChat);
+    });
+    const mainCapability = normalizeToolCallingCapability(
+      oneToOneAgent.capabilities?.toolCallingCapability ?? (oneToOneAgent.loadBalancerId ? "none" : adapter.nativeChat ? "native" : "text_protocol")
+    );
 
     logNow({
       category: "chat",
       agent: oneToOneAgent.name,
       requestId,
       stage: "request_start",
-      message: `Send (${logMode})`,
-      details: modelInput
+      message: `Send (${args.modeForLog ?? "one_to_one"})`,
+      details: `input_chars=${modelInput.length}`
     });
     logNow({
       category: "chat",
       agent: oneToOneAgent.name,
       requestId,
       stage: "context_prepare",
-      message: "Context prepared",
+      message: "Pi loop context prepared",
       details: `docs=${docsForAgent.length} history=${history.length}`
     });
 
-    const userMsg = msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl });
-    append(userMsg);
-    const assistantId = generateId();
+    append(msg("user", input, "user", { displayName: userProfile.name, avatarUrl: userProfile.avatarUrl }));
     append({
       id: assistantId,
       role: "assistant",
@@ -3045,384 +1901,225 @@ export default function App() {
       isStreaming: true
     });
 
-    const setAssistantStatus = (statusText: string, patch: Partial<ChatMessage> = {}) => {
-      patchMessage(assistantId, { statusText, isStreaming: true, ...patch });
+    const finishPreflightStop = (): OneToOneTurnResult => {
+      const deadlineExpired = args.deadline ? Date.now() >= args.deadline.expiresAt : false;
+      const terminalReason = deadlineExpired ? "deadline" : "aborted";
+      const content = deadlineExpired
+        ? "【執行失敗】\nPi loop harness 在模型請求開始前超過執行期限。"
+        : "【執行中斷】\n上一輪執行在模型請求開始前被中止。";
+      if (args.isCurrent?.() !== false) {
+        patchMessage(assistantId, {
+          content,
+          statusText: undefined,
+          isStreaming: false,
+          hideWhileStreaming: false,
+          harnessRun: {
+            runId: args.runId ?? `${oneToOneAgent.id}:${requestId}`,
+            generation: args.generation ?? 0,
+            stepCount: 0,
+            toolCallCount: 0,
+            durationMs: Math.max(0, Date.now() - (args.startedAt ?? Date.now())),
+            terminalReason,
+            activity: [{ type: "run_end", message: terminalReason }]
+          }
+        });
+      }
+      return { requestId, status: deadlineExpired ? "failure" : "degraded", displayContent: content };
     };
-    const finalizeAssistant = (patch: Partial<ChatMessage>) => {
-      patchMessage(assistantId, {
-        statusText: undefined,
-        isStreaming: false,
-        hideWhileStreaming: false,
-        ...patch
+
+    const verifiedCandidates = [] as typeof candidates;
+    for (const candidate of candidates) {
+      if (preflightSignal.aborted || args.isCurrent?.() === false) return finishPreflightStop();
+      const capability = candidateCapabilities.get(candidate.instance.id);
+      if (capability !== "text_protocol") {
+        verifiedCandidates.push(candidate);
+        continue;
+      }
+      patchMessage(assistantId, { statusText: "正在驗證文字 action protocol…", isStreaming: true });
+      const probe = await probeTextCapability({
+        candidateId: candidate.instance.id,
+        agent: candidate.hydratedAgent,
+        adapter: pickAdapter(candidate.hydratedAgent),
+        retry: {
+          delaySec: Math.max(0, candidate.instance.delaySecond),
+          max: Math.max(0, candidate.instance.maxRetries)
+        },
+        maxModelResponseChars: candidate.instance.contextBudget?.maxModelResponseChars,
+        revision: getTextCapabilityRevision(candidate.hydratedAgent, `${candidate.instance.credentialId}:${candidate.instance.credentialKeyId ?? "default"}:${candidate.instance.model}`),
+        signal: preflightSignal
       });
-    };
-
-    logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "request_start", message: "normal talking started" });
-
-    const resolvedActiveAgent = hydrateAgentCredentials(oneToOneAgent);
-    const adapter = pickAdapter(resolvedActiveAgent);
-    const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
-      onStatus: setAssistantStatus,
-      requestId
-    });
-    const resolvedToolEntries: ToolEntry[] = [
-      ...resolvedMcpToolsForAgent.flatMap(({ server, tools }) => tools.map((tool) => ({ kind: "mcp" as const, server, tool }))),
-      ...availableBuiltinToolsForAgent.map((tool) => ({ kind: "builtin" as const, tool }))
-    ];
-    let finalInput = modelInput;
-    let finalSystem = baseSystem;
-    const skillTrace: ChatTraceEntry[] = [];
-    let preparedSkillExecution: PreparedSkillExecution | null = null;
-    let selectedSkillForExecution: SkillConfig | null = null;
-    let latestToolAugmentation: ToolAugmentationResult | null = null;
-
-    const resolveToolAugmentedInputForSend = async (toolArgs: {
-      input: string;
-      decisionContext?: string;
-      onStatus?: (text: string) => void;
-    }) => {
-      const result = await resolveToolAugmentedInputDetailed({
-        input: toolArgs.input,
+      if (probe.ok) {
+        verifiedCandidates.push(candidate);
+      } else {
+        logNow({
+          category: "chat",
+          agent: oneToOneAgent.name,
+          requestId,
+          stage: "capability_probe",
+          ok: false,
+          message: `Candidate ${candidate.instance.id} is not text-protocol compatible`,
+          details: probe.diagnostic
+        });
+      }
+    }
+    candidates = verifiedCandidates;
+    let directTextCapability: boolean | undefined;
+    if (!oneToOneAgent.loadBalancerId && mainCapability === "text_protocol") {
+      patchMessage(assistantId, { statusText: "正在驗證文字 action protocol…", isStreaming: true });
+      const probe = await probeTextCapability({
+        candidateId: resolvedActiveAgent.id,
         agent: resolvedActiveAgent,
         adapter,
-        availableBuiltinTools: availableBuiltinToolsForAgent,
-        availableMcpServers: availableMcpServersForAgent,
-        availableMcpTools: resolvedMcpToolsForAgent,
-        toolEntries: resolvedToolEntries,
-        decisionContext: toolArgs.decisionContext,
-        onStatus: toolArgs.onStatus,
-        requestId,
-        deadline: args.deadline
+        revision: getTextCapabilityRevision(resolvedActiveAgent),
+        signal: preflightSignal
       });
-      latestToolAugmentation = result.status === "tool_called" ? result : null;
-      return result.input;
-    };
-
-    if (skillSessionSnapshot && activeAgent.enableSkills === true) {
-      const allowedSkills = skillSessionSnapshot.availableSkills.filter((item) => item.allowed);
-      const blockedSkills = skillSessionSnapshot.availableSkills.filter((item) => !item.allowed && item.reason);
-      pushSkillTrace(
-        skillTrace,
-        "Skill snapshot",
-        [
-          `可用 skills：${allowedSkills.length} 個`,
-          allowedSkills.length ? allowedSkills.map((item) => `- ${item.name}`).join("\n") : "沒有可用的 skill。",
-          blockedSkills.length ? `不可用：\n${blockedSkills.map((item) => `- ${item.name}: ${item.reason}`).join("\n")}` : ""
-        ]
-          .filter(Boolean)
-          .join("\n\n")
-      );
-    }
-
-    if (availableSkillsForAgent.length > 0) {
-      setAssistantStatus("正在分析是否需要使用 skill 中…");
-      const skillDecision = await runSkillDecision({
-        agent: resolvedActiveAgent,
-        userInput: modelInput,
-        retry: getRetryPolicyForAgent(resolvedActiveAgent),
-        skills: availableSkillsForAgent,
-        language: mcpPromptTemplates.activeId,
-        promptTemplate: promptTemplateRuntime.resolve("skill-decision", mcpPromptTemplates.activeId).template,
-        requestId,
-        deadline: args.deadline
-      });
-
-      if (!skillDecision) {
-        pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：skill decision 重試後仍失敗，改走一般 tool decision。`);
-        logNow({ category: "skills", agent: oneToOneAgent.name, ok: false, requestId, stage: "skill decision", message: "Skill decision failed after retries; continue without skills" });
-        finalInput = await resolveToolAugmentedInputForSend({
-          input: modelInput,
-          onStatus: setAssistantStatus
-        });
-      } else if (skillDecision.type === "no_skill") {
-        pushSkillTrace(skillTrace, "Skill decision", `可用 skills：${availableSkillsForAgent.length} 個\n結果：這一回合不使用 skill。`);
-        logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision resolved: no_skill" });
-        finalInput = await resolveToolAugmentedInputForSend({
-          input: modelInput,
-          onStatus: setAssistantStatus
-        });
-      } else {
-        const selectedSkill = availableSkillsForAgent.find((skill) => skill.id === skillDecision.skillId) ?? null;
-        if (!selectedSkill) {
-          pushSkillTrace(
-            skillTrace,
-            "Skill decision",
-            `模型選擇了不存在或不可用的 skill：${skillDecision.skillId}\n系統已回退到一般 tool decision。`
-          );
-          logNow({
-            category: "skills",
-            agent: oneToOneAgent.name,
-            ok: false,
-            requestId,
-            stage: "skill decision",
-            message: `Skill decision selected unavailable skill: ${skillDecision.skillId}`,
-            details: JSON.stringify(skillDecision)
-          });
-          finalInput = await resolveToolAugmentedInputForSend({
-            input: modelInput,
-            onStatus: setAssistantStatus
-          });
-        } else {
-          setAssistantStatus(`正在載入 skill「${selectedSkill.name}」中…`);
-          pushSkillTrace(
-            skillTrace,
-            "Skill decision",
-            [`選中 skill：${selectedSkill.name} (${selectedSkill.id})`, `輸入：${stringifyAny(skillDecision.input ?? {})}`].join("\n")
-          );
-          const prepared = await prepareSkillExecution({
-            skill: selectedSkill,
-            skillInput: skillDecision.input,
-            userInput: modelInput,
-            agent: resolvedActiveAgent,
-            adapter,
-            availableBuiltinTools: availableBuiltinToolsForAgent,
-            availableMcpServers: availableMcpServersForAgent,
-            availableMcpTools: resolvedMcpToolsForAgent,
-            deferToolDecision: skillExecutionMode === "multi_turn",
-            onStatus: setAssistantStatus,
-            requestId,
-            deadline: args.deadline
-          });
-          preparedSkillExecution = prepared;
-          selectedSkillForExecution = selectedSkill;
-          finalInput = prepared.finalInput;
-          finalSystem = mergeSystemText(prepared.system, args.extraSystem);
-          if (prepared.toolAugmentation?.status === "tool_called") {
-            latestToolAugmentation = prepared.toolAugmentation;
-          }
-          skillTrace.push(...prepared.trace);
-          logNow({
-            category: "skills",
-            agent: oneToOneAgent.name,
-            ok: true,
-            requestId,
-            stage: "skill decision",
-            message: `Skill selected: ${selectedSkill.name}`,
-            details: JSON.stringify(skillDecision.input ?? {})
-          });
-        }
-      }
-    } else {
-      if (activeAgent.enableSkills === true) {
-        pushSkillTrace(skillTrace, "Skill decision", "沒有可用的 skill，已略過 skill decision。");
-      }
-      logNow({ category: "skills", agent: oneToOneAgent.name, requestId, stage: "skill decision", message: "Skill decision skipped: no available skills" });
-      finalInput = await resolveToolAugmentedInputForSend({
-        input: modelInput,
-        onStatus: setAssistantStatus
-      });
-    }
-
-    if (selectedSkillForExecution && preparedSkillExecution) {
-      if (skillExecutionMode === "multi_turn") {
-        const executed = await executeMultiTurnSkill({
-          initialTrace: skillTrace,
-          prepared: preparedSkillExecution,
-          skill: selectedSkillForExecution,
-          agent: resolvedActiveAgent,
-          adapter,
-          userInput: modelInput,
-          assistantMessageId: assistantId,
-          onStatus: setAssistantStatus,
+      directTextCapability = probe.ok;
+      if (!probe.ok) {
+        logNow({
+          category: "chat",
+          agent: oneToOneAgent.name,
           requestId,
-          deadline: args.deadline
-        });
-        finalInput = executed.finalInput;
-        finalSystem = mergeSystemText(preparedSkillExecution.system, args.extraSystem);
-        patchMessage(assistantId, {
-          skillTrace: executed.trace.length ? executed.trace : undefined,
-          skillGoal: modelInput,
-          skillTodo: executed.todo.length ? executed.todo : undefined,
-          skillPhase: executed.phase,
-          statusText: "正在生成最終回覆中…",
-          isStreaming: true,
-          hideWhileStreaming: false
-        });
-        skillTrace.length = 0;
-        skillTrace.push(...executed.trace);
-        if (executed.finalAnswerOverride) {
-          const runtimeOverrideFailed = executed.finalAnswerOverride.startsWith("【執行失敗】");
-          finalizeAssistant({
-            content: executed.finalAnswerOverride,
-            skillTrace: executed.trace.length ? executed.trace : undefined,
-            skillGoal: modelInput,
-            skillTodo: executed.todo.length ? executed.todo : undefined,
-            skillPhase: executed.phase
-          });
-          logNow({
-            category: "chat",
-            agent: oneToOneAgent.name,
-            ok: !runtimeOverrideFailed,
-            requestId,
-            stage: "final",
-            outcome: runtimeOverrideFailed ? "failure" : "success",
-            message: runtimeOverrideFailed ? "normal talking failed via multi-turn runtime override" : "normal talking completed via multi-turn runtime override",
-            details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${executed.finalAnswerOverride.length}\n\n${executed.finalAnswerOverride}`
-          });
-          return {
-            requestId,
-            status: runtimeOverrideFailed ? "failure" : "success",
-            displayContent: executed.finalAnswerOverride
-          };
-        }
-      }
-
-      if (skillExecutionMode !== "multi_turn") {
-        pushSkillExecutionModeTrace(skillTrace, {
-          mode: "single_turn",
-          verifyMax: 0
+          stage: "capability_probe",
+          ok: false,
+          message: "Active agent is not text-protocol compatible",
+          details: probe.diagnostic
         });
       }
     }
+    if (preflightSignal.aborted || args.isCurrent?.() === false) return finishPreflightStop();
+    const candidateById = new Map(candidates.map((candidate) => [candidate.instance.id, candidate]));
+    const transportCandidates = oneToOneAgent.loadBalancerId
+      ? candidates.map((candidate) => ({
+          id: candidate.instance.id,
+          agent: candidate.hydratedAgent,
+          adapter: pickAdapter(candidate.hydratedAgent),
+          capability: candidateCapabilities.get(candidate.instance.id),
+          retry: {
+            delaySec: Math.max(0, candidate.instance.delaySecond),
+            max: Math.max(0, candidate.instance.maxRetries)
+          },
+          contextBudget: candidate.instance.contextBudget
+        }))
+      : directTextCapability === false || mainCapability === "none"
+        ? []
+        : [{ id: resolvedActiveAgent.id, agent: resolvedActiveAgent, adapter, capability: mainCapability }];
 
-    patchMessage(assistantId, {
-      skillTrace: skillTrace.length ? skillTrace : undefined,
-      skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined,
-      statusText: args.statusText?.responding ?? "正在生成回覆中…",
-      isStreaming: true
-    });
-
-    let sawDelta = false;
-    let buffered = "";
-    const onDelta = (text: string) => {
-      buffered += text;
-      const thinkState = getThinkStreamingState(buffered);
-      patchMessage(assistantId, {
-        content: buffered,
-        hideWhileStreaming: thinkState.hideWhileStreaming,
-        statusText: thinkState.statusText ?? (sawDelta ? args.statusText?.responding : undefined),
-        isStreaming: true
-      });
-      if (!sawDelta && text) {
-        sawDelta = true;
-        logNow({ category: "chat", agent: oneToOneAgent.name, requestId, stage: "stream", message: "normal talking streaming started" });
-      }
-    };
-
-    const full = await runOneToOneWithLoadBalancer({
-      logicalAgent: oneToOneAgent,
-      input: finalInput,
-      history: limitHistory(history),
-      system: finalSystem,
+    const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
+      onStatus: (statusText) => patchMessage(assistantId, { statusText, isStreaming: true }),
       requestId,
-      requestLabel: "chat response",
-      deadline: args.deadline,
-      onDelta,
-      onLog: (text) => pushLog({ category: "retry", agent: oneToOneAgent.name, requestId, stage: "chat response", message: text })
+      signal: preflightSignal
     });
-    const terminalFailure = detectTerminalAgentFailure(full);
-    if (terminalFailure) {
-      const failureContent = buildAgentFailureContent(terminalFailure, modelInput);
-      finalizeAssistant({
-        content: failureContent,
-        skillTrace: skillTrace.length ? skillTrace : undefined,
-        skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined
-      });
-      logNow({
-        category: "chat",
-        agent: oneToOneAgent.name,
-        ok: false,
-        requestId,
-        stage: "final",
-        outcome: "failure",
-        message: "normal talking failed",
-        details: terminalFailure
-      });
-      return {
-        requestId,
-        status: "failure",
-        displayContent: failureContent
-      };
-    }
-    if (!String(full ?? "").trim()) {
-      const latestToolResult = latestToolAugmentation as ToolAugmentationResult | null;
-      const fallbackContent = buildEmptyResponseFallbackContent(modelInput, latestToolResult, selectedSkillForExecution);
-      const emptyResponseDetails = [`elapsed_ms=${Date.now() - startedAt}`];
-      if (latestToolResult?.toolLabel) {
-        emptyResponseDetails.push(`last_tool=${latestToolResult.toolLabel}`);
-      }
-      if (selectedSkillForExecution) {
-        emptyResponseDetails.push(`selected_skill=${selectedSkillForExecution.name} (${selectedSkillForExecution.id})`);
-      }
-      if (latestToolResult?.toolOutput !== undefined) {
-        emptyResponseDetails.push(`last_tool_output=\n${stringifyAny(latestToolResult.toolOutput)}`);
-      }
-      finalizeAssistant({
-        content: fallbackContent,
-        skillTrace: skillTrace.length ? skillTrace : undefined,
-        skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined
-      });
-      logNow({
-        category: "chat",
-        agent: oneToOneAgent.name,
-        ok: false,
-        requestId,
-        stage: "final",
-        outcome: "degraded",
-        message: "normal talking returned empty response",
-        details: emptyResponseDetails.join("\n\n")
-      });
-      return {
-        requestId,
-        status: fallbackContent.startsWith("【執行失敗】") ? "failure" : "degraded",
-        displayContent: fallbackContent
-      };
-    }
-
-    const formatted = args.responseFormatter ? args.responseFormatter(full) : { displayContent: full };
-    finalizeAssistant({
-      content: formatted.displayContent,
-      skillTrace: skillTrace.length ? skillTrace : undefined,
-      skillGoal: selectedSkillForExecution && skillExecutionMode === "multi_turn" ? modelInput : undefined
+    const result = await runHarnessChatTurn({
+      requestId,
+      runId: args.runId ?? `${oneToOneAgent.id}:${requestId}`,
+      generation: args.generation ?? 0,
+      assistantMessageId: assistantId,
+      userInput: modelInput,
+      history: limitHistory(history),
+      system: args.extraSystem,
+      agent: resolvedActiveAgent,
+      adapter,
+      transportCandidates,
+      docs: docsForAgent,
+      skills: [],
+      explicitSkillId: skillIdForTurn ?? undefined,
+      builtInTools: availableBuiltinToolsForAgent,
+      mcpServers: availableMcpServersForAgent,
+      mcpTools: resolvedMcpToolsForAgent,
+      mcpClientManager,
+      deadline: args.deadline,
+      signal: args.signal,
+      isCurrent: args.isCurrent ?? (() => args.signal?.aborted !== true),
+      emit: args.emit,
+      confirm: requestToolConfirmation,
+      getUserProfilePayload: () => getUserProfileToolPayload(userProfile),
+      onTransportCandidateSuccess: (candidateId) => {
+        const candidate = candidateById.get(candidateId);
+        if (!candidate) return;
+        setLoadBalancers((prev) =>
+          applyInstanceSuccess({
+            loadBalancers: prev,
+            loadBalancerId: candidate.loadBalancer.id,
+            instanceId: candidate.instance.id
+          })
+        );
+      },
+      onTransportCandidateFailure: (candidateId) => {
+        const candidate = candidateById.get(candidateId);
+        if (!candidate) return;
+        setLoadBalancers((prev) =>
+          applyInstanceFailure({
+            loadBalancers: prev,
+            loadBalancerId: candidate.loadBalancer.id,
+            instanceId: candidate.instance.id
+          })
+        );
+      },
+      loadSkillPackages: async () =>
+        oneToOneAgent.enableSkills === true
+          ? await withAbortSignal(Promise.all(
+              availableSkillsForAgent.map(async (skill) => ({
+                skill,
+                docs: skill.workflow.useSkillDocs === false ? [] : await listSkillDocs(skill.id),
+                files: await listSkillFiles(skill.id)
+              }))
+            ), preflightSignal)
+          : [],
+      patchMessage: (id, patch) => patchMessage(id, patch)
     });
     logNow({
       category: "chat",
       agent: oneToOneAgent.name,
-      ok: true,
       requestId,
+      ok: result.status === "success",
+      outcome: result.status,
       stage: "final",
-      outcome: "success",
-      message: "normal talking completed",
-      details: `elapsed_ms=${Date.now() - startedAt}\nresponse_len=${formatted.displayContent.length}\n\n${formatted.displayContent}`
+      message: `Pi loop harness ${result.status}`,
+      details: `response_len=${result.displayContent.length}`
     });
-    return {
-      requestId,
-      status: "success",
-      displayContent: formatted.displayContent,
-      spokenContent: formatted.spokenContent
-    };
+    return result;
   }
 
   async function onSend(input: string) {
     if (tutorialRestoringRef.current) {
-      logNow({ category: "tutorial", ok: false, message: "Send skipped: tutorial restore in progress", details: input });
+      logNow({ category: "tutorial", ok: false, message: "Send skipped: tutorial restore in progress", details: `input_chars=${input.length}` });
       append(msg("assistant", "Tutorial 正在恢復工作區，請稍候再送出。", "system", { displayName: "System" }));
       return;
     }
-    if (activeChatAbortRef.current && !activeChatAbortRef.current.signal.aborted) {
-      logNow({ category: "chat", ok: false, message: "Send skipped: another chat execution is running", details: input });
+    if (harnessController.active || (activeChatAbortRef.current && !activeChatAbortRef.current.signal.aborted)) {
+      logNow({ category: "chat", ok: false, message: "Send skipped: another chat execution is running", details: `input_chars=${input.length}` });
       return;
     }
     if (mode === "one_to_one") {
       if (!activeAgent) {
-        logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: input });
+        logNow({ category: "chat", ok: false, message: "Send skipped: no active agent", details: `input_chars=${input.length}` });
         return;
       }
-      const controller = new AbortController();
-      activeChatAbortRef.current = controller;
-      const deadline = createDeadline({
-        totalMs: executionDeadlineMs,
-        externalSignal: controller.signal,
-        label: "chat execution"
-      });
       try {
-        await sendOneToOneTurn({
-          displayInput: input,
-          modelInput: input,
-          startedAt: Date.now(),
-          modeForLog: "one_to_one",
-          deadline
+        const result = await harnessController.startTask(async (context: AgentHarnessTaskContext) => {
+          const deadline = createDeadline({
+            totalMs: executionDeadlineMs,
+            externalSignal: context.signal,
+            label: "chat execution"
+          });
+          try {
+            return await sendOneToOneTurn({
+              displayInput: input,
+              modelInput: input,
+              startedAt: Date.now(),
+              modeForLog: "one_to_one",
+              runId: context.runId,
+              deadline,
+              signal: context.signal,
+              generation: context.generation,
+              isCurrent: context.isCurrent,
+              emit: context.emit
+            });
+          } finally {
+            deadline.dispose();
+          }
         });
+        if (result === null) return;
       } catch (e) {
         const message = errorMessage(e);
         const errorText = buildAgentFailureContent(message, input);
@@ -3436,11 +2133,6 @@ export default function App() {
           message: "Send failed",
           details: message
         });
-      } finally {
-        deadline.dispose();
-        if (activeChatAbortRef.current === controller) {
-          activeChatAbortRef.current = null;
-        }
       }
       return;
     }
@@ -3703,14 +2395,6 @@ export default function App() {
 
   function onChangeMcpServers(next: McpServerConfig[]) {
     const prev = mcpServers;
-    setMcpServers(next);
-    setMcpToolsByServer((prev) => {
-      const nextMap: Record<string, McpTool[]> = {};
-      next.forEach((s) => {
-        if (prev[s.id]) nextMap[s.id] = prev[s.id];
-      });
-      return nextMap;
-    });
     const prevIds = new Set(prev.map((s) => s.id));
     const nextIds = new Set(next.map((s) => s.id));
     const added = next.filter((s) => !prevIds.has(s.id));
@@ -3722,9 +2406,16 @@ export default function App() {
         prevItem.transport !== s.transport ||
         prevItem.authToken !== s.authToken ||
         JSON.stringify(prevItem.customHeaders ?? {}) !== JSON.stringify(s.customHeaders ?? {}) ||
-        prevItem.useLocalProxy !== s.useLocalProxy
+        prevItem.useLocalProxy !== s.useLocalProxy ||
+        JSON.stringify(prevItem.toolPolicies ?? {}) !== JSON.stringify(s.toolPolicies ?? {})
       );
     });
+    const invalidatedServerIds = new Set([...removed, ...urlChanged].map((server) => server.id));
+    mcpServersRef.current = next;
+    setMcpServers(next);
+    const retainedCatalog = retainMcpToolCatalog(mcpToolsByServerRef.current, next, invalidatedServerIds);
+    mcpToolsByServerRef.current = retainedCatalog;
+    setMcpToolsByServer(() => retainedCatalog);
     [...removed, ...urlChanged].forEach((server) => {
       mcpClientManager.invalidate(server.id);
       mcpToolCatalogCache.invalidate(server.id);
@@ -3741,206 +2432,6 @@ export default function App() {
           .filter(Boolean)
           .join("\n")
       });
-    }
-  }
-
-  function updatePromptTemplateFile(id: PromptTemplateFileState["id"], content: string) {
-    const now = Date.now();
-    setPromptTemplateFiles((prev) =>
-      prev.map((entry) => (entry.id === id ? { ...entry, content, updatedAt: now } : entry))
-    );
-    setPromptTemplateTestStates((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-  }
-
-  function resetPromptTemplateFile(id: PromptTemplateFileState["id"]) {
-    const next = resetPromptTemplateToDefault(id);
-    if (!next) return;
-    updatePromptTemplateFile(id, next);
-  }
-
-  function resolvePromptTemplateTestAgent() {
-    const preferred = activeAgent ? hydrateAgentCredentials(activeAgent) : null;
-    if (preferred && (preferred.loadBalancerId || preferred.type !== "chrome_prompt")) {
-      return preferred;
-    }
-    const fallback = agents
-      .map((agent) => hydrateAgentCredentials(agent))
-      .find((agent) => !!agent.loadBalancerId || agent.type !== "chrome_prompt");
-    return fallback ?? null;
-  }
-
-  async function runPromptTemplateApiTest(baseId: PromptTemplateBaseId, language: "zh" | "en") {
-    const fileId = getPromptTemplateFileId(baseId, language);
-    const templateState = promptTemplateRuntime.resolve(baseId, language);
-    const agent = resolvePromptTemplateTestAgent();
-    const spec = buildPromptTemplateApiTestSpec({
-      baseId,
-      language,
-      template: templateState.template
-    });
-
-    if (!agent) {
-      setPromptTemplateTestStates((prev) => ({
-        ...prev,
-        [fileId]: {
-          status: "failure",
-          summary: language === "en" ? "No provider-backed agent is available for template testing." : "目前沒有可用的 provider-backed agent 可執行模板測試。",
-          expected: spec.expected,
-          updatedAt: Date.now()
-        }
-      }));
-      return;
-    }
-
-    const requestId = createLogRequestId("prompt-template");
-    setPromptTemplateTestStates((prev) => ({
-      ...prev,
-      [fileId]: {
-        status: "running",
-        summary: language === "en" ? "Running API test..." : "正在執行 API 測試…",
-        expected: spec.expected,
-        requestId,
-        agentName: agent.name,
-        prompt: spec.prompt,
-        system: spec.system,
-        updatedAt: Date.now()
-      }
-    }));
-
-    logNow({
-      category: "prompt_templates",
-      agent: agent.name,
-      requestId,
-      stage: baseId,
-      message: `Prompt template API test started: ${baseId}.${language}`,
-      details: [`expected=${spec.expected}`, spec.system ? `system:\n${spec.system}` : "", `prompt:\n${spec.prompt}`].filter(Boolean).join("\n\n")
-    });
-
-    try {
-      const raw = await runOneToOneWithLoadBalancer({
-        logicalAgent: agent,
-        input: spec.prompt,
-        history: [],
-        system: spec.system,
-        requestId,
-        requestLabel: `prompt template test ${baseId}`,
-        onDelta: () => {}
-      });
-
-      const terminalFailure = detectTerminalAgentFailure(raw);
-      if (terminalFailure) {
-        const summary = language === "en" ? `Model request failed: ${terminalFailure}` : `模型請求失敗：${terminalFailure}`;
-        setPromptTemplateTestStates((prev) => ({
-          ...prev,
-          [fileId]: {
-            status: "failure",
-            summary,
-            expected: spec.expected,
-            requestId,
-            agentName: agent.name,
-            prompt: spec.prompt,
-            system: spec.system,
-            rawOutput: raw,
-            updatedAt: Date.now()
-          }
-        }));
-        logNow({
-          category: "prompt_templates",
-          agent: agent.name,
-          ok: false,
-          requestId,
-          stage: baseId,
-          message: `Prompt template API test failed: ${baseId}.${language}`,
-          details: raw
-        });
-        return;
-      }
-
-      const validation = spec.validate(raw);
-      setPromptTemplateTestStates((prev) => ({
-        ...prev,
-        [fileId]: {
-          status: validation.pass ? "success" : "failure",
-          summary: validation.summary,
-          expected: spec.expected,
-          requestId,
-          agentName: agent.name,
-          prompt: spec.prompt,
-          system: spec.system,
-          rawOutput: raw,
-          parsedOutput: validation.parsed !== undefined ? stringifyAny(validation.parsed) : undefined,
-          updatedAt: Date.now()
-        }
-      }));
-      logNow({
-        category: "prompt_templates",
-        agent: agent.name,
-        ok: validation.pass,
-        requestId,
-        stage: baseId,
-        message: `Prompt template API test ${validation.pass ? "passed" : "failed"}: ${baseId}.${language}`,
-        details: [
-          `summary=${validation.summary}`,
-          validation.parsed !== undefined ? `parsed=${stringifyAny(validation.parsed)}` : "",
-          `raw=${raw}`
-        ]
-          .filter(Boolean)
-          .join("\n\n")
-      });
-    } catch (error) {
-      const message = errorMessage(error);
-      setPromptTemplateTestStates((prev) => ({
-        ...prev,
-        [fileId]: {
-          status: "failure",
-          summary: language === "en" ? `API test crashed: ${message}` : `API 測試發生錯誤：${message}`,
-          expected: spec.expected,
-          requestId,
-          agentName: agent.name,
-          prompt: spec.prompt,
-          system: spec.system,
-          rawOutput: message,
-          updatedAt: Date.now()
-        }
-      }));
-      logNow({
-        category: "prompt_templates",
-        agent: agent.name,
-        ok: false,
-        requestId,
-        stage: baseId,
-        message: `Prompt template API test error: ${baseId}.${language}`,
-        details: message
-      });
-    }
-  }
-
-  async function runAllPromptTemplateApiTests(language: "zh" | "en") {
-    setPromptTemplateTestsRunning(true);
-    try {
-      for (const group of promptTemplateRuntime.groups) {
-        const entry = group.entries[language];
-        if (!entry || entry.parseError) {
-          const fileId = getPromptTemplateFileId(group.baseId, language);
-          setPromptTemplateTestStates((prev) => ({
-            ...prev,
-            [fileId]: {
-              status: "failure",
-              summary: language === "en" ? "Skipped: fix YAML before API testing." : "已略過：請先修正 YAML。",
-              updatedAt: Date.now()
-            }
-          }));
-          continue;
-        }
-        await runPromptTemplateApiTest(group.baseId, language);
-      }
-    } finally {
-      setPromptTemplateTestsRunning(false);
     }
   }
 
@@ -4122,11 +2613,6 @@ export default function App() {
                 <span className="cc-card-label">Skills</span>
                 <strong className="cc-card-value">{skills.length}</strong>
                 <span className="cc-card-hint">Workflow layer</span>
-              </button>
-              <button className="cc-card" onClick={() => setConfigModal("prompts")}>
-                <span className="cc-card-label">Prompt Templates</span>
-                <strong className="cc-card-value">{promptTemplateRuntime.groups.length}</strong>
-                <span className="cc-card-hint">YAML prompt files</span>
               </button>
               <button className="cc-card" onClick={() => setConfigModal("tools")} data-tutorial-id="chat-config-tools-card">
                 <span className="cc-card-label">Built-in Tools</span>
@@ -4330,34 +2816,19 @@ export default function App() {
                       }
                     }}
                     onUpdateTools={(id, tools) => {
-                      mcpToolCatalogCache.set(id, tools);
-                      setMcpToolsByServer((prev) => ({ ...prev, [id]: tools }));
-                      const server = mcpServers.find((s) => s.id === id);
+                      // onChangeMcpServers and onUpdateTools are called back-to-back
+                      // when a newly added server is saved. Use the ref because the
+                      // render closure can still contain the previous server list.
+                      const server = mcpServersRef.current.find((entry) => entry.id === id);
+                      if (!server) return;
+                      mcpToolCatalogCache.set(server, tools);
+                      const nextCatalog = { ...mcpToolsByServerRef.current, [id]: tools };
+                      mcpToolsByServerRef.current = nextCatalog;
+                      setMcpToolsByServer(() => nextCatalog);
                       logNow({ category: "mcp", message: `Tools updated: ${server?.name ?? id}`, details: tools.map((t) => t.name).join("\n") });
                     }}
                     clientManager={mcpClientManager}
                     pushLog={pushLog}
-                  />
-                </ErrorBoundary>
-              </HelpModal>
-            )}
-
-            {configModal === "prompts" && (
-              <HelpModal title="Prompt Templates" onClose={() => setConfigModal(null)} width="min(1100px, 96vw)">
-                <ErrorBoundary onError={(error, info) => logRenderError("PromptTemplatesPanel", error, info)}>
-                  <PromptTemplatesPanel
-                    files={promptTemplateFiles}
-                    groups={promptTemplateRuntime.groups}
-                    activeDecisionLanguage={mcpPromptTemplates.activeId}
-                    onChangeActiveDecisionLanguage={(language) =>
-                      setMcpPromptTemplates((prev) => ({ ...prev, activeId: language }))
-                    }
-                    onChangeFileContent={updatePromptTemplateFile}
-                    onResetFile={resetPromptTemplateFile}
-                    testStates={promptTemplateTestStates}
-                    testsRunning={promptTemplateTestsRunning}
-                    onRunApiTest={runPromptTemplateApiTest}
-                    onRunAllApiTests={runAllPromptTemplateApiTests}
                   />
                 </ErrorBoundary>
               </HelpModal>
@@ -4371,18 +2842,17 @@ export default function App() {
                     selectedId={skillPanelSelectedId}
                     selectedDocs={skillPanelDocs}
                     selectedFiles={skillPanelFiles}
-                    agents={agents}
-                    activeAgentId={activeAgentId}
-                    executionMode={skillExecutionMode}
-                    verifyMax={skillVerifyMax}
-                    toolLoopMax={skillToolLoopMax}
-                    verifierAgentId={skillVerifierAgentId}
+                    explicitSkillId={explicitSkillId}
+                    onActivateForNextTurn={(id) => {
+                      if (!activeAgent?.enableSkills || !availableSkillsForAgent.some((skill) => skill.id === id)) {
+                        logNow({ category: "skills", ok: false, outcome: "failure", message: "Skill explicit activation rejected: agent access is disabled or the skill is not allowed.", details: id });
+                        return;
+                      }
+                      setExplicitSkillId(id);
+                      logNow({ category: "skills", ok: true, message: `Skill explicitly activated for next turn: ${id}` });
+                    }}
                     builtInTools={allBuiltInTools}
                     mcpToolCatalog={globalMcpToolCatalog}
-                    onChangeExecutionMode={setSkillExecutionMode}
-                    onChangeVerifyMax={(value) => setSkillVerifyMax(clampSkillVerifyMax(value))}
-                    onChangeToolLoopMax={(value) => setSkillToolLoopMax(clampSkillToolLoopMax(value))}
-                    onChangeVerifierAgentId={setSkillVerifierAgentId}
                     onSelect={setSkillPanelSelectedId}
                     onImport={onImportSkill}
                     onCreateEmpty={onCreateEmptySkill}
@@ -4598,6 +3068,27 @@ export default function App() {
       {tutorialUnavailableMessage ? (
         <HelpModal title="案例教學目前無法使用" onClose={() => setTutorialUnavailableMessage(null)} width="min(560px, 92vw)">
           <div style={{ fontSize: 13, lineHeight: 1.8, opacity: 0.92 }}>{tutorialUnavailableMessage}</div>
+        </HelpModal>
+      ) : null}
+      {pendingToolConfirmation ? (
+        <HelpModal
+          title="確認工具操作"
+          onClose={() => pendingToolConfirmation.settle(false)}
+          width="min(560px, 92vw)"
+          footer={
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button type="button" onClick={() => pendingToolConfirmation.settle(false)} style={iconActionBtn}>
+                拒絕
+              </button>
+              <button type="button" onClick={() => pendingToolConfirmation.settle(true)} style={dangerMiniBtn}>
+                允許執行
+              </button>
+            </div>
+          }
+        >
+          <div style={{ whiteSpace: "pre-wrap", overflow: "auto", maxHeight: "min(55vh, 520px)", lineHeight: 1.6 }}>
+            {pendingToolConfirmation.message}
+          </div>
         </HelpModal>
       ) : null}
     </div>

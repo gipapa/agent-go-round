@@ -30,10 +30,9 @@ Commit: [`2b5cb11`](https://github.com/gipapa/agent-go-round/commit/2b5cb114be78
 | Voice | `voice/useVoiceController.ts` | STT recording/transcription、TTS playback、probe state |
 | Logging | `app/useAppLog.ts`, `runtime/logging.ts`, `ui/LogPanel.tsx` | Log normalization、sorting、display |
 | Load balancing | `runtime/loadBalancerRunner.ts` | Candidate execution、retry/failover、diagnostics hooks |
-| Tool decisions | `runtime/toolDecision.ts`, `toolDecisionPrompt.ts`, `toolExecution.ts` | Explicit routing、prompt catalog、intent/signatures/timeouts |
+| Tool effects | `runtime/toolEffectRunner.ts`, `runtime/harness/toolRegistry.ts` | Explicit routing、schema validation、confirmation、intent and lifecycle |
 | Chat messages | `runtime/chatMessages.ts` | Message creation、tool summary markers、streaming helpers |
-| Browser workflow | `runtime/browserWorkflow.ts` | Observation enrichment、grounded summaries、heuristics |
-| Prompt tests | `runtime/promptTemplateTests.ts` | Prompt template API test specs and result normalization |
+| Context projection | `runtime/harness/contextProjector.ts` | Bounded transcript、catalog、skill instructions and resource projection |
 | MAGI/tutorial | `magi/managedAgents.ts`, `onboarding/agentManagement.ts` | Managed-agent and tutorial-agent normalization |
 | UI | `ui/CredentialsPanel.tsx` | Credential editing presentation |
 
@@ -42,7 +41,7 @@ Commit: [`2b5cb11`](https://github.com/gipapa/agent-go-round/commit/2b5cb114be78
 - App 主要保留組裝、跨 domain callbacks 與 workflow sequencing。
 - Runtime logic 有明確輸入輸出，可直接單元測試。
 - Voice 與 credentials 不再各自在 App 維護整套 state/effects。
-- 新增 13 個聚焦測試檔，涵蓋 routing、LB、voice、credentials、logging 與 browser workflow。
+- 新增聚焦測試檔，涵蓋 harness routing、LB、voice、credentials、logging、tool effects 與 skill packages。
 
 ## Phase 2: Controllers And Decision Execution
 
@@ -59,8 +58,8 @@ Commit: [`0eb8b9f`](https://github.com/gipapa/agent-go-round/commit/0eb8b9f97fdf
 | Skills | `resources/useSkillsController.ts` | Skill package selection、docs/files、CRUD、import/export |
 | Tutorial session | `onboarding/useTutorialSession.ts` | Scenario/step state、evaluations、hints、opened tool result state |
 | Decision retry | `runtime/structuredDecision.ts` | Invoke/parse/retry/terminal failure lifecycle |
-| Decision runners | `runtime/decisionRunners.ts` | Tool/skill/planner/verifier prompt execution and logging |
-| Tool execution | `runtime/toolSelectionExecutor.ts` | Built-in/MCP routing、confirmation、execution、summary and logs |
+| Agent harness | `runtime/harness/`、`orchestrators/harnessOneToOne.ts` | Canonical model/action loop, bounded context and effect lifecycle |
+| Harness execution | `runtime/toolEffectRunner.ts` | Built-in/MCP routing、confirmation、execution、summary and logs |
 
 Controllers 使用 injected stores 或 side-effect dependencies，讓測試不需要真實 IndexedDB、download 或 model provider。Decision runners 只由 App 注入 agent invocation 與 log sink，不再直接依賴 UI state。
 
@@ -80,9 +79,9 @@ App.tsx
   |     chat, docs, skills, credentials, voice, tutorial session
   |
   +-- runtime services --------> pure or dependency-injected decisions
-  |     load balancing, prompts, schemas, tool execution, browser workflow
+  |     load balancing, schemas, tool effects, context projection
   |
-  +-- orchestrators -----------> one-to-one, MAGI, multi-turn skill
+  +-- orchestrators -----------> one-to-one, MAGI, canonical skill harness
   |
   +-- UI panels ---------------> props + callbacks
 ```
@@ -94,7 +93,7 @@ App.tsx
 以下流程仍同時依賴多個 domain，目前保留在 App 以避免過早建立大型 context 或隱藏 dependency：
 
 - `sendOneToOneTurn` / `onSend`
-- `prepareSkillExecution` / `executeMultiTurnSkill`
+- canonical `runHarnessChatTurn` 的 chat wiring
 - Tutorial workspace capture、transition、restore
 - App-level load balancer、MAGI 與 deadline wiring
 

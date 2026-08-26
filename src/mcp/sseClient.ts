@@ -1,7 +1,10 @@
 import { McpServerConfig } from "../types";
 import { errorMessage } from "../utils/errors";
 import { generateId } from "../utils/id";
+import { readResponseTextWithLimit } from "../utils/fetchWithTimeout";
 import { redactMcpUrl } from "./url";
+import { MAX_MCP_RESPONSE_CHARS } from "./responseLimits";
+import { MAX_RUNTIME_TIMEOUT_MS } from "../utils/deadline";
 
 type RpcReq<P = unknown> = { id: string; method: string; params?: P };
 type RpcRes<R = unknown> = { id: string; result?: R; error?: unknown };
@@ -107,7 +110,7 @@ export class McpSseClient {
       typeof this.cfg.toolTimeoutSecond === "number" && Number.isFinite(this.cfg.toolTimeoutSecond)
         ? Math.max(1, Math.round(this.cfg.toolTimeoutSecond))
         : DEFAULT_MCP_TOOL_TIMEOUT_SECOND;
-    return seconds * 1000;
+    return Math.min(MAX_RUNTIME_TIMEOUT_MS, seconds * 1000);
   }
 
   private getHeartbeatMs() {
@@ -115,7 +118,7 @@ export class McpSseClient {
       typeof this.cfg.heartbeatSecond === "number" && Number.isFinite(this.cfg.heartbeatSecond)
         ? Math.max(0, Math.round(this.cfg.heartbeatSecond))
         : DEFAULT_MCP_HEARTBEAT_SECOND;
-    return seconds * 1000;
+    return Math.min(MAX_RUNTIME_TIMEOUT_MS, seconds * 1000);
   }
 
   private markHealthy() {
@@ -148,12 +151,17 @@ export class McpSseClient {
 
     es.onmessage = (ev) => {
       if (this.es !== es) return;
+      if (typeof ev.data !== "string" || ev.data.length > MAX_MCP_RESPONSE_CHARS) {
+        this.onLog?.(`MCP SSE event exceeded ${MAX_MCP_RESPONSE_CHARS} chars`);
+        this.invalidateConnection("MCP SSE event exceeded response limit");
+        return;
+      }
       try {
         this.markHealthy();
         const msg = JSON.parse(ev.data) as RpcRes;
         this.settlePending(msg);
       } catch {
-        this.onLog?.(`MCP SSE parse failed: ${ev.data}`);
+        this.onLog?.(`MCP SSE parse failed: ${ev.data.slice(0, 300)}`);
       }
     };
   }
@@ -185,7 +193,17 @@ export class McpSseClient {
         return { kind: "reply", response: { id: req.id, error: `HTTP ${res.status}` } };
       }
       this.markHealthy();
-      const bodyText = await res.text().catch(() => "");
+      const bounded = await readResponseTextWithLimit(res, MAX_MCP_RESPONSE_CHARS).catch(() => ({ text: "", exceeded: false }));
+      if (bounded.exceeded) {
+        return {
+          kind: "reply",
+          response: {
+            id: req.id,
+            error: `MCP RPC response exceeded ${MAX_MCP_RESPONSE_CHARS} chars`
+          }
+        };
+      }
+      const bodyText = bounded.text;
       const trimmed = bodyText.trim();
       if (!trimmed) {
         return { kind: "deferred" };

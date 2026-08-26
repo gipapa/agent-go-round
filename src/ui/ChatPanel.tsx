@@ -678,7 +678,7 @@ export default function ChatPanel(props: ChatPanelProps) {
                 ) : null}
                 {m.role === "assistant" && m.skillTrace && m.skillTrace.length > 0 ? (
                   <details className="chat-tool-details">
-                    <summary>查看 skill 流程紀錄</summary>
+                    <summary>查看 activity timeline</summary>
                     <div className="chat-trace-actions">
                       <button
                         type="button"

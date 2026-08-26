@@ -125,8 +125,8 @@ steps:
       expect:
         userPrompt: 請使用工具打開一個會持續更新的時鐘 dashboard，並告訴我目前時區。
         requireAssistant: true
-        successfulToolMessageIncludes:
-          - Built-in tool -> 教學用時鐘工具
+        skillTraceIncludes:
+          - 教學用時鐘工具
 
   - id: chat-user-profile-tool
     title: 用對話呼叫系統工具
@@ -149,5 +149,5 @@ steps:
       expect:
         userPrompt: 請使用工具讀取我的個人資訊，並用一句話介紹我是誰
         requireAssistant: true
-        successfulToolMessageIncludes:
-          - Built-in tool -> get_user_profile
+        skillTraceIncludes:
+          - get_user_profile

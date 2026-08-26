@@ -2,6 +2,7 @@ import JSZip from "jszip";
 import type { JSONSchema7 } from "json-schema";
 import { SkillConfig, SkillDocItem, SkillFileItem, SkillWorkflowPolicy } from "../types";
 import { errorMessage } from "../utils/errors";
+import { normalizeSkillPackagePath, parseStandardSkillDocument, SKILL_PACKAGE_LIMITS, validateSkillPackage } from "../runtime/skillPackageValidation";
 
 export type SkillSnapshot = {
   meta: SkillConfig;
@@ -13,6 +14,8 @@ const VERSION = 1;
 const META_STORE = "skills_meta";
 const DOCS_STORE = "skills_docs";
 const FILES_STORE = "skills_files";
+
+const MAX_IMPORT_FILE_COUNT = 1_000;
 
 type SkillConfigBlock = {
   name?: string;
@@ -79,6 +82,8 @@ function normalizeWorkflow(value: unknown): SkillWorkflowPolicy {
       : undefined;
   return {
     instructions: typeof input.instructions === "string" ? input.instructions : "",
+    disableModelInvocation: input.disableModelInvocation === true,
+    requiredToolIds: normalizeStringArray(input.requiredToolIds),
     useSkillDocs: input.useSkillDocs !== false,
     useAgentDocs: input.useAgentDocs === true,
     allowMcp: input.allowMcp === true,
@@ -153,9 +158,8 @@ function parseYamlFrontmatter(markdown: string): ParsedFrontmatter {
   };
 }
 
-function parseSkillMarkdown(markdown: string, rootPath: string) {
-  const { attrs, body } = parseYamlFrontmatter(markdown);
-  const configMatch = body.match(/```skill-config\s*([\s\S]*?)```/i);
+function parseSkillConfigBlock(instructions: string) {
+  const configMatch = instructions.match(/```skill-config\s*([\s\S]*?)```/i);
   let config: SkillConfigBlock = {};
   if (configMatch?.[1]) {
     try {
@@ -165,8 +169,49 @@ function parseSkillMarkdown(markdown: string, rootPath: string) {
       throw new Error(`SKILL.md skill-config JSON invalid: ${errorMessage(error)}`);
     }
   }
+  return {
+    config,
+    instructions: instructions.replace(/```skill-config[\s\S]*?```/gi, "").trim()
+  };
+}
 
-  const instructions = body.replace(/```skill-config[\s\S]*?```/gi, "").trim();
+function parseSkillMarkdown(markdown: string, rootPath: string) {
+  const standard = parseStandardSkillDocument(markdown);
+  if (!("code" in standard)) {
+    const parsedInstructions = parseSkillConfigBlock(standard.instructions);
+    const agrMetadata = standard.metadata["agent-go-round"];
+    const agr = agrMetadata && typeof agrMetadata === "object" && !Array.isArray(agrMetadata)
+      ? agrMetadata as Record<string, unknown>
+      : {};
+    const workflowMetadata = agr.workflow && typeof agr.workflow === "object" && !Array.isArray(agr.workflow)
+      ? agr.workflow as Record<string, unknown>
+      : {};
+    return {
+      id: deriveSkillId(rootPath),
+      name: standard.name,
+      version: standard.version ?? "1.0.0",
+      description: standard.description,
+      decisionHint: typeof parsedInstructions.config.decisionHint === "string" && parsedInstructions.config.decisionHint.trim()
+        ? parsedInstructions.config.decisionHint.trim()
+        : typeof agr.decisionHint === "string"
+        ? agr.decisionHint.trim()
+        : standard.description,
+      inputSchema: parsedInstructions.config.inputSchema ?? (agr.inputSchema && typeof agr.inputSchema === "object" && !Array.isArray(agr.inputSchema) ? agr.inputSchema : {}),
+      workflow: normalizeWorkflow({
+        ...workflowMetadata,
+        ...parsedInstructions.config.workflow,
+        instructions: parsedInstructions.config.workflow?.instructions ?? parsedInstructions.instructions,
+        disableModelInvocation: standard.disableModelInvocation || parsedInstructions.config.workflow?.disableModelInvocation === true,
+        requiredToolIds: agr.requiredToolIds ?? parsedInstructions.config.workflow?.requiredToolIds ?? workflowMetadata.requiredToolIds
+      }),
+      skillMarkdown: markdown
+    };
+  }
+  if (markdown.trimStart().startsWith("---")) {
+    throw new Error(standard.message);
+  }
+  const { attrs, body } = parseYamlFrontmatter(markdown);
+  const { config, instructions } = parseSkillConfigBlock(body);
   const heading = instructions.match(/^#\s+(.+)$/m)?.[1]?.trim();
   const description =
     (typeof config.description === "string" && config.description.trim()) || attrs.description?.trim() || inferDescription(instructions);
@@ -198,6 +243,68 @@ function classifyFile(path: string, rootPath: string): SkillFileItem["kind"] {
 
 function isTextLikePath(path: string) {
   return /\.(md|markdown|txt|json|ya?ml|xml|csv|html|js|ts|prompt|svg)$/i.test(path);
+}
+
+function decodeUtf8OrKeepBytes(bytes: Uint8Array): string | Uint8Array {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return bytes;
+  }
+}
+
+function zipEntryPath(entry: JSZip.JSZipObject) {
+  return entry.unsafeOriginalName ?? entry.name;
+}
+
+function mediaTypeForPath(path: string) {
+  const extension = path.split(".").pop()?.toLowerCase();
+  const mediaTypes: Record<string, string> = {
+    md: "text/markdown",
+    markdown: "text/markdown",
+    txt: "text/plain",
+    json: "application/json",
+    yaml: "application/yaml",
+    yml: "application/yaml",
+    xml: "application/xml",
+    csv: "text/csv",
+    html: "text/html",
+    js: "text/javascript",
+    ts: "text/typescript",
+    svg: "image/svg+xml",
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    pdf: "application/pdf",
+    zip: "application/zip"
+  };
+  return extension ? mediaTypes[extension] : undefined;
+}
+
+function bytesForContent(content: string | Uint8Array) {
+  if (typeof content === "string") return new TextEncoder().encode(content);
+  if (ArrayBuffer.isView(content)) {
+    return new Uint8Array(content.buffer, content.byteOffset, content.byteLength).slice();
+  }
+  return content;
+}
+
+function fallbackDigest(bytes: Uint8Array) {
+  let hash = 2166136261;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a32-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+async function contentDigest(content: string | Uint8Array) {
+  const bytes = bytesForContent(content);
+  if (!globalThis.crypto?.subtle) return fallbackDigest(bytes);
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes.slice().buffer as ArrayBuffer);
+  return `sha256-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 async function deleteSkillRecords(db: IDBDatabase, skillId: string): Promise<void> {
@@ -255,11 +362,39 @@ function countByKind(files: SkillFileItem[]) {
   };
 }
 
+function validateStoredSkillSnapshot(meta: SkillConfig, files: SkillFileItem[]) {
+  if (files.length > MAX_IMPORT_FILE_COUNT) {
+    throw new Error(`Skill package contains more than ${MAX_IMPORT_FILE_COUNT} files.`);
+  }
+  const packageValidation = validateSkillPackage(files.map((file) => ({
+    path: file.path,
+    content: file.content,
+    mediaType: file.mediaType
+  })));
+  const expectedSkillPath = `${meta.rootPath}/SKILL.md`;
+  if (packageValidation.rootPath !== meta.rootPath || packageValidation.skillFilePath?.toLowerCase() !== expectedSkillPath.toLowerCase()) {
+    throw new Error("Skill snapshot root or SKILL.md path is inconsistent.");
+  }
+  const storedSkillFile = packageValidation.files.find((file) => file.path.toLowerCase() === expectedSkillPath.toLowerCase());
+  if (!storedSkillFile || typeof storedSkillFile.content !== "string" || storedSkillFile.content !== meta.skillMarkdown) {
+    throw new Error("Skill snapshot metadata does not match SKILL.md content.");
+  }
+  const standardParse = parseStandardSkillDocument(meta.skillMarkdown);
+  const legacyPackage = meta.sourceProvenance === "legacy"
+    || ("code" in standardParse && standardParse.code === "malformed_frontmatter" && !meta.skillMarkdown.trimStart().startsWith("---"));
+  const allowedLegacyDiagnostics = legacyPackage && packageValidation.diagnostics.every((diagnostic) => diagnostic.code === "malformed_frontmatter");
+  if (!packageValidation.ok && !allowedLegacyDiagnostics) {
+    throw new Error(`Invalid skill package: ${packageValidation.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`);
+  }
+  return packageValidation.packageByteSize;
+}
+
 async function writeSkillSnapshot(db: IDBDatabase, meta: SkillConfig, files: SkillFileItem[]): Promise<SkillConfig> {
+  const packageByteSize = validateStoredSkillSnapshot(meta, files);
   const updatedAt = Date.now();
   const nextFiles = files.map((file) => ({ ...file, updatedAt }));
   const docs = nextFiles
-    .filter((file) => file.kind === "reference")
+    .filter((file): file is SkillFileItem & { content: string } => file.kind === "reference" && typeof file.content === "string")
     .map(
       (file) =>
         ({
@@ -275,6 +410,7 @@ async function writeSkillSnapshot(db: IDBDatabase, meta: SkillConfig, files: Ski
   const nextMeta: SkillConfig = {
     ...meta,
     ...counts,
+    packageByteSize,
     updatedAt
   };
 
@@ -364,6 +500,8 @@ export async function updateSkillMarkdown(skillId: string, skillMarkdown: string
 
   const parsed = parseSkillMarkdown(skillMarkdown, current.rootPath);
   const files = await getSkillFilesById(db, skillId);
+  const nextSkillBytes = new TextEncoder().encode(skillMarkdown);
+  const nextSkillDigest = await contentDigest(nextSkillBytes);
   const nextMeta: SkillConfig = {
     ...current,
     name: parsed.name,
@@ -377,7 +515,14 @@ export async function updateSkillMarkdown(skillId: string, skillMarkdown: string
   };
   const nextFiles = files.map((file) =>
     file.kind === "skill" && file.path === `${current.rootPath}/SKILL.md`
-      ? { ...file, content: skillMarkdown }
+      ? {
+          ...file,
+          content: skillMarkdown,
+          binaryContent: nextSkillBytes,
+          mediaType: "text/markdown",
+          byteSize: nextSkillBytes.byteLength,
+          digest: nextSkillDigest
+        }
       : file
   );
   return writeSkillSnapshot(db, nextMeta, nextFiles);
@@ -395,25 +540,30 @@ export async function createEmptySkill(name: string): Promise<SkillConfig> {
     rootPath = `${baseRoot}-${suffix++}`;
   }
 
-  const skillMarkdown = `# ${name.trim() || "New Skill"}
-
-請在這裡描述 skill 的用途、執行方式與注意事項。
-
-\`\`\`skill-config
-{
-  "version": "1.0.0",
-  "decisionHint": "",
-  "inputSchema": {},
-  "workflow": {
-    "useSkillDocs": true,
-    "useAgentDocs": false,
-    "allowMcp": false,
-    "allowBuiltInTools": false
-  }
-}
-\`\`\`
-`;
+  const displayName = name.trim() || "New Skill";
+  const description = `${displayName} skill package`;
+  const skillMarkdown = [
+    "---",
+    `name: ${JSON.stringify(rootPath)}`,
+    `description: ${JSON.stringify(description)}`,
+    'version: "1.0.0"',
+    "metadata:",
+    "  agent-go-round:",
+    "    workflow:",
+    "      useSkillDocs: true",
+    "      useAgentDocs: false",
+    "      allowMcp: false",
+    "      allowBuiltInTools: false",
+    "---",
+    "",
+    `# ${displayName}`,
+    "",
+    "請在這裡描述 skill 的用途、執行方式與注意事項。",
+    ""
+  ].join("\n");
   const parsed = parseSkillMarkdown(skillMarkdown, rootPath);
+  const skillBytes = new TextEncoder().encode(skillMarkdown);
+  const skillDigest = await contentDigest(skillBytes);
   const meta: SkillConfig = {
     ...parsed,
     rootPath,
@@ -422,7 +572,10 @@ export async function createEmptySkill(name: string): Promise<SkillConfig> {
     docCount: 0,
     scriptCount: 0,
     assetCount: 0,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    sourceProvenance: "agentskills",
+    skillDiagnostics: [],
+    packageByteSize: skillBytes.byteLength
   };
   const files: SkillFileItem[] = [
     {
@@ -431,6 +584,10 @@ export async function createEmptySkill(name: string): Promise<SkillConfig> {
       path: `${rootPath}/SKILL.md`,
       kind: "skill",
       content: skillMarkdown,
+      binaryContent: skillBytes,
+      mediaType: "text/markdown",
+      byteSize: skillBytes.byteLength,
+      digest: skillDigest,
       updatedAt: meta.updatedAt
     }
   ];
@@ -446,22 +603,42 @@ export async function upsertSkillTextFile(
   if (!current) {
     throw new Error(`Skill not found: ${skillId}`);
   }
-  const normalizedRelativePath = args.path.replace(/^\/+/, "").trim();
+  const normalizedRelativePath = normalizeSkillPackagePath(args.path.trim());
   if (!normalizedRelativePath) {
     throw new Error("File path is required.");
   }
   const kindDir = args.kind === "reference" ? "references" : "assets";
-  const fullPath = normalizedRelativePath.startsWith(`${current.rootPath}/`)
-    ? normalizedRelativePath
-    : `${current.rootPath}/${normalizedRelativePath.startsWith(`${kindDir}/`) ? normalizedRelativePath : `${kindDir}/${normalizedRelativePath}`}`;
+  if (
+    normalizedRelativePath.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalizedRelativePath) ||
+    normalizedRelativePath.split("/").some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new Error("File path must be a safe relative path.");
+  }
+  const rootPrefix = `${current.rootPath}/`;
+  const rootedPath = normalizedRelativePath.startsWith(rootPrefix)
+    ? normalizedRelativePath.slice(rootPrefix.length)
+    : normalizedRelativePath;
+  const relativePath = rootedPath.startsWith(`${kindDir}/`) ? rootedPath.slice(kindDir.length + 1) : rootedPath;
+  if (!relativePath || relativePath.toLowerCase() === "skill.md") {
+    throw new Error("Editable files must stay inside references/ or assets/.");
+  }
+  const fullPath = `${current.rootPath}/${kindDir}/${relativePath}`;
   const files = await getSkillFilesById(db, skillId);
   const fileId = `${current.id}:${fullPath}`;
+  if (files.some((file) => file.id !== fileId && file.path.toLocaleLowerCase() === fullPath.toLocaleLowerCase())) {
+    throw new Error("A file with the same path already exists.");
+  }
   const nextFile: SkillFileItem = {
     id: fileId,
     skillId: current.id,
     path: fullPath,
     kind: args.kind,
     content: args.content,
+    binaryContent: new TextEncoder().encode(args.content),
+    mediaType: args.kind === "reference" ? "text/markdown" : "text/plain",
+    byteSize: new TextEncoder().encode(args.content).byteLength,
+    digest: await contentDigest(args.content),
     updatedAt: Date.now()
   };
   const nextFiles = [...files.filter((file) => file.id !== fileId), nextFile].sort((a, b) => a.path.localeCompare(b.path));
@@ -475,7 +652,12 @@ export async function deleteSkillTextFile(skillId: string, path: string): Promis
     throw new Error(`Skill not found: ${skillId}`);
   }
   const files = await getSkillFilesById(db, skillId);
-  const nextFiles = files.filter((file) => file.path !== path);
+  const target = files.find((file) => file.path === path);
+  if (!target) throw new Error("File not found.");
+  if (target.kind !== "reference" && target.kind !== "asset") {
+    throw new Error("Only reference and asset files can be deleted.");
+  }
+  const nextFiles = files.filter((file) => file.id !== target.id);
   return writeSkillSnapshot(db, current, nextFiles);
 }
 
@@ -486,12 +668,13 @@ export async function exportSkillZip(skillId: string): Promise<Blob> {
     throw new Error(`Skill not found: ${skillId}`);
   }
   const files = await getSkillFilesById(db, skillId);
+  validateStoredSkillSnapshot(current, files);
   const zip = new JSZip();
   zip.folder(`${current.rootPath}/scripts`);
   zip.folder(`${current.rootPath}/references`);
   zip.folder(`${current.rootPath}/assets`);
   files.forEach((file) => {
-    zip.file(file.path, file.content);
+    zip.file(file.path, bytesForContent(file.binaryContent ?? file.content));
   });
   return zip.generateAsync({ type: "blob" });
 }
@@ -499,14 +682,54 @@ export async function exportSkillZip(skillId: string): Promise<Blob> {
 export async function importSkillZip(file: File): Promise<SkillConfig> {
   const zip = await JSZip.loadAsync(file);
   const entries = Object.values(zip.files).filter((entry) => !entry.dir);
-  const skillEntry = entries.find((entry) => /(^|\/)SKILL\.md$/i.test(entry.name));
+  if (entries.length > MAX_IMPORT_FILE_COUNT) {
+    throw new Error(`Skill package contains more than ${MAX_IMPORT_FILE_COUNT} files.`);
+  }
+  let declaredPackageBytes = 0;
+  for (const entry of entries) {
+    const declaredSize = (entry as JSZip.JSZipObject & { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
+    if (typeof declaredSize !== "number" || !Number.isFinite(declaredSize) || declaredSize < 0) continue;
+    if (declaredSize > SKILL_PACKAGE_LIMITS.maxFileBytes) {
+      throw new Error(`Skill package file exceeds ${SKILL_PACKAGE_LIMITS.maxFileBytes} bytes.`);
+    }
+    declaredPackageBytes += declaredSize;
+    if (declaredPackageBytes > SKILL_PACKAGE_LIMITS.maxPackageBytes) {
+      throw new Error(`Skill package exceeds ${SKILL_PACKAGE_LIMITS.maxPackageBytes} bytes.`);
+    }
+  }
+  const skillEntry = entries.find((entry) => /(^|\/)SKILL\.md$/i.test(normalizeSkillPackagePath(zipEntryPath(entry))));
   if (!skillEntry) {
     throw new Error("Zip package must include skill-name/SKILL.md.");
   }
 
-  const rootPath = skillEntry.name.includes("/") ? skillEntry.name.split("/")[0] : file.name.replace(/\.zip$/i, "");
-  const skillMarkdown = await skillEntry.async("text");
-  const parsed = parseSkillMarkdown(skillMarkdown, rootPath);
+  const normalizedSkillEntryPath = normalizeSkillPackagePath(zipEntryPath(skillEntry));
+  const rootPath = normalizedSkillEntryPath.includes("/")
+    ? normalizedSkillEntryPath.split("/")[0]
+    : file.name.replace(/\.zip$/i, "");
+  const rawEntryBytes = new Map<string, Uint8Array>();
+  const packageFiles = await Promise.all(
+    entries.map(async (entry) => {
+      const bytes = await entry.async("uint8array");
+      const path = zipEntryPath(entry);
+      rawEntryBytes.set(normalizeSkillPackagePath(path), bytes);
+      return {
+        path,
+        mediaType: mediaTypeForPath(path),
+        byteSize: bytes.byteLength,
+        content: isTextLikePath(path) ? decodeUtf8OrKeepBytes(bytes) : bytes
+      };
+    })
+  );
+  const packageValidation = validateSkillPackage(packageFiles);
+  const skillBytes = rawEntryBytes.get(normalizedSkillEntryPath);
+  const skillMarkdown = skillBytes ? new TextDecoder().decode(skillBytes) : await skillEntry.async("text");
+  const standardParse = parseStandardSkillDocument(skillMarkdown);
+  const legacyPackage = "code" in standardParse && standardParse.code === "malformed_frontmatter" && !skillMarkdown.trimStart().startsWith("---");
+  if (!packageValidation.ok && (!legacyPackage || packageValidation.diagnostics.some((diagnostic) => diagnostic.code !== "malformed_frontmatter"))) {
+    throw new Error(`Invalid skill package: ${packageValidation.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`);
+  }
+  const validatedRootPath = packageValidation.rootPath ?? rootPath;
+  const parsed = parseSkillMarkdown(skillMarkdown, validatedRootPath);
   const updatedAt = Date.now();
 
   const docs: SkillDocItem[] = [];
@@ -514,11 +737,15 @@ export async function importSkillZip(file: File): Promise<SkillConfig> {
   let scriptCount = 0;
   let assetCount = 0;
 
-  for (const entry of entries) {
-    const path = entry.name.replace(/^\.?\//, "");
-    const kind = classifyFile(path, rootPath);
-    if (!isTextLikePath(path) && kind !== "asset") continue;
-    const content = isTextLikePath(path) ? await entry.async("text") : "";
+  for (const entry of packageValidation.files) {
+    const path = entry.path;
+    const kind = classifyFile(path, validatedRootPath);
+    const originalContent = entry.content;
+    const textContent = typeof originalContent === "string" ? originalContent : undefined;
+    const isText = textContent !== undefined;
+    const content = originalContent;
+    const rawBytes = rawEntryBytes.get(path) ?? bytesForContent(originalContent);
+    const binaryContent = rawBytes;
 
     files.push({
       id: `${parsed.id}:${path}`,
@@ -526,16 +753,20 @@ export async function importSkillZip(file: File): Promise<SkillConfig> {
       path,
       kind,
       content,
+      binaryContent,
+      mediaType: entry.mediaType ?? mediaTypeForPath(path),
+      byteSize: rawBytes.byteLength,
+      digest: await contentDigest(rawBytes),
       updatedAt
     });
 
-    if (kind === "reference") {
+    if (kind === "reference" && isText) {
       docs.push({
         id: `${parsed.id}:${path}`,
         skillId: parsed.id,
         path,
         title: getTitleFromPath(path),
-        content,
+        content: textContent!,
         updatedAt
       });
     }
@@ -552,13 +783,16 @@ export async function importSkillZip(file: File): Promise<SkillConfig> {
     inputSchema: parsed.inputSchema,
     workflow: parsed.workflow,
     skillMarkdown: parsed.skillMarkdown,
-    rootPath,
+    rootPath: validatedRootPath,
     sourcePackageName: file.name,
     fileCount: files.length,
     docCount: docs.length,
     scriptCount,
     assetCount,
-    updatedAt
+    updatedAt,
+    sourceProvenance: legacyPackage ? "legacy" : "agentskills",
+    skillDiagnostics: packageValidation.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+    packageByteSize: packageValidation.packageByteSize
   };
 
   const db = await openDb();

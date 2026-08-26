@@ -60,4 +60,9 @@ describe("credential runtime", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })));
     await expect(fetchCredentialModels(credential("custom"), "")).rejects.toThrow("沒有回傳可用模型");
   });
+
+  it("fails closed on an oversized model discovery response", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("x".repeat(512 * 1024 + 1), { status: 200 })));
+    await expect(fetchCredentialModels(credential("custom"), "")).rejects.toThrow("沒有回傳可用模型");
+  });
 });

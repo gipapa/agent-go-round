@@ -1,16 +1,16 @@
 id: chatgpt-browser-skill
-title: "[6] 使用多輪 Skill 操作 GitHub Trending"
-description: 使用 multi-turn skill 結合 agent-browser MCP，以單一對話完成瀏覽器自動化流程：直接開啟 GitHub Trending、點進第一名 repo，最後整理頁面內容回報給使用者。
+title: "[6] 使用 Browser Skill 操作 GitHub Trending"
+description: 使用 canonical action loop 結合 agent-browser MCP，以單一對話完成瀏覽器自動化流程：直接開啟 GitHub Trending、點進第一名 repo，最後整理頁面內容回報給使用者。
 exitTitle: 離開案例教學
 exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
 steps:
   - id: intro
-    title: 認識多輪 Skill + agent-browser 案例
+    title: 認識 Browser Skill + agent-browser 案例
     checklistLabel: 認識案例目標
-    instructionTitle: multi-turn browser skill 測試案例
+    instructionTitle: Browser action loop 測試案例
     instructionBody: |
       這個案例會帶你完成：
-      - 建立一個專門操作瀏覽器的 multi-turn skill
+      - 建立一個專門操作瀏覽器的 skill，使用同一個 canonical action loop
       - 讓 skill 使用 `agent-browser` MCP
       - 用一則對話完成：直接打開 GitHub Trending、點進第一名 repo、最後讀回 repo 內容摘要
       - 使用者若明確要求「視窗模式 / headed mode」，就直接照要求用可見瀏覽器開啟
@@ -21,9 +21,9 @@ steps:
 
       注意：
       - 這個案例需要本地端執行程式，建議使用 Windows 的 WSL、Linux、或 macOS 環境
-      - 因為流程會依頁面狀態決定下一步，所以這裡會使用 multi-turn skill
+      - 因為流程會依頁面狀態決定下一步，所以 action loop 會在同一份 transcript 中逐步處理工具結果
       - 這個案例會在中途帶你註冊 `教學用MCP`，並授權給目前 Agent 使用
-      - GitHub Trending 一般比 Google AI 或登入型網站穩定，更適合驗證多輪 browser workflow
+      - GitHub Trending 一般比 Google AI 或登入型網站穩定，更適合驗證 browser workflow
     behavior: manual_info
     actionLabel: 下一步
     automation:
@@ -34,7 +34,7 @@ steps:
     checklistLabel: 將對話歷史改為 1
     instructionTitle: 先把送給模型的歷史訊息數量改成 1
     instructionBody: |
-      這個案例會用到多輪 skill 與多步 MCP 工具流程，為了避免免費模型因為上下文過長而吃滿 context，請先前往 Chat Config > History。
+      這個案例會用到多步 MCP 工具流程，為了避免免費模型因為上下文過長而吃滿 context，請先前往 Chat Config > History。
 
       請把：
       - `Messages sent to model`
@@ -52,30 +52,26 @@ steps:
       activeAgentPreset: tutorial_agent_base
 
   - id: configure_runtime
-    title: 切換到多輪 Skill 執行模式
-    checklistLabel: 啟用 multi-turn skill runtime
-    instructionTitle: 系統會自動切換成 multi-turn skill
+    title: 設定 Browser Skill action loop
+    checklistLabel: 啟用 canonical action loop
+    instructionTitle: 系統會自動接入 Browser Skill action loop
     instructionBody: |
       這個案例需要：
       - 多步工具流程
       - browser_open / snapshot / click / fill / wait 的連續動作
-      - 最後再做 verify / refine
+      - 每一步都把工具結果回寫同一份 transcript，再由模型決定下一步
 
       因此系統會自動幫你設定：
-      - Skills runtime：`多輪 refine`
-      - 工具步數上限：`8`
-      - Verify 次數：`2`
+      - Harness：`canonical action loop`
+      - 模型步數上限：`8`
       - 教學用 load balancer instance delay：`10 秒`
       - 教學用 load balancer instance retries：`10`
 
-      你可以稍後到 Chat Config > Skills 查看這些設定。
+      你可以稍後在 activity trace 查看這些執行事件。
     behavior: manual_info
     actionLabel: 下一步
     automation:
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: multi_turn
-      skillToolLoopMax: 8
-      skillVerifyMax: 2
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
 
@@ -84,7 +80,7 @@ steps:
     checklistLabel: 建立三個 instance 的 Load Balancer
     instructionTitle: 先補更多 key，建立給案例 6 用的第二個 Load Balancer
     instructionBody: |
-      這個案例的 multi-turn skill 比一般單輪對話更容易吃到模型額度，所以建議先準備更多可切換的 instances。
+      這個案例的多步 browser workflow 比一般單輪回答更容易吃到模型額度，所以建議先準備更多可切換的 instances。
 
       請回到 Chat Config，打開 Credentials 設定。
 
@@ -93,9 +89,9 @@ steps:
       - 新增另一個 provider
 
       當系統偵測到第二個可用來源後，會自動建立 `教學用Load Balancer 2`，其中三個 instances 會是：
-      - Instance 1：沿用目前對話用的 provider / key，model=`groq/compound`
-      - Instance 2：沿用同一把 key，但 model 改成 `groq/compound-mini`
-      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`groq/compound`
+      - Instance 1：沿用目前對話用的 provider / key，model=`openai/gpt-oss-20b`
+      - Instance 2：沿用同一把 key，但 model 改成 `openai/gpt-oss-20b`
+      - Instance 3：改用你剛新增的另一把 key 或另一個 provider，model=`openai/gpt-oss-20b`
 
       這個案例不會驗證 failover 是否真的發生；這一步只確認第二個 load balancer 已建立完成。
     completionLabel: 等待你新增第二把 key / 其他 provider，並讓系統建立第二個 Load Balancer
@@ -171,7 +167,7 @@ steps:
   - id: create_browser_skill
     title: 建立 Browser workflow skill
     checklistLabel: 建立 Browser workflow skill
-    instructionTitle: 系統會自動建立一個 multi-turn browser skill
+    instructionTitle: 系統會自動建立一個 Browser workflow skill
     instructionBody: |
       這個 skill 會包含：
       - `SKILL.md`
@@ -192,9 +188,6 @@ steps:
     actionLabel: 下一步
     automation:
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: multi_turn
-      skillToolLoopMax: 8
-      skillVerifyMax: 2
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
 
@@ -218,9 +211,6 @@ steps:
     actionLabel: 下一步
     automation:
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: multi_turn
-      skillToolLoopMax: 8
-      skillVerifyMax: 2
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
 
@@ -253,13 +243,10 @@ steps:
     tab: chat
     targetId: chat-input
     behavior: first_chat_skill_chatgpt_ask
-    completionLabel: 等待 Agent 使用 multi-turn skill 完成整個 GitHub Trending 流程
+    completionLabel: 等待 Agent 使用 Browser workflow skill 完成整個 GitHub Trending 流程
     actionLabel: 完成案例教學
     automation:
       clearChatOnEnter: true
-      skillExecutionMode: multi_turn
-      skillToolLoopMax: 8
-      skillVerifyMax: 2
       loadBalancerDelaySecond: 10
       loadBalancerMaxRetries: 10
       composerSeed: 幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要
@@ -267,13 +254,10 @@ steps:
       expect:
         userPrompt: 幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要
         requireAssistant: true
-        requireSkillTodo: true
-        requireSkillTodoProgress: true
-        requireSkillTodoTerminal: true
-        successfulToolMessageIncludes:
-          - MCP 教學用MCP -> browser_open
-          - MCP 教學用MCP -> browser_snapshot
-          - MCP 教學用MCP -> browser_click
+        skillTraceIncludes:
+          - browser_open
+          - browser_snapshot
+          - browser_click
         skillLoadContainsAny:
           - browser-workflow-multiturn
           - browser-workflow-multi-turn-skill

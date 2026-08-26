@@ -11,9 +11,7 @@ export function formatCredentialKeyLabel(credential: ModelCredentialEntry, key?:
   if (credential.preset === "chrome_prompt") return "not_required";
   if (!key) return "missing";
   const slot = credential.keys.findIndex((entry) => entry.id === key.id);
-  const suffix = key.apiKey.trim() ? `…${key.apiKey.trim().slice(-4)}` : "empty";
-  const keyIdShort = key.id.slice(0, 8);
-  return `slot=${slot >= 0 ? slot + 1 : "?"}/${credential.keys.length || "?"}, suffix=${suffix}, id=${keyIdShort}`;
+  return `slot=${slot >= 0 ? slot + 1 : "?"}/${credential.keys.length || "?"}, configured=${key.apiKey.trim() ? "true" : "false"}`;
 }
 
 export function describeResolvedLoadBalancerCandidate(candidate: ResolvedLoadBalancerInstance) {
@@ -27,10 +25,10 @@ export function describeResolvedLoadBalancerCandidate(candidate: ResolvedLoadBal
     `instance=${instanceIndex + 1}/${candidate.loadBalancer.instances.length}`,
     `provider=${provider}`,
     `credential=${candidate.credential.label}`,
-    `endpoint=${candidate.credential.endpoint || "-"}`,
+    `endpoint_host=${safeEndpointHost(candidate.credential.endpoint)}`,
     `model=${candidate.instance.model || "-"}`,
     `description=${candidate.instance.description.trim() || "-"}`,
-    `key=${formatCredentialKeyLabel(candidate.credential, candidate.key)}`,
+    `key=${safeCredentialKeyLabel(candidate.credential, candidate.key)}`,
     `max_retries=${candidate.instance.maxRetries}`,
     `delay_second=${candidate.instance.delaySecond}`,
     `resume_minute=${candidate.instance.resumeMinute}`,
@@ -38,6 +36,22 @@ export function describeResolvedLoadBalancerCandidate(candidate: ResolvedLoadBal
     `failure_count=${candidate.instance.failureCount}`,
     `next_check_time=${formatLoadBalancerDateTime(candidate.instance.nextCheckTime)}`
   ].join("\n");
+}
+
+function safeEndpointHost(endpoint?: string) {
+  if (!endpoint?.trim()) return "-";
+  try {
+    return new URL(endpoint).host || "configured";
+  } catch {
+    return "configured";
+  }
+}
+
+function safeCredentialKeyLabel(credential: ModelCredentialEntry, key?: ModelCredentialEntry["keys"][number]) {
+  if (credential.preset === "chrome_prompt") return "not_required";
+  if (!key) return "missing";
+  const slot = credential.keys.findIndex((entry) => entry.id === key.id);
+  return `slot=${slot >= 0 ? slot + 1 : "?"}/${credential.keys.length || "?"}, configured=${key.apiKey.trim() ? "true" : "false"}`;
 }
 
 export function describeLoadBalancerAvailability(args: {
@@ -66,10 +80,10 @@ export function describeLoadBalancerAvailability(args: {
         `status=${coolingDown ? "cooldown_skip" : "eligible"}`,
         `provider=${provider}`,
         `credential=${credential?.label ?? "(missing)"}`,
-        `endpoint=${credential?.endpoint ?? "-"}`,
+        `endpoint_host=${safeEndpointHost(credential?.endpoint)}`,
         `model=${instance.model || "-"}`,
         `description=${instance.description.trim() || "-"}`,
-        `key=${credential ? formatCredentialKeyLabel(credential, key) : "missing"}`,
+        `key=${credential ? safeCredentialKeyLabel(credential, key) : "missing"}`,
         `failure=${instance.failure}`,
         `failure_count=${instance.failureCount}`,
         `next_check_time=${formatLoadBalancerDateTime(instance.nextCheckTime)}`

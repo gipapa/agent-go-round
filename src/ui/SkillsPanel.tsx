@@ -1,6 +1,6 @@
 import React from "react";
 import { redactMcpUrl } from "../mcp/url";
-import { AgentConfig, BuiltInToolConfig, McpServerConfig, McpTool, SkillConfig, SkillDocItem, SkillExecutionMode, SkillFileItem } from "../types";
+import { BuiltInToolConfig, McpServerConfig, McpTool, SkillConfig, SkillDocItem, SkillFileItem } from "../types";
 import { errorMessage } from "../utils/errors";
 import HelpModal from "./HelpModal";
 
@@ -23,7 +23,9 @@ function toRelativePath(skill: SkillConfig, file: SkillFileItem & { kind: "refer
 
 function buildDrafts(skill: SkillConfig, files: SkillFileItem[]) {
   return files
-    .filter((file): file is SkillFileItem & { kind: "reference" | "asset" } => file.kind === "reference" || file.kind === "asset")
+    .filter((file): file is SkillFileItem & { kind: "reference" | "asset"; content: string } =>
+      (file.kind === "reference" || file.kind === "asset") && typeof file.content === "string"
+    )
     .map(
       (file) =>
         ({
@@ -41,18 +43,10 @@ export default function SkillsPanel(props: {
   selectedId: string | null;
   selectedDocs: SkillDocItem[];
   selectedFiles: SkillFileItem[];
-  agents: AgentConfig[];
-  activeAgentId: string;
-  executionMode: SkillExecutionMode;
-  verifyMax: number;
-  toolLoopMax: number;
-  verifierAgentId: string;
   builtInTools: BuiltInToolConfig[];
   mcpToolCatalog: Array<{ server: McpServerConfig; tools: McpTool[] }>;
-  onChangeExecutionMode: (mode: SkillExecutionMode) => void;
-  onChangeVerifyMax: (value: number) => void;
-  onChangeToolLoopMax: (value: number) => void;
-  onChangeVerifierAgentId: (value: string) => void;
+  explicitSkillId?: string | null;
+  onActivateForNextTurn: (id: string) => void;
   onSelect: (id: string | null) => void;
   onImport: (file: File) => Promise<void>;
   onCreateEmpty: (name: string) => Promise<void>;
@@ -217,10 +211,6 @@ export default function SkillsPanel(props: {
   const editableReferences = editableFiles.filter((item) => item.kind === "reference");
   const editableAssets = editableFiles.filter((item) => item.kind === "asset");
   const otherStoredFiles = props.selectedFiles.filter((item) => item.kind === "script" || item.kind === "other");
-  const verifierAgentName = props.verifierAgentId
-    ? props.agents.find((agent) => agent.id === props.verifierAgentId)?.name ?? "已選擇 verifier"
-    : props.agents.find((agent) => agent.id === props.activeAgentId)?.name ?? "目前對話 Agent";
-
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div style={{ display: "grid", gap: 8 }}>
@@ -234,90 +224,6 @@ export default function SkillsPanel(props: {
           Skills 是比 tool 更高階的 workflow layer。這一版對齊 <code>skill-name/SKILL.md + scripts/ + references/ + assets/</code> 的結構，
           並透過 IndexedDB 抽象層管理匯入後的 skill 定義與檔案。
         </div>
-      </div>
-
-      <div className="card" style={{ padding: 14, display: "grid", gap: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontWeight: 800, marginBottom: 4 }}>Skill Runtime</div>
-            <div style={{ fontSize: 12, opacity: 0.74, lineHeight: 1.7 }}>
-              切換 skill 的單輪 / 多輪執行架構。單輪模式不做結果 refine，較輕量、延遲低，適合語氣修正、回答框架、輕量 docs 或 tool 輔助；
-              多輪模式會先跑多步工具流程，再追加 verify / refine 回合，較適合需要檢查正確性、補充證據、瀏覽器操作或重新調用工具的情境，但會更慢、耗用更多 token。
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => props.onChangeExecutionMode(props.executionMode === "multi_turn" ? "single_turn" : "multi_turn")}
-            aria-pressed={props.executionMode === "multi_turn"}
-            title={props.executionMode === "multi_turn" ? "切換為單輪 skill" : "切換為多輪 refine"}
-            style={{
-              ...runtimeToggleBtn,
-              background: props.executionMode === "multi_turn" ? "rgba(91,123,255,0.14)" : "rgba(255,255,255,0.03)",
-              borderColor: props.executionMode === "multi_turn" ? "rgba(91,123,255,0.38)" : "var(--border)"
-            }}
-          >
-            <span style={runtimeToggleText}>
-              {props.executionMode === "multi_turn" ? "多輪 refine" : "單輪 skill"}
-            </span>
-            <span
-              style={{
-                ...runtimeToggleTrack,
-                background: props.executionMode === "multi_turn" ? "rgba(91,123,255,0.38)" : "rgba(255,255,255,0.12)"
-              }}
-            >
-              <span
-                style={{
-                  ...runtimeToggleThumb,
-                  transform: props.executionMode === "multi_turn" ? "translateX(19px)" : "translateX(0)"
-                }}
-              />
-            </span>
-          </button>
-        </div>
-
-        <div style={{ fontSize: 12, lineHeight: 1.7, opacity: 0.84 }}>
-          {props.executionMode === "multi_turn"
-            ? `目前使用多輪 skill。系統會先執行最多 ${props.toolLoopMax} 步工具流程，再由 verifier（目前：${verifierAgentName}）檢查回答是否符合 skill 指示、是否需要補強證據或追加工具使用，最多 refine ${props.verifyMax} 次。`
-            : "目前使用單輪 skill。系統會載入 skill instructions / references，必要時搭配 docs、MCP、built-in tools，但不會在最終回答後自動驗證或重答。"}
-        </div>
-
-        {props.executionMode === "multi_turn" ? (
-          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-            <div>
-              <label style={labelLike}>工具步數上限</label>
-              <input
-                type="number"
-                min={0}
-                max={12}
-                value={props.toolLoopMax}
-                onChange={(e) => props.onChangeToolLoopMax(Number(e.target.value))}
-                style={inputLike}
-              />
-            </div>
-            <div>
-              <label style={labelLike}>Verify 次數</label>
-              <input
-                type="number"
-                min={0}
-                max={5}
-                value={props.verifyMax}
-                onChange={(e) => props.onChangeVerifyMax(Number(e.target.value))}
-                style={inputLike}
-              />
-            </div>
-            <div>
-              <label style={labelLike}>Verifier Agent</label>
-              <select value={props.verifierAgentId} onChange={(e) => props.onChangeVerifierAgentId(e.target.value)} style={inputLike}>
-                <option value="">目前對話 Agent</option>
-                {props.agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        ) : null}
       </div>
 
       {showHelp ? (
@@ -493,6 +399,14 @@ Then prefer using the built-in tool \`計算\` to obtain the exact result before
                 </button>
                 {active ? (
                   <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => props.onActivateForNextTurn(skill.id)}
+                      style={props.explicitSkillId === skill.id ? btnPrimary : btnSmall}
+                      title="下一次對話由 controller 明確載入此 skill"
+                    >
+                      {props.explicitSkillId === skill.id ? "Next turn skill" : "Use next turn"}
+                    </button>
                     <button type="button" onClick={() => openEdit(skill)} style={btnSmall}>
                       Edit
                     </button>
@@ -664,62 +578,6 @@ const helpBtn: React.CSSProperties = {
 const sectionTitle: React.CSSProperties = {
   fontWeight: 800,
   marginBottom: 8
-};
-
-const labelLike: React.CSSProperties = {
-  display: "block",
-  fontSize: 12,
-  fontWeight: 700,
-  opacity: 0.8,
-  marginBottom: 6
-};
-
-const inputLike: React.CSSProperties = {
-  width: "100%",
-  borderRadius: 10,
-  border: "1px solid var(--border)",
-  background: "var(--bg-2)",
-  color: "var(--text)",
-  padding: "10px 12px",
-  boxSizing: "border-box"
-};
-
-const runtimeToggleBtn: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 12,
-  padding: "8px 12px",
-  borderRadius: 999,
-  border: "1px solid var(--border)",
-  color: "var(--text)",
-  cursor: "pointer",
-  fontWeight: 700,
-  flexShrink: 0
-};
-
-const runtimeToggleText: React.CSSProperties = {
-  fontSize: 12,
-  whiteSpace: "nowrap"
-};
-
-const runtimeToggleTrack: React.CSSProperties = {
-  position: "relative",
-  width: 42,
-  height: 24,
-  borderRadius: 999,
-  transition: "background 160ms ease"
-};
-
-const runtimeToggleThumb: React.CSSProperties = {
-  position: "absolute",
-  top: 3,
-  left: 3,
-  width: 18,
-  height: 18,
-  borderRadius: 999,
-  background: "linear-gradient(180deg, #ffffff, #d8e1ff)",
-  boxShadow: "0 2px 10px rgba(0,0,0,0.28)",
-  transition: "transform 160ms ease"
 };
 
 const badgeStyle: React.CSSProperties = {

@@ -1,4 +1,6 @@
 export const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
+export const MAX_FETCH_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const MAX_RESPONSE_TEXT_CHARS = 1_000_000;
 
 export type FetchWithTimeoutOptions = {
   signal?: AbortSignal;
@@ -46,12 +48,47 @@ export function getRetryAfterDelayMs(headers: Headers, fallbackMs: number) {
   if (!raw) return fallbackMs;
 
   const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(MAX_FETCH_TIMEOUT_MS, seconds * 1000);
 
   const dateMs = Date.parse(raw);
-  if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  if (Number.isFinite(dateMs)) return Math.min(MAX_FETCH_TIMEOUT_MS, Math.max(0, dateMs - Date.now()));
 
-  return fallbackMs;
+  return Number.isFinite(fallbackMs) ? Math.min(MAX_FETCH_TIMEOUT_MS, Math.max(0, fallbackMs)) : 0;
+}
+
+export async function readResponseTextWithLimit(response: Response, maxChars: number) {
+  const limit = Number.isFinite(maxChars)
+    ? Math.min(MAX_RESPONSE_TEXT_CHARS, Math.max(0, Math.floor(maxChars)))
+    : MAX_RESPONSE_TEXT_CHARS;
+  if (!response.body) {
+    const text = await response.text();
+    return { text: text.slice(0, limit), exceeded: text.length > limit };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let text = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      const remaining = Math.max(0, limit - text.length);
+      if (chunk.length > remaining) {
+        text += chunk.slice(0, remaining);
+        await reader.cancel().catch(() => {});
+        return { text: text.slice(0, limit), exceeded: true };
+      }
+      text += chunk;
+    }
+    const tail = decoder.decode();
+    const remaining = Math.max(0, limit - text.length);
+    if (tail.length > remaining) return { text: `${text}${tail.slice(0, remaining)}`.slice(0, limit), exceeded: true };
+    text += tail;
+    return { text: text.slice(0, limit), exceeded: false };
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export function sleepWithAbort(ms: number, signal?: AbortSignal) {
@@ -72,7 +109,10 @@ export function sleepWithAbort(ms: number, signal?: AbortSignal) {
 }
 
 export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, options: FetchWithTimeoutOptions = {}) {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const requestedTimeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(requestedTimeoutMs)
+    ? Math.min(MAX_FETCH_TIMEOUT_MS, Math.max(0, Math.round(requestedTimeoutMs)))
+    : DEFAULT_FETCH_TIMEOUT_MS;
   const controller = new AbortController();
   const linkedSignals = [init.signal, options.signal].filter(Boolean) as AbortSignal[];
   const linkedAbortHandlers: Array<() => void> = [];

@@ -1,13 +1,9 @@
-import { LoadBalancerConfig, McpServerConfig, OrchestratorMode, VoiceSettings, SkillExecutionMode } from "../types";
+import { LoadBalancerConfig, McpServerConfig, McpToolPolicy, OrchestratorMode, VoiceSettings } from "../types";
 import { readJsonStorage, writeJsonStorage } from "./safeStorage";
 
 export type UiState = {
   activeTab?: "chat" | "chat_config" | "resources" | "agents" | "profile";
   mode?: OrchestratorMode | "leader_team";
-  skillExecutionMode?: SkillExecutionMode;
-  skillVerifyMax?: number;
-  skillToolLoopMax?: number;
-  skillVerifierAgentId?: string;
   activeAgentId?: string;
   executionDeadlineMs?: number;
   memberAgentIds?: string[];
@@ -27,7 +23,6 @@ export type UiState = {
 const UI_KEY = "agr_ui_v1";
 const MCP_KEY = "agr_mcp_v1";
 const MCP_ALIAS_KEY = "agr_mcp_aliases_v1";
-const MCP_PROMPT_KEY = "agr_mcp_prompt_templates_v1";
 const MODEL_CREDENTIALS_KEY = "agr_model_credentials_v1";
 const LOAD_BALANCERS_KEY = "agr_load_balancers_v1";
 
@@ -49,67 +44,23 @@ export type ModelCredentialEntry = {
   updatedAt: number;
 };
 export type ModelCredentials = ModelCredentialEntry[];
-export type McpPromptTemplateKey = "zh" | "en";
-export type McpPromptTemplates = {
-  activeId: McpPromptTemplateKey;
-  zh: string;
-  en: string;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-export function getDefaultMcpPromptTemplates(): McpPromptTemplates {
-  return {
-    activeId: "en",
-    zh: [
-      "請只回傳 JSON，不要加任何其他文字。",
-      "",
-      "請判斷這次是否需要使用工具。",
-      "",
-      "使用者提問如下:",
-      "{{userInput}}",
-      "",
-      "工具清單如下:",
-      "{{toolListJson}}",
-      "",
-      "如果不需要工具，回傳：",
-      "{{noToolJson}}",
-      "",
-      "如果需要使用使用者資訊工具，回傳：",
-      "{{userProfileJson}}",
-      "",
-      "如果需要使用 browser 內建 JS 工具，回傳：",
-      "{{builtinToolJson}}",
-      "",
-      "如果需要使用 MCP 工具，回傳：",
-      "{{mcpCallJson}}"
-    ].join("\n"),
-    en: [
-      "Return JSON only. Do not add any other text.",
-      "",
-      "Decide whether this turn needs a tool.",
-      "",
-      "User request:",
-      "{{userInput}}",
-      "",
-      "Available tools:",
-      "{{toolListJson}}",
-      "",
-      "If no tool is needed, return:",
-      "{{noToolJson}}",
-      "",
-      "If the user profile tool is needed, return:",
-      "{{userProfileJson}}",
-      "",
-      "If a browser-side built-in JS tool is needed, return:",
-      "{{builtinToolJson}}",
-      "",
-      "If an MCP tool is needed, return:",
-      "{{mcpCallJson}}"
-    ].join("\n")
-  };
+function normalizeMcpToolPolicies(value: unknown): Record<string, McpToolPolicy> | undefined {
+  if (!isRecord(value)) return undefined;
+  const policies = Object.entries(value).slice(0, 200).reduce<Record<string, McpToolPolicy>>((result, [name, rawPolicy]) => {
+    if (!name.trim() || name.length > 256 || !isRecord(rawPolicy)) return result;
+    const policy: McpToolPolicy = {};
+    if (rawPolicy.intent === "observe" || rawPolicy.intent === "mutate" || rawPolicy.intent === "control" || rawPolicy.intent === "context") policy.intent = rawPolicy.intent;
+    if (rawPolicy.idempotency === "idempotent" || rawPolicy.idempotency === "non_idempotent" || rawPolicy.idempotency === "unknown") policy.idempotency = rawPolicy.idempotency;
+    if (rawPolicy.cancellation === "terminable" || rawPolicy.cancellation === "cooperative" || rawPolicy.cancellation === "none") policy.cancellation = rawPolicy.cancellation;
+    if (typeof rawPolicy.requireConfirmation === "boolean") policy.requireConfirmation = rawPolicy.requireConfirmation;
+    if (Object.keys(policy).length) result[name] = policy;
+    return result;
+  }, {});
+  return Object.keys(policies).length ? policies : undefined;
 }
 
 export function loadUiState(): UiState {
@@ -152,7 +103,8 @@ export function loadMcpServers(): McpServerConfig[] {
         heartbeatSecond:
           typeof item.heartbeatSecond === "number" && Number.isFinite(item.heartbeatSecond)
             ? item.heartbeatSecond
-            : undefined
+            : undefined,
+        toolPolicies: normalizeMcpToolPolicies(item.toolPolicies)
       }))
     : [];
 }
@@ -170,23 +122,6 @@ export function loadMcpAliases(): McpToolAliases {
 
 export function saveMcpAliases(aliases: McpToolAliases) {
   writeJsonStorage(MCP_ALIAS_KEY, aliases);
-}
-
-export function loadMcpPromptTemplates(): McpPromptTemplates {
-  const defaults = getDefaultMcpPromptTemplates();
-  const parsed = readJsonStorage<Partial<McpPromptTemplates>>(MCP_PROMPT_KEY, {
-    defaultValue: defaults,
-    validate: (value): value is Partial<McpPromptTemplates> => isRecord(value)
-  });
-  return {
-    activeId: parsed.activeId === "zh" ? "zh" : "en",
-    zh: typeof parsed.zh === "string" && parsed.zh.trim() ? parsed.zh : defaults.zh,
-    en: typeof parsed.en === "string" && parsed.en.trim() ? parsed.en : defaults.en
-  };
-}
-
-export function saveMcpPromptTemplates(templates: McpPromptTemplates) {
-  writeJsonStorage(MCP_PROMPT_KEY, templates);
 }
 
 export function loadModelCredentials(): ModelCredentials {

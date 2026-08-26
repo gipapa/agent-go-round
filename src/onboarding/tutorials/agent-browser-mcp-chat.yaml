@@ -128,7 +128,7 @@ steps:
       expect:
         userPrompt: 請明確使用 MCP 工具 browser_open 開啟 https://github.com/trending ，不要只口頭描述你要做什麼。
         requireAssistant: true
-        successfulToolNamesAny:
+        skillTraceIncludesAny:
           - browser_open
           - visit
 
@@ -158,5 +158,5 @@ steps:
       expect:
         userPrompt: 請明確使用 MCP 工具 browser_snapshot 讀取目前瀏覽器頁面，整理出 GitHub Trending 前十個熱門 repo 名稱。
         requireAssistant: true
-        successfulToolMessageIncludes:
-          - MCP 教學用MCP -> browser_snapshot
+        skillTraceIncludes:
+          - browser_snapshot

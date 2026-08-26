@@ -106,7 +106,7 @@ export async function runMagi(args: {
   const deadlockRounds = Math.max(1, Math.round(args.deadlockRounds ?? DEFAULT_MAGI_DEADLOCK_ROUNDS));
 
   publish();
-  log({ message: `MAGI started (${args.mode})`, details: args.question });
+  log({ message: `MAGI started (${args.mode})`, details: `question_chars=${args.question.length}` });
 
   let previousBallots = new Map<MagiUnitId, ParsedBallot>();
   let stuckRounds = 0;
@@ -244,7 +244,7 @@ export async function runMagi(args: {
           round,
           ok: false,
           message: "Unit failed",
-          details: [result.error, result.raw].filter(Boolean).join("\n\n")
+          details: `${result.error}\nraw_chars=${result.raw.length}`
         });
         continue;
       }
@@ -305,7 +305,7 @@ export async function runMagi(args: {
         kind: "error"
       });
       publish();
-      log({ round, ok: false, message: "MAGI terminated by unit failure", details: state.finalSummary });
+      log({ round, ok: false, message: "MAGI terminated by unit failure", details: "unit_failure" });
       return {
         state,
         answer: buildFinalAnswer({ question: args.question, state })

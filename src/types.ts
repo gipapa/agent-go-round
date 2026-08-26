@@ -9,6 +9,17 @@ export type ChatTraceEntry = {
   content: string;
 };
 
+export type HarnessRunProjection = {
+  runId: string;
+  generation: number;
+  skillId?: string;
+  stepCount: number;
+  toolCallCount: number;
+  durationMs: number;
+  terminalReason: string;
+  activity: Array<{ type: string; message?: string }>;
+};
+
 export type SkillTodoStatus = "pending" | "in_progress" | "completed" | "blocked";
 export type SkillTodoSource = "skill" | "planner" | "system";
 export type SkillPhase =
@@ -32,29 +43,6 @@ export type SkillTodoItem = {
   updatedAt: number;
 };
 
-export type BrowserObservationTargetKind = "repo_link" | "input" | "button" | "link" | "generic";
-
-export type BrowserObservationTarget = {
-  ref: string;
-  role: string;
-  label: string;
-  kind: BrowserObservationTargetKind;
-  score: number;
-};
-
-export type BrowserObservationDigest = {
-  sourceTool: string;
-  pageKind: "ranked_list" | "repo_page" | "input_page" | "unknown";
-  blockedReason?: string;
-  repoName?: string;
-  url?: string;
-  title?: string;
-  rankedTargets: BrowserObservationTarget[];
-  inputTargets: BrowserObservationTarget[];
-  actionTargets: BrowserObservationTarget[];
-  contentHints: string[];
-};
-
 export type ChatMessage = {
   id: string;
   role: Role;
@@ -66,6 +54,7 @@ export type ChatMessage = {
   isStreaming?: boolean;
   hideWhileStreaming?: boolean;
   skillTrace?: ChatTraceEntry[];
+  harnessRun?: HarnessRunProjection;
   skillGoal?: string;
   skillTodo?: SkillTodoItem[];
   skillPhase?: SkillPhase;
@@ -151,6 +140,15 @@ export type LoadBalancerInstance = {
   nextCheckTime?: number | null;
   createdAt: number;
   updatedAt: number;
+  toolCallingCapability?: "native" | "text_protocol" | "none";
+  contextBudget?: {
+    maxTotalChars?: number;
+    maxCatalogChars?: number;
+    maxSkillInstructionChars?: number;
+    maxResourceChars?: number;
+    maxSingleToolResultChars?: number;
+    maxModelResponseChars?: number;
+  };
 };
 
 export type LoadBalancerConfig = {
@@ -183,7 +181,7 @@ export type AgentConfig = {
   custom?: {
     method: "POST";
     url: string;
-    bodyTemplate: string; // uses {{input}} {{history}} {{model}}
+    bodyTemplate: string; // uses {{input}} {{history}} {{model}} {{system}}
     responseJsonPath: string; // e.g. $.choices[0].message.content
   };
 
@@ -191,6 +189,7 @@ export type AgentConfig = {
     streaming?: boolean;
     tools?: boolean;
     mcp?: boolean;
+    toolCallingCapability?: "native" | "text_protocol" | "none";
   };
 
   allowedDocIds?: string[];
@@ -212,7 +211,6 @@ export type DetectResult = {
 };
 
 export type OrchestratorMode = "one_to_one" | "magi_vote" | "magi_consensus";
-export type SkillExecutionMode = "single_turn" | "multi_turn";
 
 export type DocItem = {
   id: string;
@@ -232,12 +230,26 @@ export type McpServerConfig = {
   authHint?: string; // Optional note (EventSource can't set headers)
   toolTimeoutSecond?: number;
   heartbeatSecond?: number;
+  toolPolicies?: Record<string, McpToolPolicy>;
+};
+
+export type McpToolPolicy = {
+  intent?: "observe" | "mutate" | "control" | "context";
+  idempotency?: "idempotent" | "non_idempotent" | "unknown";
+  cancellation?: "terminable" | "cooperative" | "none";
+  requireConfirmation?: boolean;
 };
 
 export type McpTool = {
   name: string;
   description?: string;
   inputSchema?: JSONSchema7;
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
 };
 
 export type BuiltInToolConfig = {
@@ -256,6 +268,8 @@ export type BuiltInToolConfig = {
 
 export type SkillWorkflowPolicy = {
   instructions?: string;
+  disableModelInvocation?: boolean;
+  requiredToolIds?: string[];
   useSkillDocs?: boolean;
   useAgentDocs?: boolean;
   allowMcp?: boolean;
@@ -268,6 +282,12 @@ export type SkillWorkflowPolicy = {
     input?: unknown;
     reason?: string;
   };
+};
+
+export type SkillPackageDiagnostic = {
+  code: string;
+  path?: string;
+  message: string;
 };
 
 export type SkillConfig = {
@@ -286,96 +306,9 @@ export type SkillConfig = {
   scriptCount: number;
   assetCount: number;
   updatedAt: number;
-};
-
-export type SkillAvailability = {
-  skillId: string;
-  name: string;
-  description: string;
-  allowed: boolean;
-  reason?: string;
-};
-
-export type SkillSessionSnapshot = {
-  sessionId: string;
-  agentId: string;
-  createdAt: number;
-  availableSkills: SkillAvailability[];
-};
-
-export type SkillStepDecision =
-  | {
-      type: "observe";
-      reason: string;
-      todoIds?: string[];
-    }
-  | {
-      type: "act";
-      reason: string;
-      toolKind: "mcp" | "builtin";
-      toolName: string;
-      input?: unknown;
-      todoIds?: string[];
-    }
-  | {
-      type: "ask_user";
-      reason: string;
-      message: string;
-      todoIds?: string[];
-    }
-  | {
-      type: "finish";
-      reason: string;
-      todoIds?: string[];
-    };
-
-export type SkillCompletionDecision =
-  | {
-      type: "complete";
-      reason?: string;
-      todoIds?: string[];
-    }
-  | {
-      type: "incomplete";
-      reason: string;
-      suggestedFocus?: string;
-      todoIds?: string[];
-    };
-
-export type SkillRunState = {
-  skillId: string;
-  goal: string;
-  phase: SkillPhase;
-  stepIndex: number;
-  todo: SkillTodoItem[];
-  recentObservationSignatures: string[];
-  recentActionSignatures: string[];
-  manualGate: "none" | "awaiting_user_confirmation" | "awaiting_manual_browser_step" | "resumable";
-  completionStatus: "unknown" | "complete" | "incomplete";
-  latestReason?: string;
-  lastBrowserObservation?: BrowserObservationDigest;
-  preferredMcpServerId?: string;
-};
-
-export type LoadedSkillReference = {
-  path: string;
-  content: string;
-};
-
-export type LoadedSkillRuntime = {
-  skillId: string;
-  name: string;
-  description: string;
-  instructions: string;
-  referencedPaths: string[];
-  loadedReferences: LoadedSkillReference[];
-  assetPaths: string[];
-  loadedAssets: LoadedSkillReference[];
-  allowMcp: boolean;
-  allowBuiltInTools: boolean;
-  allowedMcpServerIds?: string[];
-  allowedBuiltInToolIds?: string[];
-  bootstrapAction?: SkillWorkflowPolicy["bootstrapAction"];
+  sourceProvenance?: "legacy" | "agentskills";
+  skillDiagnostics?: SkillPackageDiagnostic[];
+  packageByteSize?: number;
 };
 
 export type SkillDocItem = {
@@ -392,7 +325,11 @@ export type SkillFileItem = {
   skillId: string;
   path: string;
   kind: "skill" | "reference" | "script" | "asset" | "other";
-  content: string;
+  content: string | Uint8Array;
+  binaryContent?: Uint8Array;
+  mediaType?: string;
+  byteSize?: number;
+  digest?: string;
   updatedAt: number;
 };
 

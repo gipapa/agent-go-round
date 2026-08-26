@@ -6,6 +6,7 @@ VENDOR_DIR="$ROOT_DIR/vendor"
 AGENT_BROWSER_REPO_DIR="$VENDOR_DIR/agent-browser"
 LOCAL_AGENT_BROWSER_BIN="$ROOT_DIR/node_modules/.bin/agent-browser"
 AGENT_BROWSER_HOME="$ROOT_DIR/.agent-browser-home"
+AGENT_BROWSER_SOCKET_DIR="${AGENT_BROWSER_SOCKET_DIR:-/tmp/agent-go-round-agent-browser-sockets}"
 
 find_system_chrome() {
   local candidate
@@ -32,6 +33,10 @@ find_managed_chrome() {
     fi
     if [ -x "$version_dir/chrome-linux64/chrome" ]; then
       printf '%s\n' "$version_dir/chrome-linux64/chrome"
+      return 0
+    fi
+    if [ -x "$version_dir/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ]; then
+      printf '%s\n' "$version_dir/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
       return 0
     fi
   done
@@ -76,7 +81,7 @@ ensure_browser_ready() {
     HOME="$AGENT_BROWSER_HOME" "$LOCAL_AGENT_BROWSER_BIN" install --with-deps || true
   fi
 
-  if managed_chrome="$(find_managed_chrome)"; then
+if managed_chrome="$(find_managed_chrome)"; then
     echo "[agent-browser-sse] managed Chrome ready: $managed_chrome"
   else
     echo "[agent-browser-sse] warning: managed Chrome install was not found after setup." >&2
@@ -84,6 +89,7 @@ ensure_browser_ready() {
 }
 
 mkdir -p "$VENDOR_DIR"
+mkdir -p "$AGENT_BROWSER_SOCKET_DIR"
 
 if [ ! -d "$AGENT_BROWSER_REPO_DIR/.git" ]; then
   echo "[agent-browser-sse] cloning vercel-labs/agent-browser ..."
@@ -105,4 +111,11 @@ echo "[agent-browser-sse] repo mirror: $AGENT_BROWSER_REPO_DIR"
 echo "[agent-browser-sse] browser home: $AGENT_BROWSER_HOME"
 ensure_browser_ready
 
-HOME="$AGENT_BROWSER_HOME" AGENT_BROWSER_BIN="$LOCAL_AGENT_BROWSER_BIN" npm start
+# Warm the daemon before the MCP endpoint accepts model calls. The first
+# agent-browser command can spend tens of seconds starting Chrome on macOS;
+# without this warm-up a real tutorial's first dispatched tool may time out.
+echo "[agent-browser-sse] warming agent-browser session: agr_browser"
+HOME="$AGENT_BROWSER_HOME" AGENT_BROWSER_BIN="$LOCAL_AGENT_BROWSER_BIN" AGENT_BROWSER_SOCKET_DIR="$AGENT_BROWSER_SOCKET_DIR" \
+  "$LOCAL_AGENT_BROWSER_BIN" --session agr_browser open about:blank >/dev/null
+
+HOME="$AGENT_BROWSER_HOME" AGENT_BROWSER_BIN="$LOCAL_AGENT_BROWSER_BIN" AGENT_BROWSER_SOCKET_DIR="$AGENT_BROWSER_SOCKET_DIR" npm start

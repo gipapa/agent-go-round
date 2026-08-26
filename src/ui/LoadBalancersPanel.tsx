@@ -406,6 +406,73 @@ export default function LoadBalancersPanel(props: {
                       </div>
                     </div>
 
+                    <div>
+                      <label style={label}>Harness tool-calling capability</label>
+                      <select
+                        value={instance.toolCallingCapability ?? ""}
+                        onChange={(e) => updateInstance(instance.id, { toolCallingCapability: (e.target.value || undefined) as LoadBalancerInstance["toolCallingCapability"] })}
+                        style={inp as React.CSSProperties}
+                        data-tutorial-id={`load-balancer-instance-capability-${index}`}
+                      >
+                        <option value="">Not configured (harness unavailable)</option>
+                        <option value="native">Native tool calls</option>
+                        <option value="text_protocol">Strict text action protocol (probe required)</option>
+                        <option value="none">Unavailable for harness tools</option>
+                      </select>
+                      <div style={{ fontSize: 12, opacity: 0.72, marginTop: 6 }}>
+                        Text protocol candidates receive a no-side-effect conformance probe before a run.
+                      </div>
+                    </div>
+
+                    <div>
+                      <div style={label}>Optional harness context budget overrides</div>
+                      <div style={{ ...grid3, marginTop: 6 }}>
+                        {contextBudgetFields.map(({ key, label: fieldLabel }) => (
+                          <div key={key}>
+                            <label style={label}>{fieldLabel}</label>
+                            <input
+                              type="number"
+                              min={0}
+                              max={1_000_000}
+                              step={1}
+                              value={instance.contextBudget?.[key] ?? ""}
+                              onChange={(event) => {
+                                const raw = event.target.value.trim();
+                                const parsed = raw === "" ? undefined : Number(raw);
+                                const value = parsed === undefined
+                                  ? undefined
+                                  : Number.isFinite(parsed)
+                                    ? Math.min(1_000_000, Math.max(0, Math.round(parsed)))
+                                    : 0;
+                                setDraft((current) => {
+                                  if (!current) return current;
+                                  return {
+                                    ...current,
+                                    instances: current.instances.map((candidate) => {
+                                      if (candidate.id !== instance.id) return candidate;
+                                      const nextBudget = { ...(candidate.contextBudget ?? {}) };
+                                      if (value === undefined) delete nextBudget[key];
+                                      else nextBudget[key] = value;
+                                      return {
+                                        ...candidate,
+                                        contextBudget: Object.keys(nextBudget).length ? nextBudget : undefined,
+                                        updatedAt: Date.now()
+                                      };
+                                    })
+                                  };
+                                });
+                              }}
+                              style={inp}
+                              data-tutorial-id={`load-balancer-instance-context-budget-${key}-${index}`}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.72, marginTop: 6 }}>
+                        留白使用 harness 預設值；每個值最多 1,000,000 characters。
+                      </div>
+                    </div>
+
                     <div style={grid3}>
                       <div>
                         <label style={label}>maxRetries</label>
@@ -535,3 +602,12 @@ const grid3: React.CSSProperties = {
   gap: 10,
   gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))"
 };
+
+const contextBudgetFields = [
+  { key: "maxTotalChars", label: "Max total" },
+  { key: "maxCatalogChars", label: "Max catalog" },
+  { key: "maxSkillInstructionChars", label: "Max skill" },
+  { key: "maxResourceChars", label: "Max resources" },
+  { key: "maxSingleToolResultChars", label: "Max tool result" },
+  { key: "maxModelResponseChars", label: "Max response" }
+] as const;

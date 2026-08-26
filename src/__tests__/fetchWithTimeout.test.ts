@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWithTimeout, getRetryAfterDelayMs } from "../utils/fetchWithTimeout";
+import { fetchWithTimeout, getRetryAfterDelayMs, readResponseTextWithLimit } from "../utils/fetchWithTimeout";
 
 describe("fetchWithTimeout", () => {
   afterEach(() => {
@@ -56,5 +56,20 @@ describe("fetchWithTimeout", () => {
     const date = new Date(Date.now() + 5000).toUTCString();
     expect(getRetryAfterDelayMs(new Headers({ "Retry-After": date }), 100)).toBeGreaterThan(0);
     expect(getRetryAfterDelayMs(new Headers({ "Retry-After": "not-a-date" }), 100)).toBe(100);
+  });
+
+  it("does not retain an oversized stream chunk before cancelling", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("x".repeat(100_000)));
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    const response = new Response(body);
+    await expect(readResponseTextWithLimit(response, 100)).resolves.toEqual({ text: "x".repeat(100), exceeded: true });
+    expect(cancelled).toBe(true);
   });
 });

@@ -55,6 +55,28 @@ describe("chat history controller", () => {
     await waitFor(() => expect(deps.storage.save).toHaveBeenLastCalledWith(result.current.history));
   });
 
+  it("serializes persistence and skips stale snapshots during rapid updates", async () => {
+    const saves: Array<{ messages: ChatMessage[]; resolve: () => void }> = [];
+    const deps = createDependencies([restoredMessage]);
+    deps.storage.save = vi.fn((messages: ChatMessage[]) => new Promise<void>((resolve) => {
+      saves.push({ messages, resolve });
+    }));
+    const { result } = renderHook(() => useChatHistoryController({
+      activeTab: "chat",
+      historyMessageLimit: 10,
+      ...deps
+    }));
+
+    await waitFor(() => expect(saves).toHaveLength(1));
+    act(() => result.current.append({ id: "new", role: "user", content: "new", ts: 2 }));
+    expect(saves).toHaveLength(1);
+
+    act(() => saves[0].resolve());
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].messages.map((message) => message.id)).toEqual(["restored", "new"]);
+    act(() => saves[1].resolve());
+  });
+
   it("limits model history and excludes tool messages", async () => {
     const deps = createDependencies();
     const { result } = renderHook(() => useChatHistoryController({

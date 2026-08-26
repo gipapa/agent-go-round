@@ -131,7 +131,6 @@ steps:
       clearChatOnEnter: true
       composerSeed: 我現在有點慌，請冷靜又有條理地解釋為什麼 1+1=2。
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: single_turn
       expect:
         userPrompt: 我現在有點慌，請冷靜又有條理地解釋為什麼 1+1=2。
         requireAssistant: true
@@ -159,12 +158,11 @@ steps:
     automation:
       composerSeed: 你知道我是誰嗎?!?!?!
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: single_turn
       expect:
         userPrompt: 你知道我是誰嗎?!?!?!
         requireAssistant: true
-        successfulToolMessageIncludes:
-          - Built-in tool -> get_user_profile
+        skillTraceIncludes:
+          - get_user_profile
 
   - id: references_chat
     title: 用 references 切換進階模式並引用範例
@@ -188,7 +186,6 @@ steps:
     automation:
       composerSeed: 請切換成進階模式，先說明什麼情況要 revise 或 branch，再給我一個實戰範例。
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: single_turn
       expect:
         userPrompt: 請切換成進階模式，先說明什麼情況要 revise 或 branch，再給我一個實戰範例。
         requireAssistant: true
@@ -217,7 +214,6 @@ steps:
     automation:
       composerSeed: 請用模板整理：為什麼 1+1=2？
       activeAgentPreset: tutorial_agent_base
-      skillExecutionMode: single_turn
       expect:
         userPrompt: 請用模板整理：為什麼 1+1=2？
         requireAssistant: true

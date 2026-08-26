@@ -123,6 +123,8 @@ export function createLoadBalancerInstance(seed?: Partial<LoadBalancerInstance>)
     failure: seed?.failure ?? false,
     failureCount: typeof seed?.failureCount === "number" ? seed.failureCount : 0,
     nextCheckTime: seed?.nextCheckTime ?? null,
+    toolCallingCapability: seed?.toolCallingCapability,
+    contextBudget: seed?.contextBudget,
     createdAt: seed?.createdAt ?? now,
     updatedAt: seed?.updatedAt ?? now
   };
@@ -206,7 +208,8 @@ export function migrateAgentsToLoadBalancers(args: {
       credentialId: ensured.credential.id,
       credentialKeyId: ensured.keyId,
       model: agent.model ?? (agent.type === "chrome_prompt" ? "chrome_prompt" : "gpt-4o-mini"),
-      description: "Migrated from legacy agent settings"
+      description: "Migrated from legacy agent settings",
+      toolCallingCapability: agent.capabilities?.toolCallingCapability ?? (agent.type === "chrome_prompt" ? "text_protocol" : "native")
     });
     const created = {
       ...lb,

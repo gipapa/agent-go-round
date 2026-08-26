@@ -4,6 +4,7 @@ import { errorMessage } from "../utils/errors";
 import { ResolvedLoadBalancerInstance, getLoadBalancerResumeMs } from "../utils/loadBalancer";
 import { describeResolvedLoadBalancerCandidate, formatLoadBalancerDateTime } from "../utils/loadBalancerDiagnostics";
 import { ExecutionDeadline } from "../utils/deadline";
+import { AgentTransportError } from "../adapters/base";
 
 type LoadBalancerRunnerBase = {
   agentName: string;
@@ -65,7 +66,9 @@ export async function runLoadBalancedTask<T>(args: LoadBalancerRunnerBase & {
       lastError = error;
       const errorText = errorMessage(error);
       lastFailureDetails = errorText;
-      const failure = classifyRetryableAgentFailure(errorText);
+      const failure = error instanceof AgentTransportError
+        ? { retryable: error.retryable, markFailure: error.retryable }
+        : classifyRetryableAgentFailure(errorText);
       if (failure?.retryable) {
         const nextCandidate = args.candidates[candidateIndex + 1] ?? null;
         if (failure.markFailure) args.markFailure(candidate);
@@ -145,7 +148,40 @@ export async function runLoadBalancedTextTask(args: LoadBalancerRunnerBase & {
       message: `LB selected [${args.stage}]`,
       details: describeResolvedLoadBalancerCandidate(candidate)
     });
-    const text = await args.execute(candidate);
+    let text: string;
+    try {
+      text = await args.execute(candidate);
+    } catch (error) {
+      const errorText = errorMessage(error);
+      const failure = error instanceof AgentTransportError
+        ? { retryable: error.retryable, markFailure: error.retryable }
+        : classifyRetryableAgentFailure(errorText);
+      if (failure?.retryable) {
+        const nextCandidate = args.candidates[candidateIndex + 1] ?? null;
+        if (failure.markFailure) args.markFailure(candidate);
+        args.pushLog({
+          category: "load_balancer",
+          agent: args.agentName,
+          ok: false,
+          requestId: args.requestId,
+          stage: args.stage,
+          message: `${nextCandidate ? "LB failover" : "LB exhausted"} [${args.stage}]`,
+          details: [describeResolvedLoadBalancerCandidate(candidate), `error=${errorText}`, `typed=${error instanceof AgentTransportError}`,
+            nextCandidate ? `next_candidate:\n${describeResolvedLoadBalancerCandidate(nextCandidate)}` : "next_candidate: none"].join("\n\n")
+        });
+        if (nextCandidate) continue;
+      }
+      args.pushLog({
+        category: "load_balancer",
+        agent: args.agentName,
+        ok: false,
+        requestId: args.requestId,
+        stage: args.stage,
+        message: `LB terminal error [${args.stage}]`,
+        details: [describeResolvedLoadBalancerCandidate(candidate), `error=${errorText}`].join("\n\n")
+      });
+      throw error instanceof Error ? error : new Error(errorText);
+    }
     const trimmedText = String(text ?? "").trim();
     if (!trimmedText) {
       shouldReturnEmptyResponse = true;

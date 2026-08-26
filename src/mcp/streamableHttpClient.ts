@@ -1,7 +1,10 @@
 import type { McpServerConfig } from "../types";
 import { errorMessage } from "../utils/errors";
 import { generateId } from "../utils/id";
+import { readResponseTextWithLimit } from "../utils/fetchWithTimeout";
 import { redactMcpUrl } from "./url";
+import { MAX_MCP_RESPONSE_CHARS } from "./responseLimits";
+import { MAX_RUNTIME_TIMEOUT_MS } from "../utils/deadline";
 
 type JsonRpcRequest = {
   jsonrpc: "2.0";
@@ -95,7 +98,7 @@ export class McpStreamableHttpClient {
       typeof this.cfg.toolTimeoutSecond === "number" && Number.isFinite(this.cfg.toolTimeoutSecond)
         ? Math.max(1, Math.round(this.cfg.toolTimeoutSecond))
         : DEFAULT_MCP_TOOL_TIMEOUT_SECOND;
-    return seconds * 1000;
+    return Math.min(MAX_RUNTIME_TIMEOUT_MS, seconds * 1000);
   }
 
   private requestUrl() {
@@ -137,7 +140,7 @@ export class McpStreamableHttpClient {
         signal: controller.signal
       });
       if (!response.ok) {
-        const details = (await response.text().catch(() => "")).trim().slice(0, 300);
+        const details = (await readResponseTextWithLimit(response, 300).catch(() => ({ text: "", exceeded: false }))).text.trim();
         throw new Error(`MCP HTTP ${response.status}${details ? `: ${details}` : ""}`);
       }
 
@@ -145,7 +148,9 @@ export class McpStreamableHttpClient {
       if (sessionId) this.sessionId = sessionId;
       if (!expectReply) return null;
 
-      const body = await response.text();
+      const bounded = await readResponseTextWithLimit(response, MAX_MCP_RESPONSE_CHARS);
+      if (bounded.exceeded) throw new Error(`MCP response exceeded ${MAX_MCP_RESPONSE_CHARS} chars`);
+      const body = bounded.text;
       if (!body.trim()) throw new Error("MCP server returned an empty response.");
       return parseJsonRpcResponse(body, String((payload as JsonRpcRequest).id));
     } catch (error) {

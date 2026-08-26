@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpStreamableHttpClient } from "../mcp/streamableHttpClient";
+import { MAX_MCP_RESPONSE_CHARS } from "../mcp/responseLimits";
 
 function requestBody(init?: RequestInit) {
   return JSON.parse(String(init?.body ?? "{}")) as {
@@ -92,6 +93,37 @@ describe("McpStreamableHttpClient", () => {
     expect(requestBody(fetchMock.mock.calls[2]?.[1]).params).toEqual({
       name: "search",
       arguments: { query: "MCP" }
+    });
+  });
+
+  it("bounds streamable HTTP response bodies before JSON parsing", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = requestBody(init);
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { protocolVersion: "2025-11-25" }
+        }));
+      }
+      if (body.method === "notifications/initialized") return new Response("", { status: 202 });
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: { payload: "x".repeat(MAX_MCP_RESPONSE_CHARS + 1) }
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new McpStreamableHttpClient({
+      id: "remote-1",
+      name: "Remote",
+      sseUrl: "https://example.com/mcp",
+      transport: "streamable_http"
+    });
+
+    await expect(client.request("tools/list")).resolves.toMatchObject({
+      error: `MCP response exceeded ${MAX_MCP_RESPONSE_CHARS} chars`
     });
   });
 });

@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIMPLE_DIR="$ROOT_DIR"
 AGENT_BROWSER_DIR="$ROOT_DIR/agent-browser-sse"
-WSL_IP="$(hostname -I | awk '{print $1}')"
+WSL_IP=""
+if hostname -I >/dev/null 2>&1; then
+  WSL_IP="$(hostname -I | awk '{print $1}')"
+fi
 AGENT_BROWSER_HOME="$AGENT_BROWSER_DIR/.agent-browser-home"
 
 kill_port_if_busy() {
@@ -19,14 +22,13 @@ kill_port_if_busy() {
       fuser -k "${port}/tcp" >/dev/null 2>&1 || true
       sleep 1
     fi
-    return 0
   fi
 
   if command -v lsof >/dev/null 2>&1; then
     local pids=""
     pids="$(lsof -ti "tcp:${port}" 2>/dev/null || true)"
     if [ -n "$pids" ]; then
-      echo "[mcp-test] port ${port} is busy, stopping previous process ..."
+      echo "[mcp-test] port ${port} is still busy, stopping previous process ..."
       kill $pids >/dev/null 2>&1 || true
       sleep 1
     fi

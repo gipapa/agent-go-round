@@ -112,4 +112,22 @@ describe("McpClientManager", () => {
     expect(created[0].closeCalls).toBe(1);
     expect(manager.activeClientCount()).toBe(0);
   });
+
+  it("does not cache a client whose connect step fails", () => {
+    const created: FakeClient[] = [];
+    const createClient = vi.fn(() => {
+      const client = new FakeClient();
+      created.push(client);
+      if (created.length === 1) {
+        client.connect = () => { throw new Error("connection refused"); };
+      }
+      return client;
+    });
+    const manager = new McpClientManager({ createClient });
+
+    expect(() => manager.get(server())).toThrow("connection refused");
+    expect(manager.activeClientCount()).toBe(0);
+    expect(() => manager.get(server())).not.toThrow();
+    expect(createClient).toHaveBeenCalledTimes(2);
+  });
 });

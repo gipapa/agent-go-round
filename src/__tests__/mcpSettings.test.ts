@@ -34,4 +34,24 @@ describe("MCP settings", () => {
       useLocalProxy: true
     }));
   });
+
+  it("restores bounded per-tool policy overrides", () => {
+    localStorage.setItem("agr_mcp_v1", JSON.stringify([
+      {
+        id: "policy",
+        name: "Policy",
+        sseUrl: "https://example.com/mcp",
+        toolPolicies: {
+          search: { intent: "observe", requireConfirmation: false },
+          ignored: { intent: "forged", requireConfirmation: "yes" },
+          huge: { idempotency: "unknown" }
+        }
+      }
+    ]));
+
+    expect(loadMcpServers()[0].toolPolicies).toEqual({
+      search: { intent: "observe", requireConfirmation: false },
+      huge: { idempotency: "unknown" }
+    });
+  });
 });

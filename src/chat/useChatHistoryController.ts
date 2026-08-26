@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatMessage } from "../types";
 import { loadChatHistory, saveChatHistory } from "../storage/chatStore";
 import { asRecord, msg, normalizeImportedMessage } from "../runtime/chatMessages";
@@ -43,6 +43,8 @@ export function useChatHistoryController({
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
   const [isSummaryExporting, setIsSummaryExporting] = useState(false);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const saveRevisionRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,11 +70,22 @@ export function useChatHistoryController({
   useEffect(() => {
     if (!historyLoaded) return;
     let cancelled = false;
-    void storage.save(history).catch((error) => {
-      if (!cancelled) {
-        pushLog({ category: "chat", ok: false, message: "History persist failed", details: errorMessage(error) });
-      }
-    });
+    const revision = ++saveRevisionRef.current;
+    // IndexedDB writes can complete out of order when this hook is updated
+    // rapidly by streaming patches. Serialize them and skip stale snapshots
+    // before they start, so an older write cannot become the final state.
+    saveQueueRef.current = saveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (revision !== saveRevisionRef.current) return;
+        try {
+          await storage.save(history);
+        } catch (error) {
+          if (!cancelled && revision === saveRevisionRef.current) {
+            pushLog({ category: "chat", ok: false, message: "History persist failed", details: errorMessage(error) });
+          }
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -138,7 +151,7 @@ export function useChatHistoryController({
         stage: "summary export",
         outcome: "success",
         message: "Summary history exported",
-        details: result.summary
+        details: `summary_chars=${result.summary.length}`
       });
     } catch (error) {
       pushLog({
@@ -171,7 +184,7 @@ export function useChatHistoryController({
         ? importedRecord.summary
         : text.trim();
       setHistory([msg("user", summaryText, "summary_import", { displayName: "上次對話總結" })]);
-      pushLog({ category: "chat", ok: true, message: "Summary history imported", details: summaryText });
+      pushLog({ category: "chat", ok: true, message: "Summary history imported", details: `summary_chars=${summaryText.length}` });
     } catch (error) {
       pushLog({ category: "chat", ok: false, message: "Import history failed", details: errorMessage(error) });
     }

@@ -2,7 +2,7 @@ import React, { act } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatRequest } from "../adapters/base";
-import type { AgentConfig, DocItem, LoadBalancerConfig, McpServerConfig } from "../types";
+import type { AgentConfig, BuiltInToolConfig, DocItem, LoadBalancerConfig, McpServerConfig } from "../types";
 import type { ModelCredentials } from "../storage/settingsStore";
 import App from "../app/App";
 
@@ -17,7 +17,7 @@ const callTool = vi.hoisted(() =>
 );
 const listTools = vi.hoisted(() =>
   vi.fn(async () => [
-    { name: "time", description: "Get current server time" },
+    { name: "time", description: "Get current server time", annotations: { readOnlyHint: true } },
     { name: "echo", description: "Echo input text" }
   ])
 );
@@ -25,7 +25,9 @@ const listTools = vi.hoisted(() =>
 vi.mock("../adapters/openaiCompat", () => ({
   OpenAICompatAdapter: {
     chat: async function* (req: ChatRequest) {
-      const text = responderRef.current(req);
+      const text = req.system?.includes("internal:capability.probe")
+        ? '{"type":"tool_call","toolId":"internal:capability.probe","input":{}}'
+        : responderRef.current(req);
       yield { type: "delta", text };
     }
   }
@@ -57,7 +59,7 @@ vi.mock("../mcp/sseClient", () => ({
           id: "tools-list",
           result: {
             tools: [
-              { name: "time", description: "Get current server time" },
+              { name: "time", description: "Get current server time", annotations: { readOnlyHint: true } },
               { name: "echo", description: "Echo input text" }
             ]
           }
@@ -79,12 +81,15 @@ const AGENTS_KEY = "agr_agents_v1";
 const MCP_KEY = "agr_mcp_v1";
 const CREDENTIALS_KEY = "agr_model_credentials_v1";
 const LOAD_BALANCERS_KEY = "agr_load_balancers_v1";
+const BUILT_IN_TOOLS_KEY = "agr_built_in_tools_v1";
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
 function flushPromises() {
-  return new Promise((resolve) => setTimeout(resolve, 0));
+  return act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 function seedAgents(agents: AgentConfig[]) {
@@ -99,6 +104,10 @@ function seedMcpServers(servers: McpServerConfig[]) {
   localStorage.setItem(MCP_KEY, JSON.stringify(servers));
 }
 
+function seedBuiltInTools(tools: BuiltInToolConfig[]) {
+  localStorage.setItem(BUILT_IN_TOOLS_KEY, JSON.stringify(tools));
+}
+
 function seedLoadBalancedAgent(agent: AgentConfig) {
   const credentialId = `cred-${agent.id}`;
   const keyId = `key-${agent.id}`;
@@ -109,7 +118,8 @@ function seedLoadBalancedAgent(agent: AgentConfig) {
       preset: "custom",
       label: `${agent.name} credential`,
       endpoint: agent.endpoint ?? "http://mock-llm.test/v1",
-      keys: [{ id: keyId, apiKey: "test-key", createdAt: 1, updatedAt: 1 }],
+      // The agent id is only a non-secret configured sentinel; it is not an API credential.
+      keys: [{ id: keyId, apiKey: agent.id, createdAt: 1, updatedAt: 1 }],
       createdAt: 1,
       updatedAt: 1
     }
@@ -131,6 +141,7 @@ function seedLoadBalancedAgent(agent: AgentConfig) {
           failure: false,
           failureCount: 0,
           nextCheckTime: null,
+          toolCallingCapability: "text_protocol",
           createdAt: 1,
           updatedAt: 1
         }
@@ -145,14 +156,6 @@ function seedLoadBalancedAgent(agent: AgentConfig) {
     ...agent,
     loadBalancerId
   };
-}
-
-function isToolDecisionPrompt(input: string) {
-  return (
-    input.includes("請判斷這次是否需要使用工具") ||
-    input.includes("decide whether this turn needs a tool") ||
-    input.includes("TOOL_CATALOG")
-  );
 }
 
 async function renderApp() {
@@ -197,6 +200,12 @@ function getButtonByText(text: string) {
   return btn as HTMLButtonElement;
 }
 
+function getBodyButtonByText(text: string) {
+  const btn = Array.from(document.body.querySelectorAll("button")).find((candidate) => candidate.textContent?.trim() === text);
+  if (!btn) throw new Error(`Body button not found: ${text}`);
+  return btn as HTMLButtonElement;
+}
+
 function getMessageContents() {
   if (!container) throw new Error("Missing test container");
   return Array.from(container.querySelectorAll(".chat-message-text"))
@@ -234,11 +243,21 @@ async function waitForText(text: string, timeoutMs = 2000) {
   throw new Error(`Timed out waiting for text: ${text}\nDOM: ${container?.textContent?.slice(0, 1200) ?? ""}`);
 }
 
+async function waitForBodyText(text: string, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (document.body.textContent?.includes(text)) return;
+    await flushPromises();
+  }
+  throw new Error(`Timed out waiting for body text: ${text}`);
+}
+
 beforeEach(() => {
   docsFixtureRef.current = [];
   responderRef.current = () => "";
   callTool.mockClear();
   localStorage.clear();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   if (!globalThis.crypto?.randomUUID) {
     Object.defineProperty(globalThis, "crypto", {
@@ -257,6 +276,7 @@ afterEach(async () => {
   }
   root = null;
   container = null;
+  vi.restoreAllMocks();
 });
 
 describe("App chat flows (mocked)", () => {
@@ -270,12 +290,8 @@ describe("App chat flows (mocked)", () => {
     };
 
     responderRef.current = (req) => {
-      if (isToolDecisionPrompt(req.input)) return '{"type":"no_tool"}';
-      if (req.input === "I'm John") return "ok";
-      if (req.input === "who am I") {
-        const hasName = req.history.some((m) => m.role === "user" && m.content.includes("I'm John"));
-        return hasName ? "John" : "unknown";
-      }
+      if (req.input.includes("who am I")) return req.input.includes("I'm John") ? "John" : "unknown";
+      if (req.input.includes("I'm John")) return "ok";
       return "";
     };
 
@@ -293,6 +309,31 @@ describe("App chat flows (mocked)", () => {
     await waitForText("John");
     const afterSecond = getMessageContents().slice(-1)[0];
     expect(afterSecond).toBe("John");
+  });
+
+  it("uses the Pi loop harness by default", async () => {
+    const agent: AgentConfig = {
+      id: "agent-harness",
+      name: "Harness LLM",
+      type: "openai_compat",
+      endpoint: "http://mock-llm.test/v1",
+      model: "mock"
+    };
+    responderRef.current = () => "harness answer";
+
+    const seededAgent = seedLoadBalancedAgent(agent);
+    seedAgents([seededAgent]);
+    seedUi({
+      activeTab: "chat",
+      mode: "one_to_one",
+      activeAgentId: seededAgent.id,
+      memberAgentIds: []
+    });
+
+    await renderApp();
+    await sendMessage("use the new harness");
+    await waitForText("harness answer");
+    expect(getMessageContents().slice(-1)[0]).toBe("harness answer");
   });
 
   it("supports normal talking doc context injection", async () => {
@@ -314,8 +355,7 @@ describe("App chat flows (mocked)", () => {
     ];
 
     responderRef.current = (req) => {
-      if (isToolDecisionPrompt(req.input)) return '{"type":"no_tool"}';
-      if (req.input === "tell me the funniest joke" && req.system?.includes("sad strawberry")) {
+      if (req.input.includes("tell me the funniest joke") && req.system?.includes("sad strawberry")) {
         return "What do you call a sad strawberry? Ans: A blueberry";
       }
       return "no idea";
@@ -347,10 +387,10 @@ describe("App chat flows (mocked)", () => {
     };
 
     responderRef.current = (req) => {
-      if (isToolDecisionPrompt(req.input)) {
-        return `{"type":"mcp_call","serverId":"${server.id}","tool":"time","input":{}}`;
+      if (req.input.includes("use time tool") && !req.input.includes("[UNTRUSTED_TOOL_RESULT")) {
+        return `{"type":"tool_call","toolId":"mcp:${server.id}:time","input":{}}`;
       }
-      if (req.input.includes("工具執行結果") || req.input.includes("2026-01-01 00:00:00")) {
+      if (req.input.includes("[UNTRUSTED_TOOL_RESULT") || req.input.includes("2026-01-01 00:00:00")) {
         return "now: 2026-01-01 00:00:00";
       }
       return "";
@@ -378,8 +418,8 @@ describe("App chat flows (mocked)", () => {
     };
 
     responderRef.current = (req) => {
-      if (isToolDecisionPrompt(req.input)) {
-        return '{"type":"user_profile_call","tool":"get_user_profile"}';
+      if (req.input.includes("我是誰") && !req.input.includes("[UNTRUSTED_TOOL_RESULT")) {
+        return '{"type":"tool_call","toolId":"builtin:system:get_user_profile","input":{}}';
       }
       if (req.input.includes("Alice") && req.input.includes("PM who prefers Traditional Chinese.")) {
         return "你是 Alice，一位偏好繁體中文的 PM。";
@@ -403,6 +443,44 @@ describe("App chat flows (mocked)", () => {
     await waitForText("你是 Alice，一位偏好繁體中文的 PM。");
     const reply = getMessageContents().slice(-1)[0];
     expect(reply).toBe("你是 Alice，一位偏好繁體中文的 PM。");
-    expect(container?.textContent).toContain("查看 tool result");
+    expect(container?.textContent).toContain("Tool result");
+  });
+
+  it("uses the abortable in-app confirmation modal for mutating harness tools", async () => {
+    const agent: AgentConfig = {
+      id: "agent-confirmation",
+      name: "Confirmation LLM",
+      type: "openai_compat",
+      endpoint: "http://mock-llm.test/v1",
+      model: "mock"
+    };
+    const tool: BuiltInToolConfig = {
+      id: "confirm-tool",
+      name: "Confirm tool",
+      description: "A tool that requires user confirmation",
+      code: "return 'executed';",
+      requireConfirmation: true,
+      updatedAt: 0,
+      source: "custom"
+    };
+    responderRef.current = (req) => req.input.includes("[UNTRUSTED_TOOL_RESULT") ? "done after confirmation" : JSON.stringify({
+      type: "tool_call",
+      toolId: "builtin:confirm-tool",
+      input: {}
+    });
+    const seededAgent = seedLoadBalancedAgent(agent);
+    seedAgents([seededAgent]);
+    seedBuiltInTools([tool]);
+    seedUi({ activeTab: "chat", mode: "one_to_one", activeAgentId: seededAgent.id, memberAgentIds: [] });
+
+    await renderApp();
+    await sendMessage("run the confirmed tool");
+    await waitForBodyText("確認工具操作");
+    expect(document.body.textContent).toContain("builtin:confirm-tool");
+    await act(async () => {
+      getBodyButtonByText("允許執行").click();
+    });
+    await flushPromises();
+    await waitForText("done after confirmation");
   });
 });

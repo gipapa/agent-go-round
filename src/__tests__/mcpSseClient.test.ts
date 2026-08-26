@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpSseClient } from "../mcp/sseClient";
+import { MAX_MCP_RESPONSE_CHARS } from "../mcp/responseLimits";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -23,6 +24,10 @@ class FakeEventSource {
 
   emitMessage(payload: unknown) {
     this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent<string>);
+  }
+
+  emitRaw(data: string) {
+    this.onmessage?.({ data } as MessageEvent<string>);
   }
 }
 
@@ -88,5 +93,39 @@ describe("McpSseClient", () => {
       result: { ok: true, output: "visited" },
       error: undefined
     });
+  });
+
+  it("bounds direct RPC response bodies before parsing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "server-id", result: { payload: "x".repeat(MAX_MCP_RESPONSE_CHARS + 1) } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new McpSseClient({ id: "mcp-1", name: "Demo", sseUrl: "https://example.com/mcp/sse" });
+    client.connect();
+    FakeEventSource.instances[0]?.emitOpen();
+
+    await expect(client.request("tools/list")).resolves.toMatchObject({
+      error: `MCP RPC response exceeded ${MAX_MCP_RESPONSE_CHARS} chars`
+    });
+  });
+
+  it("invalidates the connection before parsing oversized SSE events", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new McpSseClient({ id: "mcp-1", name: "Demo", sseUrl: "https://example.com/mcp/sse" });
+    client.connect();
+    const es = FakeEventSource.instances[0];
+    es?.emitOpen();
+    const responsePromise = client.request("tools/call", { name: "large" });
+    await Promise.resolve();
+    es?.emitRaw("x".repeat(MAX_MCP_RESPONSE_CHARS + 1));
+
+    await expect(responsePromise).resolves.toMatchObject({ error: "MCP SSE event exceeded response limit" });
+    expect(es?.closed).toBe(true);
   });
 });

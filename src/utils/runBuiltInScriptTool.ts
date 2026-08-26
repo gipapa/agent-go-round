@@ -1,6 +1,6 @@
 import { BuiltInToolConfig } from "../types";
 import type { ToolDashboardHelpers } from "./toolDashboard";
-import { combineSignals, getDeadlineAbortMessage, withTimeout } from "./deadline";
+import { combineSignals, getDeadlineAbortMessage, MAX_RUNTIME_TIMEOUT_MS, withTimeout } from "./deadline";
 import { errorMessage } from "./errors";
 
 export const DEFAULT_BUILT_IN_TOOL_TIMEOUT_MS = 10_000;
@@ -20,7 +20,21 @@ export type BuiltInToolRunOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
   sandbox?: "auto" | "worker" | "inline";
+  fallbackToInline?: boolean;
+  onDispatch?: () => void;
 };
+
+export class BuiltInToolExecutionError extends Error {
+  readonly effectDispatched: boolean;
+  readonly errorCode: "worker_unavailable" | "tool_compile_failed";
+
+  constructor(message: string, effectDispatched: boolean, errorCode: "worker_unavailable" | "tool_compile_failed" = "worker_unavailable") {
+    super(message);
+    this.name = "BuiltInToolExecutionError";
+    this.effectDispatched = effectDispatched;
+    this.errorCode = errorCode;
+  }
+}
 
 type HelperCallMessage = {
   type: "helper_call";
@@ -183,9 +197,15 @@ async function runInline(
   tool: Pick<BuiltInToolConfig, "code">,
   input: unknown,
   helpers: BuiltInToolHelpers,
-  options: Required<Pick<BuiltInToolRunOptions, "timeoutMs">> & Pick<BuiltInToolRunOptions, "signal">
+  options: Required<Pick<BuiltInToolRunOptions, "timeoutMs">> & Pick<BuiltInToolRunOptions, "signal" | "onDispatch">
 ) {
-  const runner = createRunner(tool.code);
+  let runner: ReturnType<typeof createRunner>;
+  try {
+    runner = createRunner(tool.code);
+  } catch (error) {
+    throw new BuiltInToolExecutionError(`Built-in tool could not be compiled: ${errorMessage(error)}`, false, "tool_compile_failed");
+  }
+  options.onDispatch?.();
   return await withTimeout(Promise.resolve(runner(input, helpers)), options.timeoutMs, "Built-in tool execution", options.signal);
 }
 
@@ -193,28 +213,53 @@ async function runInWorker(
   tool: Pick<BuiltInToolConfig, "code">,
   input: unknown,
   helpers: BuiltInToolHelpers,
-  options: Required<Pick<BuiltInToolRunOptions, "timeoutMs">> & Pick<BuiltInToolRunOptions, "signal">
+  options: Required<Pick<BuiltInToolRunOptions, "timeoutMs">> & Pick<BuiltInToolRunOptions, "signal" | "fallbackToInline" | "onDispatch">
 ) {
   if (!canUseWorker()) {
+    if (!options.fallbackToInline) {
+      throw new BuiltInToolExecutionError("Worker execution is unavailable; inline fallback is disabled.", false);
+    }
     return await runInline(tool, input, helpers, options);
   }
 
-  const blob = new Blob([buildWorkerSource()], { type: "text/javascript" });
-  const url = URL.createObjectURL(blob);
-  const worker = new Worker(url);
+  let url: string;
+  try {
+    const blob = new Blob([buildWorkerSource()], { type: "text/javascript" });
+    url = URL.createObjectURL(blob);
+  } catch (error) {
+    throw new BuiltInToolExecutionError(`Worker execution could not be prepared: ${errorMessage(error)}`, false);
+  }
+  let worker: Worker;
+  try {
+    worker = new Worker(url);
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw new BuiltInToolExecutionError(
+      `Worker execution could not be started: ${errorMessage(error)}`,
+      false
+    );
+  }
   const helperPaths = collectHelperPaths(helpers);
 
   let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
   let onAbort: (() => void) | undefined;
+  let dispatchStarted = false;
 
   try {
     return await new Promise<unknown>((resolve, reject) => {
+      let settled = false;
       const cleanup = () => {
+        settled = true;
         if (timeoutId !== null) globalThis.clearTimeout(timeoutId);
         if (onAbort) options.signal?.removeEventListener("abort", onAbort);
         worker.terminate();
         URL.revokeObjectURL(url);
       };
+
+      const abortError = () =>
+        dispatchStarted
+          ? new Error(getDeadlineAbortMessage(options.signal))
+          : new BuiltInToolExecutionError(getDeadlineAbortMessage(options.signal), false);
 
       const fail = (error: unknown) => {
         cleanup();
@@ -222,7 +267,7 @@ async function runInWorker(
       };
 
       if (options.signal?.aborted) {
-        fail(new Error(getDeadlineAbortMessage(options.signal)));
+        fail(abortError());
         return;
       }
 
@@ -230,23 +275,34 @@ async function runInWorker(
         fail(new Error(`Built-in tool execution timed out after ${Math.round(options.timeoutMs / 1000)}s`));
       }, options.timeoutMs);
 
-      onAbort = () => fail(new Error(getDeadlineAbortMessage(options.signal)));
+      onAbort = () => fail(abortError());
       options.signal?.addEventListener("abort", onAbort, { once: true });
 
       worker.onerror = (event) => {
-        fail(new Error(event.message || "Built-in tool worker failed."));
+        const message = event.message || "Built-in tool worker failed.";
+        fail(dispatchStarted ? new Error(message) : new BuiltInToolExecutionError(message, false));
       };
 
       worker.onmessage = (event: MessageEvent<WorkerResultMessage>) => {
-        const message = event.data;
+        const rawMessage = event.data as unknown;
+        if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) {
+          fail(new Error("Built-in tool worker returned an invalid message."));
+          return;
+        }
+        const message = rawMessage as Record<string, unknown>;
         if (message.type === "helper_call") {
+          if (typeof message.id !== "string" || typeof message.path !== "string" || !Array.isArray(message.args)) {
+            fail(new Error("Built-in tool worker returned an invalid helper request."));
+            return;
+          }
           const helper = resolveHelperFunction(helpers, message.path);
           if (!helper) {
             worker.postMessage({ type: "helper_result", id: message.id, ok: false, error: `Helper not allowed: ${message.path}` });
             return;
           }
+          const helperArgs = message.args as unknown[];
           Promise.resolve()
-            .then(() => (helper as (...args: unknown[]) => unknown)(...message.args))
+            .then(() => (helper as (...args: unknown[]) => unknown)(...helperArgs))
             .then((result) => worker.postMessage({ type: "helper_result", id: message.id, ok: true, result }))
             .catch((error) =>
               worker.postMessage({ type: "helper_result", id: message.id, ok: false, error: errorMessage(error) })
@@ -254,12 +310,16 @@ async function runInWorker(
           return;
         }
 
+        if (message.type !== "result" || typeof message.ok !== "boolean") {
+          fail(new Error("Built-in tool worker returned an invalid result."));
+          return;
+        }
         if (message.ok) {
           cleanup();
           resolve(message.result);
           return;
         }
-        fail(new Error(message.error));
+        fail(new Error(typeof message.error === "string" ? message.error : "Built-in tool worker failed."));
       };
 
       try {
@@ -269,8 +329,10 @@ async function runInWorker(
           input,
           helperPaths
         });
+        dispatchStarted = true;
+        if (!settled) options.onDispatch?.();
       } catch (error) {
-        fail(error);
+        fail(new BuiltInToolExecutionError(`Worker execution could not dispatch: ${errorMessage(error)}`, false));
       }
     });
   } catch (error) {
@@ -286,12 +348,17 @@ export async function runBuiltInScriptTool(
   helpers: BuiltInToolHelpers = {},
   options: BuiltInToolRunOptions = {}
 ) {
-  const timeoutMs = Math.max(1, Math.round(options.timeoutMs ?? DEFAULT_BUILT_IN_TOOL_TIMEOUT_MS));
+  const requestedTimeoutMs = options.timeoutMs ?? DEFAULT_BUILT_IN_TOOL_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(requestedTimeoutMs)
+    ? Math.min(MAX_RUNTIME_TIMEOUT_MS, Math.max(1, Math.round(requestedTimeoutMs)))
+    : DEFAULT_BUILT_IN_TOOL_TIMEOUT_MS;
   const signal = options.signal ? combineSignals(options.signal) : undefined;
+  const fallbackToInline = options.fallbackToInline !== false;
+  const onDispatch = options.onDispatch ?? (() => undefined);
 
   if (shouldUseInline(tool.code, options.sandbox)) {
-    return await runInline(tool, input, helpers, { timeoutMs, signal });
+    return await runInline(tool, input, helpers, { timeoutMs, signal, onDispatch });
   }
 
-  return await runInWorker(tool, input, helpers, { timeoutMs, signal });
+  return await runInWorker(tool, input, helpers, { timeoutMs, signal, fallbackToInline, onDispatch });
 }

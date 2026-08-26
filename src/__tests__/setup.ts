@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import "fake-indexeddb/auto";
 
 if (typeof globalThis.localStorage?.clear !== "function" || typeof globalThis.localStorage?.setItem !== "function") {
   class MemoryStorage implements Storage {

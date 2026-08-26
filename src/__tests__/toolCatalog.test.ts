@@ -61,4 +61,15 @@ describe("McpToolCatalog", () => {
     expect(runSpy).toHaveBeenCalledTimes(2);
     manager.closeAll();
   });
+
+  it("does not reuse a catalog when the server connection changes", async () => {
+    const catalog = new McpToolCatalog();
+    const manager = new McpClientManager({ createClient });
+    const runSpy = vi.spyOn(manager, "run");
+
+    await catalog.load(server(), manager);
+    await catalog.load({ ...server(), sseUrl: "https://other.example.com/mcp/sse" }, manager);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    manager.closeAll();
+  });
 });

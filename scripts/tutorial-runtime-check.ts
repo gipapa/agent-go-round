@@ -157,9 +157,6 @@ async function assertApplyEntryUsesYamlSeed() {
     setActiveTab: [],
     setConfigModal: [],
     setActiveAgentId: [],
-    setSkillExecutionMode: [],
-    setSkillVerifyMax: [],
-    setSkillToolLoopMax: [],
     setAgentLoadBalancerRetryPolicy: [],
     setComposerSeed: [],
     clearChat: [],
@@ -172,9 +169,6 @@ async function assertApplyEntryUsesYamlSeed() {
     setConfigModal: (value) => calls.setConfigModal.push(value),
     setActiveAgentId: (value) => calls.setActiveAgentId.push(value),
     setSelectedAgentId: () => {},
-    setSkillExecutionMode: (value) => calls.setSkillExecutionMode.push(value),
-    setSkillVerifyMax: (value) => calls.setSkillVerifyMax.push(value),
-    setSkillToolLoopMax: (value) => calls.setSkillToolLoopMax.push(value),
     setAgentLoadBalancerRetryPolicy: (agentId, value) => calls.setAgentLoadBalancerRetryPolicy.push({ agentId, ...value }),
     setComposerSeed: (value) => calls.setComposerSeed.push(value),
     clearChat: () => calls.clearChat.push(true),
@@ -202,8 +196,10 @@ async function assertApplyEntryUsesYamlSeed() {
 async function assertSuccessfulToolCallIsEnoughForTutorialChatSteps() {
   const step = await getStep("built-in-tools-chat", "chat-user-profile-tool");
   const prompt = step.automation?.expect?.userPrompt ?? "";
-  const assistant = makeAssistant("assistant-1", "這是回覆");
-  const history = [makeUser(prompt), makeTool("Built-in tool -> get_user_profile"), assistant];
+  const assistant = makeAssistant("assistant-1", "這是回覆", {
+    skillTrace: [{ label: "Tool result", content: "Built-in tool get_user_profile completed. [builtin:get_user_profile] success" }]
+  });
+  const history = [makeUser(prompt), assistant];
 
   const complete = evaluateTutorialStep(step, makeState({ history }));
   assert.equal(complete.completed, true);
@@ -228,15 +224,9 @@ async function assertHistoryLimitStepRequiresOne() {
 
 async function assertChatgptBrowserSkillAutomationExists() {
   const step = await getStep("chatgpt-browser-skill", "run_chatgpt_flow");
-  assert.equal(step.automation?.skillExecutionMode, "multi_turn");
-  assert.equal(step.automation?.skillToolLoopMax, 8);
-  assert.equal(step.automation?.skillVerifyMax, 2);
   assert.equal(step.automation?.loadBalancerDelaySecond, 10);
   assert.equal(step.automation?.loadBalancerMaxRetries, 10);
   assert.equal(step.automation?.composerSeed, "幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
-  assert.equal(step.automation?.expect?.requireSkillTodo, true);
-  assert.equal(step.automation?.expect?.requireSkillTodoProgress, true);
-  assert.equal(step.automation?.expect?.requireSkillTodoTerminal, true);
 }
 
 async function main() {

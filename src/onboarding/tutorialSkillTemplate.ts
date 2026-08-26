@@ -132,17 +132,17 @@ export const TUTORIAL_CHATGPT_BROWSER_ASSET_PATH = "assets/browser-workflow-repo
 
 export const TUTORIAL_CHATGPT_BROWSER_SKILL_MARKDOWN = `---
 name: browser-workflow-multiturn
-description: Use when the task requires multi-turn browser automation with agent-browser MCP, especially for opening a website, navigating through one or more pages, clicking targets, optionally filling forms, and reading back the result.
+description: Use when the task requires a multi-step browser workflow with agent-browser MCP, especially for opening a website, navigating through one or more pages, clicking targets, optionally filling forms, and reading back the result.
 license: MIT
 ---
 
-# Browser Workflow Multi-turn Skill
+# Browser Workflow Skill
 
-Goal: finish a browser task across multiple MCP steps.
+Goal: finish a browser task across multiple MCP steps in one canonical action loop.
 
 ## Rules
 
-- Multi-turn only: keep using MCP tools until the task is complete or clearly blocked.
+- Continue using MCP tools until the task is complete or clearly blocked; keep each tool result in the same transcript.
 - Use the most direct stable start URL that satisfies the user request.
 - If the user already gave a URL, prefer that URL.
 - If the user described a well-known page rather than a raw URL, infer the direct canonical page when it is obvious.

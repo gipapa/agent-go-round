@@ -230,7 +230,6 @@ function Editor(props: {
   const builtInToolsEnabled = agent.enableBuiltInTools !== false;
   const skillsEnabled = agent.enableSkills === true;
   const accessLockedToMcpOnly = props.lockToMcpOnly === true;
-  const accessLockedBySkills = skillsEnabled;
 
   function toggleDoc(id: string) {
     const allowed = new Set(agent.allowedDocIds ?? []);
@@ -270,31 +269,6 @@ function Editor(props: {
     };
     reader.readAsDataURL(file);
   }
-
-  React.useEffect(() => {
-    if (!skillsEnabled) return;
-    setAgent((prev) => {
-      if (
-        prev.enableDocs !== true ||
-        prev.enableMcp !== true ||
-        prev.enableBuiltInTools !== true ||
-        prev.allowedDocIds !== undefined ||
-        prev.allowedMcpServerIds !== undefined ||
-        prev.allowedBuiltInToolIds !== undefined
-      ) {
-        return {
-          ...prev,
-          enableDocs: true,
-          enableMcp: true,
-          enableBuiltInTools: true,
-          allowedDocIds: undefined,
-          allowedMcpServerIds: undefined,
-          allowedBuiltInToolIds: undefined
-        };
-      }
-      return prev;
-    });
-  }, [skillsEnabled]);
 
   React.useEffect(() => {
     if (!accessLockedToMcpOnly) return;
@@ -398,7 +372,7 @@ function Editor(props: {
                 <div style={sectionHint}>
                   {accessLockedToMcpOnly
                     ? "這個教學步驟只允許 MCP 權限，Skills 已暫時鎖定為關閉。"
-                    : "勾選後會先做 skill decision；同時會強制開啟 Docs、MCP 與 Built-in Tools 的全部存取。"}
+                    : "啟用後由同一個 Pi loop 逐步載入 skill；skill 只能使用 agent 已允許的 Docs、MCP 與 Built-in Tools。"}
                 </div>
               </div>
             </label>
@@ -434,7 +408,7 @@ function Editor(props: {
               <input
                 type="checkbox"
                 checked={docsEnabled}
-                disabled={accessLockedBySkills || accessLockedToMcpOnly}
+                disabled={accessLockedToMcpOnly}
                 onChange={(e) =>
                   setAgent({
                     ...agent,
@@ -449,8 +423,6 @@ function Editor(props: {
                 <div style={sectionHint}>
                   {accessLockedToMcpOnly
                     ? "這個教學步驟只允許 MCP 權限，Docs 已暫時鎖定為關閉。"
-                    : accessLockedBySkills
-                    ? "Skills 已啟用：Docs 已強制允許全部，且暫時不可修改。"
                     : "勾選後預設可使用全部文件；若需要可改成只允許特定文件。"}
                 </div>
               </div>
@@ -459,11 +431,11 @@ function Editor(props: {
               <>
                 <div style={{ display: "grid", gap: 6 }}>
                   <label style={checkRow}>
-                    <input type="radio" name={`docs-mode-${agent.id}`} checked={allowAllDocs} disabled={accessLockedBySkills || accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedDocIds: undefined })} data-tutorial-id="agent-access-docs-all" />
+                    <input type="radio" name={`docs-mode-${agent.id}`} checked={allowAllDocs} disabled={accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedDocIds: undefined })} data-tutorial-id="agent-access-docs-all" />
                     <span>All docs</span>
                   </label>
                   <label style={checkRow}>
-                    <input type="radio" name={`docs-mode-${agent.id}`} checked={!allowAllDocs} disabled={accessLockedBySkills || accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedDocIds: agent.allowedDocIds ?? [] })} data-tutorial-id="agent-access-docs-custom" />
+                    <input type="radio" name={`docs-mode-${agent.id}`} checked={!allowAllDocs} disabled={accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedDocIds: agent.allowedDocIds ?? [] })} data-tutorial-id="agent-access-docs-custom" />
                     <span>Custom selection</span>
                   </label>
                 </div>
@@ -472,7 +444,7 @@ function Editor(props: {
                     {props.docs.length === 0 ? <div style={{ fontSize: 12, opacity: 0.7 }}>No docs yet.</div> : null}
                     {props.docs.map((doc) => (
                       <label key={doc.id} style={checkRow}>
-                        <input type="checkbox" checked={agent.allowedDocIds?.includes(doc.id) ?? false} disabled={accessLockedBySkills || accessLockedToMcpOnly} onChange={() => toggleDoc(doc.id)} />
+                        <input type="checkbox" checked={agent.allowedDocIds?.includes(doc.id) ?? false} disabled={accessLockedToMcpOnly} onChange={() => toggleDoc(doc.id)} />
                         <span>{doc.title}</span>
                       </label>
                     ))}
@@ -487,7 +459,6 @@ function Editor(props: {
               <input
                 type="checkbox"
                 checked={mcpEnabled}
-                disabled={accessLockedBySkills}
                 onChange={(e) =>
                   setAgent({
                     ...agent,
@@ -502,8 +473,6 @@ function Editor(props: {
                 <div style={sectionHint}>
                   {accessLockedToMcpOnly
                     ? "這個教學步驟請只開啟 MCP 權限，其他權限都會維持關閉。"
-                    : accessLockedBySkills
-                    ? "Skills 已啟用：MCP 已強制允許全部，且暫時不可修改。"
                     : "勾選後預設可使用全部 MCP servers；若需要可改成只允許特定 server。"}
                 </div>
               </div>
@@ -512,11 +481,11 @@ function Editor(props: {
               <>
                 <div style={{ display: "grid", gap: 6 }}>
                   <label style={checkRow}>
-                    <input type="radio" name={`mcp-mode-${agent.id}`} checked={allowAllMcps} disabled={accessLockedBySkills} onChange={() => setAgent({ ...agent, allowedMcpServerIds: undefined })} data-tutorial-id="agent-access-mcp-all" />
+                    <input type="radio" name={`mcp-mode-${agent.id}`} checked={allowAllMcps} onChange={() => setAgent({ ...agent, allowedMcpServerIds: undefined })} data-tutorial-id="agent-access-mcp-all" />
                     <span>All MCP servers</span>
                   </label>
                   <label style={checkRow}>
-                    <input type="radio" name={`mcp-mode-${agent.id}`} checked={!allowAllMcps} disabled={accessLockedBySkills} onChange={() => setAgent({ ...agent, allowedMcpServerIds: agent.allowedMcpServerIds ?? [] })} data-tutorial-id="agent-access-mcp-custom" />
+                    <input type="radio" name={`mcp-mode-${agent.id}`} checked={!allowAllMcps} onChange={() => setAgent({ ...agent, allowedMcpServerIds: agent.allowedMcpServerIds ?? [] })} data-tutorial-id="agent-access-mcp-custom" />
                     <span>Custom selection</span>
                   </label>
                 </div>
@@ -525,7 +494,7 @@ function Editor(props: {
                     {props.mcpServers.length === 0 ? <div style={{ fontSize: 12, opacity: 0.7 }}>No MCP servers yet.</div> : null}
                     {props.mcpServers.map((server) => (
                       <label key={server.id} style={checkRow}>
-                        <input type="checkbox" checked={agent.allowedMcpServerIds?.includes(server.id) ?? false} disabled={accessLockedBySkills} onChange={() => toggleMcp(server.id)} />
+                        <input type="checkbox" checked={agent.allowedMcpServerIds?.includes(server.id) ?? false} onChange={() => toggleMcp(server.id)} />
                         <span>{server.name}</span>
                       </label>
                     ))}
@@ -540,7 +509,7 @@ function Editor(props: {
               <input
                 type="checkbox"
                 checked={builtInToolsEnabled}
-                disabled={accessLockedBySkills || accessLockedToMcpOnly}
+                disabled={accessLockedToMcpOnly}
                 onChange={(e) =>
                   setAgent({
                     ...agent,
@@ -555,8 +524,6 @@ function Editor(props: {
                 <div style={sectionHint}>
                   {accessLockedToMcpOnly
                     ? "這個教學步驟只允許 MCP 權限，Built-in Tools 已暫時鎖定為關閉。"
-                    : accessLockedBySkills
-                    ? "Skills 已啟用：Built-in Tools 已強制允許全部，且暫時不可修改。"
                     : "勾選後預設可使用全部 Built-in Tools；若需要可改成只允許特定工具。"}
                 </div>
               </div>
@@ -565,11 +532,11 @@ function Editor(props: {
               <>
                 <div style={{ display: "grid", gap: 6 }}>
                   <label style={checkRow}>
-                    <input type="radio" name={`builtins-mode-${agent.id}`} checked={allowAllBuiltIns} disabled={accessLockedBySkills || accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedBuiltInToolIds: undefined })} data-tutorial-id="agent-access-builtins-all" />
+                    <input type="radio" name={`builtins-mode-${agent.id}`} checked={allowAllBuiltIns} disabled={accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedBuiltInToolIds: undefined })} data-tutorial-id="agent-access-builtins-all" />
                     <span>All built-in tools</span>
                   </label>
                   <label style={checkRow}>
-                    <input type="radio" name={`builtins-mode-${agent.id}`} checked={!allowAllBuiltIns} disabled={accessLockedBySkills || accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedBuiltInToolIds: agent.allowedBuiltInToolIds ?? [] })} data-tutorial-id="agent-access-builtins-custom" />
+                    <input type="radio" name={`builtins-mode-${agent.id}`} checked={!allowAllBuiltIns} disabled={accessLockedToMcpOnly} onChange={() => setAgent({ ...agent, allowedBuiltInToolIds: agent.allowedBuiltInToolIds ?? [] })} data-tutorial-id="agent-access-builtins-custom" />
                     <span>Custom selection</span>
                   </label>
                 </div>
@@ -589,7 +556,7 @@ function Editor(props: {
                             <input
                               type="checkbox"
                               checked={agent.allowedBuiltInToolIds?.includes(tool.id) ?? false}
-                              disabled={accessLockedBySkills || accessLockedToMcpOnly}
+                              disabled={accessLockedToMcpOnly}
                               onChange={() => toggleBuiltInTool(tool.id)}
                             />
                             <span>{tool.displayLabel ?? tool.name}</span>
@@ -605,7 +572,7 @@ function Editor(props: {
                             <input
                               type="checkbox"
                               checked={agent.allowedBuiltInToolIds?.includes(tool.id) ?? false}
-                              disabled={accessLockedBySkills || accessLockedToMcpOnly}
+                              disabled={accessLockedToMcpOnly}
                               onChange={() => toggleBuiltInTool(tool.id)}
                             />
                             <span>{tool.displayLabel ?? tool.name}</span>

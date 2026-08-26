@@ -60,4 +60,15 @@ describe("deadline helpers", () => {
 
     await expectation;
   });
+
+  it("fails closed for malformed or unbounded deadline durations", () => {
+    const malformed = createDeadline({ totalMs: Number.NaN, label: "malformed" });
+    expect(malformed.signal.aborted).toBe(true);
+    expect(() => malformed.throwIfExpired()).toThrow("malformed timed out after 0s");
+    malformed.dispose();
+
+    const unbounded = createDeadline({ totalMs: Number.POSITIVE_INFINITY, label: "unbounded" });
+    expect(unbounded.totalMs).toBe(24 * 60 * 60 * 1000);
+    unbounded.dispose();
+  });
 });
