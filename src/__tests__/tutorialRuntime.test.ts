@@ -495,7 +495,10 @@ describe("tutorial YAML automation linkage", () => {
     expect(step.automation?.loadBalancerDelaySecond).toBe(10);
     expect(step.automation?.loadBalancerMaxRetries).toBe(10);
     expect(step.automation?.executionDeadlineMs).toBe(900000);
-    expect(step.automation?.composerSeed).toBe("幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
+    expect(step.automation?.composerSeed).toContain("幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
+    expect(step.automation?.composerSeed).toContain("provider rate limit");
+    expect(step.automation?.composerSeed).toContain("先等待 runtime 的 retry 或 Load Balancer failover");
+    expect(step.automation?.expect?.userPrompt).toBe(step.automation?.composerSeed);
   });
 
   it("applies a configured tutorial deadline without changing the normal fallback", () => {

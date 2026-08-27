@@ -227,7 +227,10 @@ async function assertChatgptBrowserSkillAutomationExists() {
   assert.equal(step.automation?.loadBalancerDelaySecond, 10);
   assert.equal(step.automation?.loadBalancerMaxRetries, 10);
   assert.equal(step.automation?.executionDeadlineMs, 900000);
-  assert.equal(step.automation?.composerSeed, "幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要");
+  assert.ok(step.automation?.composerSeed?.includes("幫我打開 https://github.com/trending?since=daily，點進第一名的 repo，然後告訴我它的內容摘要"));
+  assert.ok(step.automation?.composerSeed?.includes("provider rate limit"));
+  assert.ok(step.automation?.composerSeed?.includes("先等待 runtime 的 retry 或 Load Balancer failover"));
+  assert.equal(step.automation?.composerSeed, step.automation?.expect?.userPrompt);
 }
 
 async function main() {
