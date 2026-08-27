@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseStandardSkillDocument, validateSkillPackage } from "../runtime/skillPackageValidation";
+import { TUTORIAL_GRILLING_INVEST_SKILL_MARKDOWN } from "../onboarding/tutorialSkillTemplate";
 
 const skillMarkdown = `---
 name: pdf-processing
@@ -31,6 +32,12 @@ describe("skill package validation", () => {
     expect(parseStandardSkillDocument("# no frontmatter")).toMatchObject({ code: "malformed_frontmatter" });
     expect(parseStandardSkillDocument("---\nname: valid-name\n---\nbody")).toMatchObject({ code: "missing_description" });
     expect(parseStandardSkillDocument("---\nname: Invalid Name\ndescription: bad\n---\nbody")).toMatchObject({ code: "invalid_name" });
+  });
+
+  it("keeps the grilling-invest tutorial skill compatible with package naming rules", () => {
+    expect(parseStandardSkillDocument(TUTORIAL_GRILLING_INVEST_SKILL_MARKDOWN)).toMatchObject({
+      name: "grilling-invest"
+    });
   });
 
   it("validates one root, unique SKILL.md, path safety, and package limits", () => {

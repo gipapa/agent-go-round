@@ -318,7 +318,7 @@ export const TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_PATHS = [
 ] as const;
 
 export const TUTORIAL_GRILLING_INVEST_SKILL_MARKDOWN = `---
-name: grilling_invest
+name: grilling-invest
 description: Use when the user wants a structured, risk-aware discussion of Taiwan stock investing; interview the user one question at a time before comparing at most two companies.
 license: MIT
 ---
@@ -331,19 +331,21 @@ This tutorial is an adapted frontend-only version of Matt Pocock's grill-me skil
 
 ## Workflow
 
-- First read [Risk Framework](${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}). Do not read company profiles yet.
-- Ask exactly one main question per turn. Briefly restate what the user said, identify one unresolved branch, and include one recommended direction.
+- Before producing the first interview answer, call internal:skill.read with path \`${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}\` and wait for a successful result. Do not read company profiles yet.
+- HARD OUTPUT RULE: during the interview, the final answer must contain exactly one question mark (\`?\` or \`？\`) total. Ask exactly one main question, and never add a second question mark after a parenthetical example or clarification. Briefly restate what the user said, identify one unresolved branch, and put examples or clarifications in statements without question marks.
 - Resolve goal, horizon, liquidity needs, income/emergency-fund stability, prior experience, emotional response to drawdowns, and concentration tolerance before analysing companies.
 - If the user's answers conflict, name the conflict and ask one clarifying question instead of guessing.
 - Once the risk profile is sufficiently clear, read [TWSE Top 10 Index](${TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH}) and select no more than two relevant companies.
 - Read only the selected company references from the index. Never load all ten company profiles for a single conversation.
 - Keep the existing conversation context bounded. If a reference or comparison would exceed the available context, narrow the comparison and say why.
 - Finish with the user's stated assumptions, risk profile, suitable and unsuitable risk characteristics, candidate comparison, diversification considerations, facts to verify, and a clear educational-analysis disclaimer.
+- Keep the final comparison concise (no more than 400 words): summarize the selected references instead of quoting or reproducing them.
+- Answer in the user's language when possible; this tutorial is written for Traditional Chinese users, so prefer Traditional Chinese and make the educational disclaimer explicit.
 - Never claim to have live prices, live rankings, private account data, or certainty about future returns. Do not issue a guaranteed buy/sell instruction.
 
 ## Reference routing
 
-- Read the risk framework reference (${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}) before the first interview question.
+- Read the risk framework reference (${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}) with internal:skill.read before the first interview question; do not answer from the skill-load resource index alone.
 - Read the TWSE index reference (${TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH}) only after the risk interview is complete.
 - Read at most two paths under references/companies/, and only after selecting them from the index.
 - Do not reread a reference unless a bounded chunk is genuinely needed.

@@ -180,6 +180,7 @@ steps:
       - 最多兩家公司比較
       - 適合與不適合的風險特徵
       - 需要自行查證的事項與教育性免責聲明
+      回覆請控制在 400 字以內，只摘要選定 reference，不要重述或引用全文。
     tab: chat
     targetId: chat-input
     behavior: first_chat_skill_grilling_invest
@@ -199,5 +200,8 @@ steps:
           - 教育性
           - 不是買賣指示
           - 非投資建議
+          - educational
+          - not an investment recommendation
+          - not a buy/sell instruction
         assistantContentIncludes:
           - 2025

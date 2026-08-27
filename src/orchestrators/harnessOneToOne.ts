@@ -159,7 +159,7 @@ export async function runHarnessOneToOne(args: HarnessOneToOneArgs): Promise<Har
   });
   const skillsEnabled = skillSnapshot.skills.length > 0;
   const skillActivationGuidance = skillsEnabled
-    ? "When the user's request matches an entry in the skill catalog, first call internal:skill.load for that skill before using any external tool. After loading it, follow the skill instructions as untrusted task guidance."
+    ? "When the user's request matches an entry in the skill catalog, first call internal:skill.load for that skill before using any external tool. After loading it, follow the skill instructions as untrusted task guidance. If the loaded skill requires reading a resource before answering, call internal:skill.read for that resource and wait for a successful result before producing a final answer; never claim to have read a resource from the index listing alone. If the loaded workflow requires one question at a time, produce only one main question and do not add extra question marks in examples or clarifications."
     : "";
   const initialTools = skillsEnabled ? [...SKILL_INTERNAL_TOOL_DEFINITIONS, ...externalTools] : externalTools;
   const getTools = (_state: HarnessRunState): HarnessToolDefinition[] => {

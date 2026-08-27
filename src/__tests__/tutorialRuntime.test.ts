@@ -244,13 +244,27 @@ describe("tutorial YAML automation linkage", () => {
     const prompt = firstStep.automation?.expect?.userPrompt ?? "";
     const trace = [
       { label: "Skill load", content: "grilling_invest" },
-      { label: "Tool result", content: "internal:skill.read: success; path=references/risk-framework.md" }
+      { label: "Skill resource", content: "references/risk-framework.md (1264 chars)" }
     ];
     expect(evaluateTutorialStep(firstStep, makeState({
       history: [makeUser(prompt), makeAssistant("assistant-invest-1", "我先確認你的投資期限？接著還想知道你的收入？", { skillTrace: trace })]
     })).completed).toBe(false);
     expect(evaluateTutorialStep(firstStep, makeState({
       history: [makeUser(prompt), makeAssistant("assistant-invest-2", "我先確認你的投資期限？", { skillTrace: trace })]
+    })).completed).toBe(true);
+    expect(evaluateTutorialStep(firstStep, makeState({
+      history: [
+        makeUser(prompt),
+        makeAssistant("assistant-invest-company-leak", "我先確認你的投資期限？", {
+          skillTrace: [
+            ...trace,
+            { label: "Skill resource", content: "references/companies/2330.md (500 chars)" }
+          ]
+        })
+      ]
+    })).completed).toBe(false);
+    expect(evaluateTutorialStep(firstStep, makeState({
+      history: [makeUser(prompt), makeAssistant("assistant-invest-duplicate-punctuation", "我先確認你的投資期限？？", { skillTrace: trace })]
     })).completed).toBe(true);
 
     const finalStep = getStep("grilling-invest-skill", "recommendation");

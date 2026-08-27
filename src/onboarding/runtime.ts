@@ -227,7 +227,7 @@ function findTutorialGrillingInvestSkill(state: TutorialRuntimeState) {
   return (
     state.skills.find((skill) => skill.rootPath === TUTORIAL_GRILLING_INVEST_SKILL_ROOT) ??
     state.skills.find((skill) => skill.name === TUTORIAL_GRILLING_INVEST_SKILL_NAME) ??
-    state.skills.find((skill) => /^---\s*[\r\n]+name:\s*grilling_invest\s*[\r\n]/i.test(skill.skillMarkdown)) ??
+    state.skills.find((skill) => /^---\s*[\r\n]+name:\s*grilling[-_]invest\s*[\r\n]/i.test(skill.skillMarkdown)) ??
     null
   );
 }
@@ -253,7 +253,9 @@ function hasSkillTracePath(assistant: TutorialRuntimeState["history"][number] | 
     // A skill-load result includes the complete resource index. A tutorial
     // expecting a reference path must only be satisfied by an actual
     // successful skill.read tool result, not by that index advertisement.
-    if (path.startsWith("references/") && entry.label !== "Tool result") return false;
+    // The canonical harness records the successful read as a `Skill resource`
+    // event, while older persisted traces may put the path in `Tool result`.
+    if (path.startsWith("references/") && entry.label !== "Tool result" && entry.label !== "Skill resource") return false;
 
     // Canonical harness tool traces include the typed outcome immediately
     // after the tool id (for example: `browser_open: success; ...`). A
@@ -422,7 +424,10 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
   }
 
   if (assistant && typeof expect?.assistantQuestionCountMax === "number") {
-    const questionCount = (assistant.content.match(/[?？]/g) ?? []).length;
+    // Treat repeated punctuation at the end of one question (for example,
+    // `？？`) as one question. Separate question-mark runs still represent
+    // multiple questions and must fail the one-question tutorial check.
+    const questionCount = (assistant.content.match(/[?？]+/g) ?? []).length;
     if (questionCount > expect.assistantQuestionCountMax) {
       issues.push(`這一輪出現 ${questionCount} 個問題；Grill Me 每輪最多只能問 ${expect.assistantQuestionCountMax} 個主要問題。`);
     }
@@ -488,7 +493,9 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
 
   if (assistant && expect?.skillTraceExcludes?.length) {
     const forbidden = expect.skillTraceExcludes.filter((token) =>
-      assistant.skillTrace?.some((entry) => entry.label === "Tool result" && entry.content.includes(token))
+      assistant.skillTrace?.some(
+        (entry) => (entry.label === "Tool result" || entry.label === "Skill resource") && entry.content.includes(token)
+      )
     );
     if (forbidden.length) {
       issues.push(`這一輪不應載入這些 reference：${forbidden.join("、")}。`);

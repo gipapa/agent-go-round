@@ -590,6 +590,9 @@ async function waitForTutorialNextEnabled(timeoutMs: number, step: TutorialStepD
       async (elapsedMs) => {
             const statusText = await getPromptStatusText().catch(() => "");
             const assistant = await getLatestAssistantText().catch(() => "");
+            if (assistant.trim().startsWith("【執行失敗】")) {
+              throw new Error(`assistant 回覆失敗：${assistant.trim()}`);
+            }
             console.log(
               `[wait:${step.id}] ${Math.round(elapsedMs / 1000)}s status=${statusText || "(empty)"} assistant=${truncateForLog(
                 assistant
@@ -972,7 +975,13 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
       await setCheckboxByTutorialId("agent-access-skills-toggle", true);
       await clickByTutorialId("agent-access-skills-custom");
-      await clickLabelContaining('[data-tutorial-id="agent-access-skills-section"]', "grilling_invest");
+      try {
+        await clickLabelContaining('[data-tutorial-id="agent-access-skills-section"]', "grilling-invest");
+      } catch {
+        // Keep real-tutorial compatibility with workspaces created before the
+        // skill package name was corrected to the standard hyphenated form.
+        await clickLabelContaining('[data-tutorial-id="agent-access-skills-section"]', "grilling_invest");
+      }
       await clickByTutorialId("agent-save-button");
       return;
     case "enable_tutorial_chatgpt_browser_skill_access":
