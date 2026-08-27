@@ -1,0 +1,126 @@
+id: harness-stability-skill
+title: "[7] 使用本地多工具 Skill 驗證 Harness 穩定性"
+description: 以不依賴網路的本地多工具流程，驗證 canonical action loop 的連續工具呼叫、結果回注入與最終報告。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識 Harness 穩定性案例
+    checklistLabel: 認識本地多工具流程
+    instructionTitle: 不依賴外部服務的 action loop 驗證
+    instructionBody: |
+      這個案例專門測 canonical harness，而不是網站或 MCP 的穩定性。
+
+      同一則對話中，skill 必須依序：
+      - 呼叫系統的 `get_user_profile`
+      - 呼叫本地 Worker 的「教學 Harness 驗證戳記工具」
+      - 讀取兩次工具結果後，以固定模板完成回覆
+
+      兩個工具都沒有網路、登入、時間或隨機資料依賴，適合在 fresh browser session 重複執行。
+    behavior: manual_info
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: set-history-limit
+    title: 將對話歷史縮到 1 則
+    checklistLabel: 將對話歷史改為 1
+    instructionTitle: 降低重複 gate 的上下文變因
+    instructionBody: |
+      請前往 Chat Config > History，將 `Messages sent to model` 改成 `1`。
+      這個案例只需目前這一則對話的工具結果；案例結束後會恢復原本設定。
+    tab: chat_config
+    targetId: chat-config-history-card
+    behavior: set_history_limit_to_one
+    completionLabel: 等待將 Messages sent to model 改成 1
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: fill-profile
+    title: 填寫固定的教學 Profile
+    checklistLabel: 填寫 Profile
+    instructionTitle: 提供第一個工具的 deterministic 輸入
+    instructionBody: |
+      請至少填寫 Character name 與自我描述。稍後 skill 會透過 `get_user_profile` 讀取這些資料。
+    tab: profile
+    targetId: profile-name-input
+    behavior: fill_tutorial_user_profile
+    completionLabel: 等待填寫 Profile
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: create-verification-tool
+    title: 建立本地驗證戳記工具
+    checklistLabel: 建立 Worker 驗證工具
+    instructionTitle: 系統會自動建立 readonly Worker 工具
+    instructionBody: |
+      系統會建立「教學 Harness 驗證戳記工具」。它不會讀寫資料，只會回傳固定戳記，讓案例能穩定驗證 custom built-in tool 的 Worker execution 與結果回注入。
+    tab: chat_config
+    targetId: chat-config-tools-card
+    behavior: create_tutorial_harness_stability_tool
+    completionLabel: 等待系統建立教學 Harness 驗證戳記工具
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: create-skill
+    title: 建立 Harness 穩定性 skill
+    checklistLabel: 建立本地多工具 skill
+    instructionTitle: 系統會自動建立 skill 與報告模板
+    instructionBody: |
+      這個 skill 會強制先讀 Profile、再取得固定驗證戳記，最後按 asset 模板產生報告。它不會使用 Docs、MCP 或外部網站。
+    tab: chat_config
+    targetId: chat-config-skills-card
+    behavior: ensure_tutorial_harness_stability_skill
+    completionLabel: 等待系統建立 Harness 穩定性 skill
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: enable-skill
+    title: 授權本地 tools 與 skill
+    checklistLabel: 開啟 Agent 權限
+    instructionTitle: 讓 Agent 可以執行兩個 local tools
+    instructionBody: |
+      請在 Agents 編輯目前 Agent，開啟 Skills 與 Built-in Tools；可選擇 All，或至少允許 Harness 穩定性 skill、get_user_profile 與教學 Harness 驗證戳記工具。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_harness_stability_skill_access
+    completionLabel: 等待 Agent 開啟 skill 與兩個 built-in tools 權限
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: run-harness-flow
+    title: 在一則對話完成本地多工具驗證
+    checklistLabel: 連續呼叫兩個工具並完成報告
+    instructionTitle: 單一 canonical action loop：profile → Worker stamp → report
+    instructionBody: |
+      送出後，skill 必須先讀取 Profile，再呼叫本地驗證戳記工具；兩個成功結果都回到同一份 transcript 後，才可輸出固定報告。
+
+      通過條件會同時檢查 skill load、兩個成功 tool trace、固定戳記與三個報告區塊，而不只看自然語言回答。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_harness_stability
+    completionLabel: 等待 skill 完成 Profile、Worker 驗證戳記與固定報告
+    actionLabel: 完成案例教學
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 請使用 Harness 穩定性 skill，依序讀取我的 Profile、取得本地驗證戳記，最後用指定模板回報驗證結果。兩個工具都成功前不要回答。
+      activeAgentPreset: tutorial_agent_base
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 10
+      expect:
+        userPrompt: 請使用 Harness 穩定性 skill，依序讀取我的 Profile、取得本地驗證戳記，最後用指定模板回報驗證結果。兩個工具都成功前不要回答。
+        requireAssistant: true
+        skillLoadContainsAny:
+          - harness-stability
+          - harness-stability-tutorial-skill
+        skillTraceIncludes:
+          - get_user_profile
+          - 教學 Harness 驗證戳記工具
+        assistantContentIncludesAny:
+          - AGR-HARNESS-STABLE-V1
+          - AGR‑HARNESS‑STABLE‑V1

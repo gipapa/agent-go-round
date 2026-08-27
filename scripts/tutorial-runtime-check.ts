@@ -18,7 +18,8 @@ const TUTORIAL_FILES = [
   "built-in-tools-chat.yaml",
   "sequential-skill-chat.yaml",
   "agent-browser-mcp-chat.yaml",
-  "chatgpt-browser-skill.yaml"
+  "chatgpt-browser-skill.yaml",
+  "harness-stability-skill.yaml"
 ];
 
 function makeTutorialCredential(): ModelCredentialEntry {
@@ -162,7 +163,9 @@ async function assertApplyEntryUsesYamlSeed() {
     clearChat: [],
     seedTutorialLoadBalancerDraft: [],
     ensureTutorialSequentialSkill: [],
-    ensureTutorialChatgptBrowserSkill: []
+    ensureTutorialChatgptBrowserSkill: [],
+    ensureTutorialHarnessStabilityTool: [],
+    ensureTutorialHarnessStabilitySkill: []
   };
   const controller: TutorialEntryController = {
     setActiveTab: (value) => calls.setActiveTab.push(value),
@@ -175,7 +178,9 @@ async function assertApplyEntryUsesYamlSeed() {
     seedTutorialLoadBalancerDraft: (kind) => calls.seedTutorialLoadBalancerDraft.push(kind),
     ensureTutorialAgentBrowserMcpTools: () => {},
     ensureTutorialSequentialSkill: () => calls.ensureTutorialSequentialSkill.push(true),
-    ensureTutorialChatgptBrowserSkill: () => calls.ensureTutorialChatgptBrowserSkill.push(true)
+    ensureTutorialChatgptBrowserSkill: () => calls.ensureTutorialChatgptBrowserSkill.push(true),
+    ensureTutorialHarnessStabilityTool: () => calls.ensureTutorialHarnessStabilityTool.push(true),
+    ensureTutorialHarnessStabilitySkill: () => calls.ensureTutorialHarnessStabilitySkill.push(true)
   };
 
   applyTutorialStepEntry(
@@ -233,6 +238,15 @@ async function assertChatgptBrowserSkillAutomationExists() {
   assert.equal(step.automation?.composerSeed, step.automation?.expect?.userPrompt);
 }
 
+async function assertHarnessStabilityAutomationExists() {
+  const step = await getStep("harness-stability-skill", "run-harness-flow");
+  assert.equal(step.automation?.loadBalancerDelaySecond, 10);
+  assert.equal(step.automation?.loadBalancerMaxRetries, 10);
+  assert.equal(step.automation?.composerSeed, step.automation?.expect?.userPrompt);
+  assert.deepEqual(step.automation?.expect?.skillTraceIncludes, ["get_user_profile", "教學 Harness 驗證戳記工具"]);
+  assert.deepEqual(step.automation?.expect?.assistantContentIncludesAny, ["AGR-HARNESS-STABLE-V1", "AGR‑HARNESS‑STABLE‑V1"]);
+}
+
 async function main() {
   await assertAllAutomatedChatStepsAreYamlDriven();
   await assertApplyEntryUsesYamlSeed();
@@ -240,6 +254,7 @@ async function main() {
   await assertSkillLoadExpectationUsesYamlValues();
   await assertHistoryLimitStepRequiresOne();
   await assertChatgptBrowserSkillAutomationExists();
+  await assertHarnessStabilityAutomationExists();
   console.log("tutorial-runtime-check: ok");
 }
 

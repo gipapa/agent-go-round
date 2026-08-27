@@ -46,7 +46,11 @@ export const REAL_TUTORIAL_RUNNER_BEHAVIORS = [
   "first_chat_mcp_browser_snapshot",
   "ensure_tutorial_chatgpt_browser_skill",
   "enable_tutorial_chatgpt_browser_skill_access",
-  "first_chat_skill_chatgpt_ask"
+  "first_chat_skill_chatgpt_ask",
+  "create_tutorial_harness_stability_tool",
+  "ensure_tutorial_harness_stability_skill",
+  "enable_tutorial_harness_stability_skill_access",
+  "first_chat_skill_harness_stability"
 ] as const satisfies readonly TutorialStepBehaviorId[];
 
 const supportedBehaviors = new Set<TutorialStepBehaviorId>(REAL_TUTORIAL_RUNNER_BEHAVIORS);
@@ -61,8 +65,9 @@ export function parseRealTutorialSessionCount(value: string | undefined) {
 }
 
 export function assertRealTutorialGate(args: { enabled: boolean; only: string; sessions: number }) {
-  if (args.enabled && (args.only !== "chatgpt-browser-skill" || args.sessions < 10)) {
-    throw new Error("REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=chatgpt-browser-skill 且 REAL_TUTORIAL_SESSIONS 至少為 10。");
+  const gateScenarios = new Set(["chatgpt-browser-skill", "harness-stability-skill"]);
+  if (args.enabled && (!gateScenarios.has(args.only) || args.sessions < 10)) {
+    throw new Error("REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=chatgpt-browser-skill、harness-stability-skill，且 REAL_TUTORIAL_SESSIONS 至少為 10。");
   }
 }
 

@@ -34,7 +34,11 @@ export type TutorialStepBehaviorId =
   | "ensure_tutorial_chatgpt_browser_skill"
   | "enable_tutorial_chatgpt_browser_skill_access"
   | "first_chat_skill_chatgpt_open"
-  | "first_chat_skill_chatgpt_ask";
+  | "first_chat_skill_chatgpt_ask"
+  | "create_tutorial_harness_stability_tool"
+  | "ensure_tutorial_harness_stability_skill"
+  | "enable_tutorial_harness_stability_skill_access"
+  | "first_chat_skill_harness_stability"
 
 export type TutorialStepDefinition = {
   id: string;
@@ -147,4 +151,6 @@ export type TutorialEntryController = {
   ensureTutorialAgentBrowserMcpTools: () => void;
   ensureTutorialSequentialSkill: () => void;
   ensureTutorialChatgptBrowserSkill: () => void;
+  ensureTutorialHarnessStabilityTool: () => void;
+  ensureTutorialHarnessStabilitySkill: () => void;
 };

@@ -46,14 +46,18 @@ function choiceMessageContent(choice: Record<string, unknown> | null): string {
 
 function httpError(status: number, text: string): ChatEvent {
   const kind = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "auth" : "http";
-  const retryable = status === 429 || status >= 500;
+  const retryable = (status === 429 && !isDailyTokenRateLimit(text)) || status >= 500;
   return { type: "error", kind, retryable, message: `HTTP ${status}${text ? `\n${text}` : ""}` };
 }
 
 function nativeHttpError(status: number, text: string): NativeChatEvent {
   const kind = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "auth" : "http";
-  const retryable = status === 429 || status >= 500;
+  const retryable = (status === 429 && !isDailyTokenRateLimit(text)) || status >= 500;
   return { type: "error", kind, retryable, message: `HTTP ${status}${text ? `\n${text}` : ""}` };
+}
+
+function isDailyTokenRateLimit(text: string) {
+  return /(?:tokens?\s+per\s+day|\bTPD\b)/i.test(text);
 }
 
 function toOpenAIMessage(m: ChatMessage) {
@@ -149,7 +153,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
       if (res.ok && res.body) break;
 
       const text = (await readResponseTextWithLimit(res, 8_192).catch(() => ({ text: "", exceeded: false }))).text;
-      if (res.status === 429 && attempt < retryMax) {
+      if (res.status === 429 && attempt < retryMax && !isDailyTokenRateLimit(text)) {
         const delayMs = getRetryAfterDelayMs(res.headers, retryDelaySec * 1000);
         req.onLog?.(`[retry] HTTP 429, attempt ${attempt + 1}/${retryMax}, waiting ${Math.round(delayMs / 1000)}s`);
         try {
@@ -351,7 +355,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
 
       if (!res.ok) {
         const text = (await readResponseTextWithLimit(res, 8_192).catch(() => ({ text: "", exceeded: false }))).text;
-        if (res.status === 429 && attempt < retryMax) {
+      if (res.status === 429 && attempt < retryMax && !isDailyTokenRateLimit(text)) {
           try {
             await waitBeforeRetry(getRetryAfterDelayMs(res.headers, retryDelaySec * 1000));
           } catch (waitError) {

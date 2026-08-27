@@ -10,6 +10,13 @@ import {
   TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
   TUTORIAL_TIME_TOOL_NAME
 } from "./tutorialBuiltInToolTemplate";
+import {
+  TUTORIAL_HARNESS_STABILITY_STAMP,
+  TUTORIAL_HARNESS_STABILITY_TOOL_CODE,
+  TUTORIAL_HARNESS_STABILITY_TOOL_DESCRIPTION,
+  TUTORIAL_HARNESS_STABILITY_TOOL_INPUT_SCHEMA,
+  TUTORIAL_HARNESS_STABILITY_TOOL_NAME
+} from "./tutorialHarnessStabilityToolTemplate";
 export {
   TUTORIAL_TIME_TOOL_CODE,
   TUTORIAL_TIME_TOOL_DESCRIPTION,
@@ -21,6 +28,9 @@ import {
   TUTORIAL_CHATGPT_BROWSER_REFERENCE_PATH,
   TUTORIAL_CHATGPT_BROWSER_SKILL_NAME,
   TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT,
+  TUTORIAL_HARNESS_STABILITY_ASSET_PATH,
+  TUTORIAL_HARNESS_STABILITY_SKILL_NAME,
+  TUTORIAL_HARNESS_STABILITY_SKILL_ROOT,
   TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
   TUTORIAL_SEQUENTIAL_ASSET_PATH,
   TUTORIAL_SEQUENTIAL_EXAMPLES_PATH,
@@ -54,6 +64,15 @@ export function isTutorialTimeTool(tool: Pick<BuiltInToolConfig, "name" | "descr
     tool.description.trim() === TUTORIAL_TIME_TOOL_DESCRIPTION &&
     JSON.stringify(tool.inputSchema ?? {}) === JSON.stringify(TUTORIAL_TIME_TOOL_INPUT_SCHEMA) &&
     tool.code.trim() === TUTORIAL_TIME_TOOL_CODE.trim()
+  );
+}
+
+export function isTutorialHarnessStabilityTool(tool: Pick<BuiltInToolConfig, "name" | "description" | "inputSchema" | "code">) {
+  return (
+    tool.name.trim() === TUTORIAL_HARNESS_STABILITY_TOOL_NAME &&
+    tool.description.trim() === TUTORIAL_HARNESS_STABILITY_TOOL_DESCRIPTION &&
+    JSON.stringify(tool.inputSchema ?? {}) === JSON.stringify(TUTORIAL_HARNESS_STABILITY_TOOL_INPUT_SCHEMA) &&
+    tool.code.trim() === TUTORIAL_HARNESS_STABILITY_TOOL_CODE.trim()
   );
 }
 
@@ -189,6 +208,19 @@ function findTutorialChatgptBrowserSkill(state: TutorialRuntimeState) {
     state.skills.find((skill) => /^---\s*[\r\n]+name:\s*browser-workflow-multiturn\s*[\r\n]/i.test(skill.skillMarkdown)) ??
     null
   );
+}
+
+function findTutorialHarnessStabilitySkill(state: TutorialRuntimeState) {
+  return (
+    state.skills.find((skill) => skill.rootPath === TUTORIAL_HARNESS_STABILITY_SKILL_ROOT) ??
+    state.skills.find((skill) => skill.name === TUTORIAL_HARNESS_STABILITY_SKILL_NAME) ??
+    state.skills.find((skill) => /^---\s*[\r\n]+name:\s*harness-stability\s*[\r\n]/i.test(skill.skillMarkdown)) ??
+    null
+  );
+}
+
+function findTutorialHarnessStabilityTool(state: TutorialRuntimeState) {
+  return state.builtInTools.find((tool) => isTutorialHarnessStabilityTool(tool)) ?? null;
 }
 
 function findTutorialMcpServer(state: TutorialRuntimeState) {
@@ -718,6 +750,25 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
           : "系統正在建立教學用 Browser workflow skill，完成後即可前往下一步。"
       };
     }
+    case "create_tutorial_harness_stability_tool": {
+      const tool = findTutorialHarnessStabilityTool(state);
+      return {
+        completed: !!tool,
+        targetId: step.targetId ?? "chat-config-tools-card",
+        canContinue: !!tool,
+        statusText: tool ? `已建立工具：${tool.name}` : "系統正在建立教學 Harness 驗證戳記工具。"
+      };
+    }
+    case "ensure_tutorial_harness_stability_skill": {
+      const skill = findTutorialHarnessStabilitySkill(state);
+      const completed = !!skill && skill.assetCount >= 1 && skill.skillMarkdown.includes(TUTORIAL_HARNESS_STABILITY_ASSET_PATH);
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-skills-card",
+        canContinue: completed,
+        statusText: completed ? `已建立教學 skill：${skill?.name}` : "系統正在建立 Harness 穩定性 skill，完成後即可前往下一步。"
+      };
+    }
     case "enable_tutorial_skill_access": {
       const agent = findTutorialAgentBase(state);
       const skill = findTutorialSequentialSkill(state);
@@ -763,6 +814,33 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         statusText: completed
           ? `目前 Agent 已允許使用 skill：${skill?.name}，且可使用所需的 MCP / Built-in Tools。`
           : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許使用這個 Browser workflow skill；啟用 Skills 後，MCP 與 Built-in Tools 應維持允許全部。"
+      };
+    }
+    case "enable_tutorial_harness_stability_skill_access": {
+      const agent = findTutorialAgentBase(state);
+      const skill = findTutorialHarnessStabilitySkill(state);
+      const tool = findTutorialHarnessStabilityTool(state);
+      const builtInsReady =
+        !!agent &&
+        agent.enableBuiltInTools === true &&
+        (agent.allowedBuiltInToolIds === undefined ||
+          (agent.allowedBuiltInToolIds.includes(SYSTEM_USER_PROFILE_TOOL_ID) && !!tool && agent.allowedBuiltInToolIds.includes(tool.id)));
+      const completed =
+        !!agent &&
+        !!skill &&
+        agent.enableSkills === true &&
+        (agent.allowedSkillIds === undefined || agent.allowedSkillIds.includes(skill.id)) &&
+        builtInsReady;
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? `目前 Agent 已允許使用 skill：${skill?.name} 與兩個本地工具。`
+          : "請到 Agents 頁開啟 Harness 穩定性 skill、get_user_profile 與教學 Harness 驗證戳記工具。"
       };
     }
     case "first_chat_skill_tone": {
@@ -811,6 +889,14 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         targetId: step.targetId ?? "chat-input",
         canContinue: false,
         statusText: step.completionLabel ?? "請送出指定問題，讓 Browser workflow skill 完成開站、導航、點擊與內容摘要。"
+      };
+    }
+    case "first_chat_skill_harness_stability": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? `請送出指定問題，讓 skill 依序完成 Profile 與 ${TUTORIAL_HARNESS_STABILITY_STAMP} 驗證。`
       };
     }
     case "register_tutorial_agent_browser_mcp": {
@@ -936,6 +1022,9 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "create_tutorial_time_tool":
       controller.ensureTutorialTimeTool();
       break;
+    case "create_tutorial_harness_stability_tool":
+      controller.ensureTutorialHarnessStabilityTool();
+      break;
     case "set_history_limit_to_one":
     case "fill_tutorial_user_profile":
       break;
@@ -971,6 +1060,11 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       controller.ensureTutorialAgentBrowserMcpTools();
       break;
     }
+    case "ensure_tutorial_harness_stability_skill": {
+      controller.setActiveTab("chat_config");
+      controller.ensureTutorialHarnessStabilitySkill();
+      break;
+    }
     case "enable_tutorial_skill_access": {
       controller.setActiveTab("agents");
       const agent = findTutorialAgentBase(state);
@@ -996,10 +1090,22 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       controller.ensureTutorialAgentBrowserMcpTools();
       break;
     }
+    case "enable_tutorial_harness_stability_skill_access": {
+      controller.setActiveTab("agents");
+      const agent = findTutorialAgentBase(state);
+      if (agent) {
+        controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
+      }
+      break;
+    }
     case "first_chat_skill_chatgpt_open":
     case "first_chat_skill_chatgpt_ask":
       controller.setExplicitSkillId?.(findTutorialChatgptBrowserSkill(state)?.id ?? null);
       controller.ensureTutorialAgentBrowserMcpTools();
+      break;
+    case "first_chat_skill_harness_stability":
+      controller.setExplicitSkillId?.(findTutorialHarnessStabilitySkill(state)?.id ?? null);
       break;
     case "register_tutorial_agent_browser_mcp":
       controller.setActiveTab("chat_config");

@@ -75,6 +75,7 @@ import {
   TUTORIAL_TIME_TOOL_DESCRIPTION,
   TUTORIAL_TIME_TOOL_INPUT_SCHEMA,
   TUTORIAL_TIME_TOOL_NAME,
+  isTutorialHarnessStabilityTool,
   isTutorialTimeTool,
   TUTORIAL_MCP_NAME,
   TUTORIAL_PRIMARY_MODEL,
@@ -89,6 +90,11 @@ import {
   TUTORIAL_CHATGPT_BROWSER_SKILL_MARKDOWN,
   TUTORIAL_CHATGPT_BROWSER_SKILL_NAME,
   TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT,
+  TUTORIAL_HARNESS_STABILITY_ASSET_CONTENT,
+  TUTORIAL_HARNESS_STABILITY_ASSET_PATH,
+  TUTORIAL_HARNESS_STABILITY_SKILL_MARKDOWN,
+  TUTORIAL_HARNESS_STABILITY_SKILL_NAME,
+  TUTORIAL_HARNESS_STABILITY_SKILL_ROOT,
   TUTORIAL_SEQUENTIAL_ADVANCED_CONTENT,
   TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
   TUTORIAL_SEQUENTIAL_ASSET_CONTENT,
@@ -99,6 +105,12 @@ import {
   TUTORIAL_SEQUENTIAL_SKILL_NAME,
   TUTORIAL_SEQUENTIAL_SKILL_ROOT
 } from "../onboarding/tutorialSkillTemplate";
+import {
+  TUTORIAL_HARNESS_STABILITY_TOOL_CODE,
+  TUTORIAL_HARNESS_STABILITY_TOOL_DESCRIPTION,
+  TUTORIAL_HARNESS_STABILITY_TOOL_INPUT_SCHEMA,
+  TUTORIAL_HARNESS_STABILITY_TOOL_NAME
+} from "../onboarding/tutorialHarnessStabilityToolTemplate";
 import { TutorialScenarioDefinition, TutorialWorkspaceSnapshot } from "../onboarding/types";
 import { useTutorialSession } from "../onboarding/useTutorialSession";
 import { getMagiSkillBundle } from "../magi/magiSkills";
@@ -303,7 +315,7 @@ export default function App() {
       // The tutorial clock only presents local page state. Keep ordinary
       // persisted custom tools conservative, even if their stored metadata
       // claims to be read-only.
-      readonly: isTutorialTimeTool(tool)
+      readonly: isTutorialTimeTool(tool) || isTutorialHarnessStabilityTool(tool)
     }))],
     [builtInTools, systemBuiltInTools]
   );
@@ -681,6 +693,12 @@ export default function App() {
       },
       ensureTutorialChatgptBrowserSkill: () => {
         void ensureTutorialChatgptBrowserSkill();
+      },
+      ensureTutorialHarnessStabilityTool: () => {
+        void ensureTutorialHarnessStabilityTool();
+      },
+      ensureTutorialHarnessStabilitySkill: () => {
+        void ensureTutorialHarnessStabilitySkill();
       },
       setComposerSeed: (value) =>
         setTutorialComposerSeed({
@@ -2414,7 +2432,46 @@ export default function App() {
     await reloadSkillsFromStore(target.id);
   }
 
-  function onChangeMcpServers(next: McpServerConfig[]) {
+  async function ensureTutorialHarnessStabilityTool() {
+    const existing = builtInTools.find((tool) => tool.name === TUTORIAL_HARNESS_STABILITY_TOOL_NAME) ?? null;
+    const nextTool: BuiltInToolConfig = {
+      id: existing?.id ?? generateId(),
+      name: TUTORIAL_HARNESS_STABILITY_TOOL_NAME,
+      description: TUTORIAL_HARNESS_STABILITY_TOOL_DESCRIPTION,
+      code: TUTORIAL_HARNESS_STABILITY_TOOL_CODE,
+      inputSchema: TUTORIAL_HARNESS_STABILITY_TOOL_INPUT_SCHEMA,
+      requireConfirmation: false,
+      readonly: true,
+      updatedAt: Date.now(),
+      source: "custom"
+    };
+    const nextTools = existing
+      ? builtInTools.map((tool) => (tool.id === existing.id ? nextTool : tool))
+      : [nextTool, ...builtInTools];
+    setBuiltInTools(nextTools);
+    logNow({ category: "tool", ok: true, message: `Tutorial built-in tool ensured: ${nextTool.name}` });
+  }
+
+  async function ensureTutorialHarnessStabilitySkill() {
+    const all = await listSkills();
+    let target =
+      all.find((skill) => skill.rootPath === TUTORIAL_HARNESS_STABILITY_SKILL_ROOT) ??
+      all.find((skill) => skill.name === TUTORIAL_HARNESS_STABILITY_SKILL_NAME) ??
+      null;
+
+    if (!target) {
+      target = await createEmptySkill(TUTORIAL_HARNESS_STABILITY_SKILL_NAME);
+    }
+
+    target = await updateSkillMarkdown(target.id, TUTORIAL_HARNESS_STABILITY_SKILL_MARKDOWN);
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_HARNESS_STABILITY_ASSET_PATH,
+      kind: "asset",
+      content: TUTORIAL_HARNESS_STABILITY_ASSET_CONTENT
+    });
+    await reloadSkillsFromStore(target.id);
+  }
+(next: McpServerConfig[]) {
     const prev = mcpServers;
     const prevIds = new Set(prev.map((s) => s.id));
     const nextIds = new Set(next.map((s) => s.id));

@@ -242,3 +242,60 @@ When reporting the result of a browser task, use:
 【頁面內容】
 整理最終讀到的頁面內容；若尚未取得，清楚說明原因。
 `;
+
+export const TUTORIAL_HARNESS_STABILITY_SKILL_NAME = "Harness Stability Tutorial Skill";
+export const TUTORIAL_HARNESS_STABILITY_SKILL_ROOT = "harness-stability-tutorial-skill";
+export const TUTORIAL_HARNESS_STABILITY_ASSET_PATH = "assets/harness-stability-report-template.md";
+
+export const TUTORIAL_HARNESS_STABILITY_SKILL_MARKDOWN = `---
+name: harness-stability
+description: Use when the user asks to verify the local harness stability flow with their profile and a deterministic local verification stamp.
+license: MIT
+---
+
+# Harness Stability Skill
+
+Goal: verify one canonical action loop can complete two deterministic local tool calls before producing a final report.
+
+## Rules
+
+- First call \`get_user_profile\` with an empty input object.
+- After its successful result is present in the transcript, call \`教學 Harness 驗證戳記工具\` with an empty input object.
+- Do not call either tool more than once.
+- Do not answer before both tool results are successful.
+- The verification tool must return \`AGR-HARNESS-STABLE-V1\`; if it does not, report the unexpected result instead of claiming success.
+- Use [Harness Stability Report Template](${TUTORIAL_HARNESS_STABILITY_ASSET_PATH}) for the final response.
+- Keep the final response concise and in Chinese.
+
+## When To Use
+
+Use this skill only when the user explicitly asks to verify the local harness stability flow, profile lookup, or the local verification stamp.
+
+\`\`\`skill-config
+{
+  "version": "1.0.0",
+  "decisionHint": "Use only for an explicit local harness stability verification. Call get_user_profile first, then 教學 Harness 驗證戳記工具, and do not finish before both successful results are in the transcript.",
+  "inputSchema": {},
+  "workflow": {
+    "useSkillDocs": true,
+    "useAgentDocs": false,
+    "allowMcp": false,
+    "allowBuiltInTools": true
+  }
+}
+\`\`\`
+`;
+
+export const TUTORIAL_HARNESS_STABILITY_ASSET_CONTENT = `# Harness Stability Report Template
+
+After both tools succeed, use exactly these sections:
+
+【Harness 狀態】
+說明本地 canonical action loop 已完成兩個工具步驟。
+
+【Profile】
+簡短列出 get_user_profile 回傳的使用者名稱。
+
+【驗證戳記】
+列出教學 Harness 驗證戳記工具回傳的 stamp。
+`;

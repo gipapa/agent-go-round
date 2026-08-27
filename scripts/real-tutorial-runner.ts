@@ -31,7 +31,8 @@ const TUTORIAL_FILES = [
   "built-in-tools-chat.yaml",
   "sequential-skill-chat.yaml",
   "agent-browser-mcp-chat.yaml",
-  "chatgpt-browser-skill.yaml"
+  "chatgpt-browser-skill.yaml",
+  "harness-stability-skill.yaml"
 ];
 
 const APP_URL = "http://127.0.0.1:5566/";
@@ -47,6 +48,10 @@ const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
 const REAL_TUTORIAL_PROMPT_OVERRIDE = process.env.REAL_TUTORIAL_PROMPT_OVERRIDE?.trim() || "";
 const REAL_TUTORIAL_SESSIONS = parseRealTutorialSessionCount(process.env.REAL_TUTORIAL_SESSIONS);
 const REAL_TUTORIAL_GATE = process.env.REAL_TUTORIAL_GATE === "1";
+const REQUIRES_AGENT_BROWSER_MCP =
+  !REAL_TUTORIAL_ONLY ||
+  REAL_TUTORIAL_ONLY === "agent-browser-mcp-chat" ||
+  REAL_TUTORIAL_ONLY === "chatgpt-browser-skill";
 
 type ManagedProcess = {
   name: string;
@@ -938,6 +943,9 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       return;
     case "ensure_tutorial_chatgpt_browser_skill":
       return;
+    case "create_tutorial_harness_stability_tool":
+    case "ensure_tutorial_harness_stability_skill":
+      return;
     case "enable_tutorial_skill_access":
       await clickByTutorialId("agents-edit-active-button");
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
@@ -951,8 +959,16 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
       await clickByTutorialId("agent-access-builtins-all");
       await clickByTutorialId("agent-save-button");
+      return;    case "enable_tutorial_chatgpt_browser_skill_access":
+      await clickByTutorialId("agents-edit-active-button");
+      await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
+      await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
+      await clickByTutorialId("agent-access-builtins-all");
+      await setCheckboxByTutorialId("agent-access-skills-toggle", true);
+      await clickByTutorialId("agent-access-skills-all");
+      await clickByTutorialId("agent-save-button");
       return;
-    case "enable_tutorial_chatgpt_browser_skill_access":
+    case "enable_tutorial_harness_stability_skill_access":
       await clickByTutorialId("agents-edit-active-button");
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
       await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
@@ -1000,6 +1016,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
     case "first_chat_skill_asset_template":
     case "first_chat_skill_chatgpt_open":
     case "first_chat_skill_chatgpt_ask":
+    case "first_chat_skill_harness_stability":
     case "first_chat_mcp_browser_open":
     case "first_chat_mcp_browser_snapshot": {
       const replyTimeout = Math.max(
@@ -1174,13 +1191,16 @@ async function main() {
 
   try {
     const hadDevBefore = await isHttpReady(APP_URL);
-    await runShell("fuser -k 3334/tcp 2>/dev/null || true");
-
     devProc = startManagedProcess("dev", ROOT, "./run.sh -dev");
-    mcpProc = startManagedProcess("mcp-agent-browser", MCP_ROOT, "./run.sh -agent_browser");
+    if (REQUIRES_AGENT_BROWSER_MCP) {
+      await runShell("fuser -k 3334/tcp 2>/dev/null || true");
+      mcpProc = startManagedProcess("mcp-agent-browser", MCP_ROOT, "./run.sh -agent_browser");
+    }
 
     await waitForRestartedHttp(APP_URL, 120000, hadDevBefore);
-    await waitForMcpServer(600000);
+    if (REQUIRES_AGENT_BROWSER_MCP) {
+      await waitForMcpServer(600000);
+    }
 
     for (let sessionNumber = 1; sessionNumber <= REAL_TUTORIAL_SESSIONS; sessionNumber += 1) {
       if (sessionNumber > 1) await browserClose();

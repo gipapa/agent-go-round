@@ -57,6 +57,23 @@ describe("OpenAI-compatible native adapter", () => {
     expect(events).toEqual([{ type: "error", kind: "http", retryable: true, message: "HTTP 503\nunavailable" }]);
   });
 
+  it("does not retry organization-wide daily token limits", async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      '{"error":{"message":"tokens per day (TPD) limit reached"}}',
+      { status: 429 }
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const events = [];
+    for await (const event of OpenAICompatAdapter.nativeChat!({ ...request, retry: { max: 3, delaySec: 0 } })) events.push(event);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(events).toEqual([{
+      type: "error",
+      kind: "rate_limit",
+      retryable: false,
+      message: "HTTP 429\n{\"error\":{\"message\":\"tokens per day (TPD) limit reached\"}}"
+    }]);
+  });
+
   it("retries an empty native stream before yielding a later tool call", async () => {
     const onLog = vi.fn();
     const fetchMock = vi.fn(async () => {

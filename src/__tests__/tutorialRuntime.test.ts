@@ -9,6 +9,7 @@ import {
   applyTutorialStepEntry,
   TUTORIAL_AGENT_ROLE,
   evaluateTutorialStep,
+  isTutorialHarnessStabilityTool,
   isTutorialTimeTool,
   TUTORIAL_TIME_TOOL_CODE,
   TUTORIAL_TIME_TOOL_DESCRIPTION,
@@ -18,6 +19,12 @@ import {
   TUTORIAL_SECONDARY_MODEL,
   resolveTutorialExecutionDeadlineMs
 } from "../onboarding/runtime";
+import {
+  TUTORIAL_HARNESS_STABILITY_TOOL_CODE,
+  TUTORIAL_HARNESS_STABILITY_TOOL_DESCRIPTION,
+  TUTORIAL_HARNESS_STABILITY_TOOL_INPUT_SCHEMA,
+  TUTORIAL_HARNESS_STABILITY_TOOL_NAME
+} from "../onboarding/tutorialHarnessStabilityToolTemplate";
 import type { TutorialEntryController, TutorialRuntimeState, TutorialStepDefinition } from "../onboarding/types";
 import type { AgentConfig, ChatMessage, LoadBalancerConfig, SkillConfig } from "../types";
 import type { ModelCredentialEntry } from "../storage/settingsStore";
@@ -168,7 +175,9 @@ describe("tutorial YAML automation linkage", () => {
       seedTutorialLoadBalancerDraft: vi.fn(),
       ensureTutorialAgentBrowserMcpTools: vi.fn(),
       ensureTutorialSequentialSkill: vi.fn(),
-      ensureTutorialChatgptBrowserSkill: vi.fn()
+      ensureTutorialChatgptBrowserSkill: vi.fn(),
+      ensureTutorialHarnessStabilityTool: vi.fn(),
+      ensureTutorialHarnessStabilitySkill: vi.fn()
     };
     const skill = {
       id: "tutorial-skill-id",
@@ -198,6 +207,44 @@ describe("tutorial YAML automation linkage", () => {
     );
 
     expect(controller.setExplicitSkillId).toHaveBeenLastCalledWith(browserSkill.id);
+
+    const harnessSkill = {
+      ...skill,
+      id: "harness-skill-id",
+      name: "Harness Stability Tutorial Skill",
+      rootPath: "harness-stability-tutorial-skill",
+      skillMarkdown: "---\nname: harness-stability\n---\n"
+    } as SkillConfig;
+    applyTutorialStepEntry(
+      getStep("harness-stability-skill", "run-harness-flow"),
+      makeState({ skills: [harnessSkill] }),
+      controller
+    );
+
+    expect(controller.setExplicitSkillId).toHaveBeenLastCalledWith(harnessSkill.id);
+  });
+
+  it("requires both local tool successes and the fixed report for the harness stability chat", () => {
+    const step = getStep("harness-stability-skill", "run-harness-flow");
+    const prompt = step.automation?.expect?.userPrompt ?? "";
+    const completeHistory = [
+      makeUser(prompt),
+      makeAssistant("assistant-harness", "【Harness 狀態】完成\n【Profile】Test User\n【驗證戳記】AGR-HARNESS-STABLE-V1", {
+        skillTrace: [
+          { label: "Skill loaded", content: "harness-stability-tutorial-skill" },
+          { label: "Tool result", content: "builtin:system:get_user_profile [get_user_profile]: success; certainty=dispatched" },
+          { label: "Tool result", content: "builtin:custom [教學 Harness 驗證戳記工具]: success; certainty=dispatched" }
+        ]
+      })
+    ];
+    expect(evaluateTutorialStep(step, makeState({ history: completeHistory })).completed).toBe(true);
+
+    const missingStamp = completeHistory.map((item) => ({ ...item }));
+    const assistant = missingStamp[1];
+    if (assistant.role === "assistant") {
+      assistant.skillTrace = assistant.skillTrace?.filter((entry) => !entry.content.includes("教學 Harness 驗證戳記工具"));
+    }
+    expect(evaluateTutorialStep(step, makeState({ history: missingStamp })).completed).toBe(false);
   });
 
   it("uses YAML automation to seed the composer for MCP snapshot steps", () => {
@@ -213,7 +260,9 @@ describe("tutorial YAML automation linkage", () => {
       seedTutorialLoadBalancerDraft: vi.fn(),
       ensureTutorialAgentBrowserMcpTools: vi.fn(),
       ensureTutorialSequentialSkill: vi.fn(),
-      ensureTutorialChatgptBrowserSkill: vi.fn()
+      ensureTutorialChatgptBrowserSkill: vi.fn(),
+      ensureTutorialHarnessStabilityTool: vi.fn(),
+      ensureTutorialHarnessStabilitySkill: vi.fn()
     };
 
     applyTutorialStepEntry(
@@ -303,7 +352,9 @@ describe("tutorial YAML automation linkage", () => {
       seedTutorialLoadBalancerDraft: vi.fn(),
       ensureTutorialAgentBrowserMcpTools: vi.fn(),
       ensureTutorialSequentialSkill: vi.fn(),
-      ensureTutorialChatgptBrowserSkill: vi.fn()
+      ensureTutorialChatgptBrowserSkill: vi.fn(),
+      ensureTutorialHarnessStabilityTool: vi.fn(),
+      ensureTutorialHarnessStabilitySkill: vi.fn()
     };
     const now = Date.now();
     const magiAgent = makeTutorialAgentBase({
@@ -370,7 +421,9 @@ describe("tutorial YAML automation linkage", () => {
       seedTutorialLoadBalancerDraft: vi.fn(),
       ensureTutorialAgentBrowserMcpTools: vi.fn(),
       ensureTutorialSequentialSkill: vi.fn(),
-      ensureTutorialChatgptBrowserSkill: vi.fn()
+      ensureTutorialChatgptBrowserSkill: vi.fn(),
+      ensureTutorialHarnessStabilityTool: vi.fn(),
+      ensureTutorialHarnessStabilitySkill: vi.fn()
     };
 
     const untaggedAgent = makeTutorialAgentBase({
@@ -628,7 +681,8 @@ describe("tutorial YAML automation linkage", () => {
       "built-in-tools-chat.yaml",
       "sequential-skill-chat.yaml",
       "agent-browser-mcp-chat.yaml",
-      "chatgpt-browser-skill.yaml"
+      "chatgpt-browser-skill.yaml",
+      "harness-stability-skill.yaml",
     ];
     const scenarios = await Promise.all(files.map(async (file) => parseTutorialScenario(await fs.readFile(path.join(tutorialDir, file), "utf8"))));
     expect(() => assertRealTutorialScenariosSupported(scenarios)).not.toThrow();
@@ -683,6 +737,17 @@ describe("tutorial YAML automation linkage", () => {
     expect(isTutorialTimeTool({ ...tool, code: TUTORIAL_TIME_TOOL_CODE })).toBe(true);
   });
 
+  it("recognizes only the exact deterministic harness stability tool", () => {
+    const tool = {
+      name: TUTORIAL_HARNESS_STABILITY_TOOL_NAME,
+      description: TUTORIAL_HARNESS_STABILITY_TOOL_DESCRIPTION,
+      inputSchema: TUTORIAL_HARNESS_STABILITY_TOOL_INPUT_SCHEMA,
+      code: "return { stamp: 'unexpected' };"
+    };
+    expect(isTutorialHarnessStabilityTool(tool)).toBe(false);
+    expect(isTutorialHarnessStabilityTool({ ...tool, code: TUTORIAL_HARNESS_STABILITY_TOOL_CODE })).toBe(true);
+  });
+
   it("validates real tutorial session counts and rollout gate requirements", () => {
     expect(parseRealTutorialSessionCount(undefined)).toBe(1);
     expect(parseRealTutorialSessionCount("10")).toBe(10);
@@ -693,6 +758,7 @@ describe("tutorial YAML automation linkage", () => {
 
     expect(() => assertRealTutorialGate({ enabled: false, only: "", sessions: 1 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 10 })).not.toThrow();
+    expect(() => assertRealTutorialGate({ enabled: true, only: "harness-stability-skill", sessions: 10 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 9 })).toThrow("至少為 10");
     expect(() => assertRealTutorialGate({ enabled: true, only: "built-in-tools-chat", sessions: 10 })).toThrow("chatgpt-browser-skill");
   });
