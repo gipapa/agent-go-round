@@ -299,3 +299,120 @@ After both tools succeed, use exactly these sections:
 【驗證戳記】
 列出教學 Harness 驗證戳記工具回傳的 stamp。
 `;
+
+export const TUTORIAL_GRILLING_INVEST_SKILL_NAME = "Grilling Invest Tutorial Skill";
+export const TUTORIAL_GRILLING_INVEST_SKILL_ROOT = "grilling-invest-tutorial-skill";
+export const TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH = "references/risk-framework.md";
+export const TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH = "references/twse-top10-index.md";
+export const TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_PATHS = [
+  "references/companies/2330.md",
+  "references/companies/2317.md",
+  "references/companies/2308.md",
+  "references/companies/2454.md",
+  "references/companies/2881.md",
+  "references/companies/2882.md",
+  "references/companies/3711.md",
+  "references/companies/2382.md",
+  "references/companies/2412.md",
+  "references/companies/2891.md"
+] as const;
+
+export const TUTORIAL_GRILLING_INVEST_SKILL_MARKDOWN = `---
+name: grilling_invest
+description: Use when the user wants a structured, risk-aware discussion of Taiwan stock investing; interview the user one question at a time before comparing at most two companies.
+license: MIT
+---
+
+# Grilling Invest
+
+Goal: understand the investor before discussing a company. This is an educational risk-matching conversation, not an execution or guaranteed-return service.
+
+This tutorial is an adapted frontend-only version of Matt Pocock's grill-me skill. Copyright (c) 2026 Matt Pocock; used under the MIT License. Source: https://github.com/mattpocock/skills/tree/main/skills/productivity/grill-me
+
+## Workflow
+
+- First read [Risk Framework](${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}). Do not read company profiles yet.
+- Ask exactly one main question per turn. Briefly restate what the user said, identify one unresolved branch, and include one recommended direction.
+- Resolve goal, horizon, liquidity needs, income/emergency-fund stability, prior experience, emotional response to drawdowns, and concentration tolerance before analysing companies.
+- If the user's answers conflict, name the conflict and ask one clarifying question instead of guessing.
+- Once the risk profile is sufficiently clear, read [TWSE Top 10 Index](${TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH}) and select no more than two relevant companies.
+- Read only the selected company references from the index. Never load all ten company profiles for a single conversation.
+- Keep the existing conversation context bounded. If a reference or comparison would exceed the available context, narrow the comparison and say why.
+- Finish with the user's stated assumptions, risk profile, suitable and unsuitable risk characteristics, candidate comparison, diversification considerations, facts to verify, and a clear educational-analysis disclaimer.
+- Never claim to have live prices, live rankings, private account data, or certainty about future returns. Do not issue a guaranteed buy/sell instruction.
+
+## Reference routing
+
+- Read the risk framework reference (${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}) before the first interview question.
+- Read the TWSE index reference (${TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH}) only after the risk interview is complete.
+- Read at most two paths under references/companies/, and only after selecting them from the index.
+- Do not reread a reference unless a bounded chunk is genuinely needed.
+
+\`\`\`skill-config
+{
+  "version": "1.0.0",
+  "decisionHint": "Use for a one-question-at-a-time, risk-aware educational discussion of Taiwan stocks. Interview the investor before reading at most two relevant company references.",
+  "inputSchema": {},
+  "workflow": {
+    "useSkillDocs": true,
+    "useAgentDocs": false,
+    "allowMcp": false,
+    "allowBuiltInTools": false
+  }
+}
+\`\`\`
+`;
+
+export const TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_CONTENT = `# Investor Risk Framework
+
+Use this compact framework before reading company data. It is a conversation aid, not a regulated suitability assessment.
+
+## Questions to resolve
+
+- Goal and time horizon: retirement, education, income, preservation, or another goal; record years rather than vague labels.
+- Liquidity: whether this money may be needed within the next one to three years.
+- Capacity: income stability, emergency reserve, debt pressure, and whether a temporary loss would change essential spending.
+- Tolerance: the largest temporary decline the user could stay invested through without panic-selling.
+- Experience: prior products, diversification habits, and understanding of equity volatility.
+- Concentration: willingness to accept exposure to one company, sector, export market, or semiconductor cycle.
+
+## Interpretation
+
+- A long horizon does not automatically mean high risk capacity.
+- Risk tolerance (what feels bearable) and risk capacity (what finances can bear) may disagree; use the more conservative constraint until clarified.
+- A user who needs the money soon should not be matched with a highly volatile equity thesis merely because its long-term story is attractive.
+- Treat answers as stated assumptions, not verified financial facts.
+`;
+
+export const TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_CONTENT = `# TWSE Top 10 Market-Capitalization Snapshot
+
+Source: Taiwan Stock Exchange FACT BOOK 2026, Top 30 Companies for Stock by Market Capitalization in 2025 (https://wwwc.twse.com.tw/downloads/zh/about/company/factbook/2026/1.04.html). Snapshot date: end of 2025. Market capitalization unit: NTD million. Special stocks are excluded.
+
+Use this index only after the investor interview. It is a stable historical reference, not a live ranking or price feed.
+
+1. 2330 Taiwan Semiconductor Manufacturing Co., Ltd. — semiconductor foundry — NTD 40,195,412 million — references/companies/2330.md
+2. 2317 Hon Hai Precision Industry Co., Ltd. — electronics manufacturing / supply chain — NTD 3,218,753 million — references/companies/2317.md
+3. 2308 Delta Electronics, Inc. — power and energy-management electronics — NTD 2,501,434 million — references/companies/2308.md
+4. 2454 MediaTek Inc. — fabless semiconductors — NTD 2,293,594 million — references/companies/2454.md
+5. 2881 Fubon Financial Holding Co., Ltd. — financial holding — NTD 1,346,108 million — references/companies/2881.md
+6. 2882 Cathay Financial Holding Co., Ltd. — financial holding — NTD 1,111,926 million — references/companies/2882.md
+7. 3711 ASE Industrial Holding Co., Ltd. — semiconductor packaging and testing — NTD 1,111,253 million — references/companies/3711.md
+8. 2382 Quanta Computer Inc. — electronics manufacturing / servers — NTD 1,050,635 million — references/companies/2382.md
+9. 2412 Chunghwa Telecom Co., Ltd. — telecommunications — NTD 1,012,347 million — references/companies/2412.md
+10. 2891 CTBC Financial Holding Co., Ltd. — financial holding — NTD 986,418 million — references/companies/2891.md
+
+Selection rule: compare no more than two companies, and explain why their risk characteristics match or conflict with the user's answers.
+`;
+
+export const TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_CONTENT: Record<string, string> = {
+  "references/companies/2330.md": `# 2330 台灣積體電路製造（TSMC）\n\n產業：半導體晶圓代工。\n\n分析重點：全球先進製程與高資本支出帶來技術和規模優勢，但營收與估值對 AI、電子景氣、出口需求、地緣政治、能源與資本支出週期敏感。適合討論長期成長與集中風險的取捨；不應把龍頭地位當成沒有回撤風險。`,
+  "references/companies/2317.md": `# 2317 鴻海\n\n產業：電子製造服務與供應鏈整合。\n\n分析重點：客戶與產品多元、製造規模大，但毛利通常受競爭、客戶集中、全球製造配置、匯率與消費電子週期影響。適合討論較分散的營收來源與景氣循環風險。`,
+  "references/companies/2308.md": `# 2308 台達電\n\n產業：電源、散熱、自動化與能源管理電子。\n\n分析重點：受高效能運算、資料中心與能源效率需求支持，產品與技術布局可提供成長題材；仍須考慮工業景氣、資本支出、競爭、估值與供應鏈風險。`,
+  "references/companies/2454.md": `# 2454 聯發科\n\n產業：無晶圓半導體設計。\n\n分析重點：智慧裝置、連網與邊緣運算產品組合帶來成長機會；需求、客戶產品週期、競爭、研發投入與半導體景氣會造成波動。適合用來討論高研發與產品週期風險。`,
+  "references/companies/2881.md": `# 2881 富邦金\n\n產業：金融控股。\n\n分析重點：銀行、保險與證券等金融業務提供不同收入來源，利率、信用循環、資本市場、保險理賠與監管會影響獲利。金融股的穩定感不等於沒有景氣與市場風險。`,
+  "references/companies/2882.md": `# 2882 國泰金\n\n產業：金融控股。\n\n分析重點：金融與保險業務受利率、債券與股票市場、信用品質、匯率及監管影響。討論時應區分配息期待、資本韌性與市場波動，避免只用殖利率判斷安全性。`,
+  "references/companies/3711.md": `# 3711 日月光投控\n\n產業：半導體封裝測試與相關製造服務。\n\n分析重點：受晶片出貨、先進封裝與電子週期影響，能受惠於半導體需求但也承擔資本支出、客戶集中、景氣反轉與技術競爭風險。`,
+  "references/companies/2382.md": `# 2382 廣達\n\n產業：電子製造服務、伺服器與雲端硬體。\n\n分析重點：伺服器與 AI 基礎建設需求可能支持成長，但客戶集中、訂單週期、供應鏈、毛利率與資本支出變化會造成波動。`,
+  "references/companies/2412.md": `# 2412 中華電\n\n產業：電信。\n\n分析重點：通訊服務具有較穩定的基本需求與現金流特徵，但仍有資本支出、價格競爭、監管、技術升級與成長速度有限等取捨。適合討論防禦性與成長性之間的平衡。`,
+  "references/companies/2891.md": `# 2891 中信金\n\n產業：金融控股。\n\n分析重點：銀行、保險與資產管理業務受利率、信用循環、資本市場、匯率、監管與海外布局影響。適合討論金融業分散效果與系統性風險。`
+};

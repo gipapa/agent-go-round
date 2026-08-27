@@ -95,6 +95,15 @@ import {
   TUTORIAL_HARNESS_STABILITY_SKILL_MARKDOWN,
   TUTORIAL_HARNESS_STABILITY_SKILL_NAME,
   TUTORIAL_HARNESS_STABILITY_SKILL_ROOT,
+  TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_CONTENT,
+  TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_PATHS,
+  TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_CONTENT,
+  TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH,
+  TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_CONTENT,
+  TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH,
+  TUTORIAL_GRILLING_INVEST_SKILL_MARKDOWN,
+  TUTORIAL_GRILLING_INVEST_SKILL_NAME,
+  TUTORIAL_GRILLING_INVEST_SKILL_ROOT,
   TUTORIAL_SEQUENTIAL_ADVANCED_CONTENT,
   TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
   TUTORIAL_SEQUENTIAL_ASSET_CONTENT,
@@ -699,6 +708,9 @@ export default function App() {
       },
       ensureTutorialHarnessStabilitySkill: () => {
         void ensureTutorialHarnessStabilitySkill();
+      },
+      ensureTutorialGrillingInvestSkill: () => {
+        void ensureTutorialGrillingInvestSkill();
       },
       setComposerSeed: (value) =>
         setTutorialComposerSeed({
@@ -2471,7 +2483,41 @@ export default function App() {
     });
     await reloadSkillsFromStore(target.id);
   }
-(next: McpServerConfig[]) {
+
+  async function ensureTutorialGrillingInvestSkill() {
+    const all = await listSkills();
+    let target =
+      all.find((skill) => skill.rootPath === TUTORIAL_GRILLING_INVEST_SKILL_ROOT) ??
+      all.find((skill) => skill.name === TUTORIAL_GRILLING_INVEST_SKILL_NAME) ??
+      null;
+
+    if (!target) {
+      target = await createEmptySkill(TUTORIAL_GRILLING_INVEST_SKILL_NAME);
+    }
+
+    target = await updateSkillMarkdown(target.id, TUTORIAL_GRILLING_INVEST_SKILL_MARKDOWN);
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH,
+      kind: "reference",
+      content: TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_CONTENT
+    });
+    target = await upsertSkillTextFile(target.id, {
+      path: TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH,
+      kind: "reference",
+      content: TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_CONTENT
+    });
+    for (const resourcePath of TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_PATHS) {
+      target = await upsertSkillTextFile(target.id, {
+        path: resourcePath,
+        kind: "reference",
+        content: TUTORIAL_GRILLING_INVEST_COMPANY_REFERENCE_CONTENT[resourcePath]
+      });
+    }
+
+    await reloadSkillsFromStore(target.id);
+  }
+
+  function onChangeMcpServers(next: McpServerConfig[]) {
     const prev = mcpServers;
     const prevIds = new Set(prev.map((s) => s.id));
     const nextIds = new Set(next.map((s) => s.id));

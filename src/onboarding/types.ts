@@ -39,6 +39,10 @@ export type TutorialStepBehaviorId =
   | "ensure_tutorial_harness_stability_skill"
   | "enable_tutorial_harness_stability_skill_access"
   | "first_chat_skill_harness_stability"
+  | "set_history_limit_for_multiturn"
+  | "ensure_tutorial_grilling_invest_skill"
+  | "enable_tutorial_grilling_invest_skill_access"
+  | "first_chat_skill_grilling_invest";
 
 export type TutorialStepDefinition = {
   id: string;
@@ -66,7 +70,9 @@ export type TutorialChatExpectation = {
   requireOpenedToolResult?: boolean;
   skillTraceIncludes?: string[];
   skillTraceIncludesAny?: string[];
+  skillTraceExcludes?: string[];
   skillLoadContainsAny?: string[];
+  assistantQuestionCountMax?: number;
 };
 
 export type TutorialStepAutomation = {
@@ -153,4 +159,5 @@ export type TutorialEntryController = {
   ensureTutorialChatgptBrowserSkill: () => void;
   ensureTutorialHarnessStabilityTool: () => void;
   ensureTutorialHarnessStabilitySkill: () => void;
+  ensureTutorialGrillingInvestSkill?: () => void;
 };

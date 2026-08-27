@@ -133,9 +133,14 @@ REAL_TUTORIAL_ONLY=harness-stability-skill \
 REAL_TUTORIAL_SESSIONS=10 \
 npm run test:real_tutorial
 
+# Tutorial 8 的 grilling_invest 多輪投資風險訪談 gate
+REAL_TUTORIAL_GATE=1 \
+REAL_TUTORIAL_ONLY=grilling-invest-skill \
+REAL_TUTORIAL_SESSIONS=10 \
+npm run test:real_tutorial
 ```
 
-`REAL_TUTORIAL_GATE=1` 可用在 `chatgpt-browser-skill` 或 `harness-stability-skill`。後者只使用 profile 與本地 readonly Worker tool，適合把 harness 穩定性與第三方網站/MCP 波動分開驗證。`REAL_TUTORIAL_SESSIONS=N` 也可用來重複其他 non-destructive tutorial 或 text-protocol conformance（例如 N=3）。Real tutorial 需要可用的 provider quota；通過單次 smoke test 不等於完成 10-session rollout gate。
+`REAL_TUTORIAL_GATE=1` 可用在 `chatgpt-browser-skill`、`harness-stability-skill` 或 `grilling-invest-skill`。後者只使用本機 skill references，先做多輪風險訪談，再按需讀取最多兩家公司資料；不會使用 MCP 或即時行情。`REAL_TUTORIAL_SESSIONS=N` 也可用來重複其他 non-destructive tutorial 或 text-protocol conformance（例如 N=3）。Real tutorial 需要可用的 provider quota；通過單次 smoke test 不等於完成 10-session rollout gate。
 
 ## MCP 測試伺服器
 

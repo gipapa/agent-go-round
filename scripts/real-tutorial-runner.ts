@@ -32,7 +32,8 @@ const TUTORIAL_FILES = [
   "sequential-skill-chat.yaml",
   "agent-browser-mcp-chat.yaml",
   "chatgpt-browser-skill.yaml",
-  "harness-stability-skill.yaml"
+  "harness-stability-skill.yaml",
+  "grilling-invest-skill.yaml"
 ];
 
 const APP_URL = "http://127.0.0.1:5566/";
@@ -925,6 +926,11 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await waitForSelector('[data-tutorial-id="history-limit-input"]', 10000);
       await setValueByTutorialId("history-limit-input", "1");
       return;
+    case "set_history_limit_for_multiturn":
+      await clickByTutorialId("chat-config-history-card");
+      await waitForSelector('[data-tutorial-id="history-limit-input"]', 10000);
+      await setValueByTutorialId("history-limit-input", "8");
+      return;
     case "fill_tutorial_user_profile":
       await clickByTutorialId("tab-profile");
       await setValueByTutorialId("profile-name-input", "教學測試使用者");
@@ -945,6 +951,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       return;
     case "create_tutorial_harness_stability_tool":
     case "ensure_tutorial_harness_stability_skill":
+    case "ensure_tutorial_grilling_invest_skill":
       return;
     case "enable_tutorial_skill_access":
       await clickByTutorialId("agents-edit-active-button");
@@ -959,7 +966,16 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
       await clickByTutorialId("agent-access-builtins-all");
       await clickByTutorialId("agent-save-button");
-      return;    case "enable_tutorial_chatgpt_browser_skill_access":
+      return;
+    case "enable_tutorial_grilling_invest_skill_access":
+      await clickByTutorialId("agents-edit-active-button");
+      await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
+      await setCheckboxByTutorialId("agent-access-skills-toggle", true);
+      await clickByTutorialId("agent-access-skills-custom");
+      await clickLabelContaining('[data-tutorial-id="agent-access-skills-section"]', "grilling_invest");
+      await clickByTutorialId("agent-save-button");
+      return;
+    case "enable_tutorial_chatgpt_browser_skill_access":
       await clickByTutorialId("agents-edit-active-button");
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
       await setCheckboxByTutorialId("agent-access-builtins-toggle", true);
@@ -1017,6 +1033,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
     case "first_chat_skill_chatgpt_open":
     case "first_chat_skill_chatgpt_ask":
     case "first_chat_skill_harness_stability":
+    case "first_chat_skill_grilling_invest":
     case "first_chat_mcp_browser_open":
     case "first_chat_mcp_browser_snapshot": {
       const replyTimeout = Math.max(

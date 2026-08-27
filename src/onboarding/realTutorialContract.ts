@@ -29,6 +29,7 @@ export const REAL_TUTORIAL_RUNNER_BEHAVIORS = [
   "first_chat_doc_persona",
   "create_tutorial_time_tool",
   "set_history_limit_to_one",
+  "set_history_limit_for_multiturn",
   "fill_tutorial_user_profile",
   "enable_tutorial_builtin_tool_access",
   "first_chat_time_tool",
@@ -50,7 +51,10 @@ export const REAL_TUTORIAL_RUNNER_BEHAVIORS = [
   "create_tutorial_harness_stability_tool",
   "ensure_tutorial_harness_stability_skill",
   "enable_tutorial_harness_stability_skill_access",
-  "first_chat_skill_harness_stability"
+  "first_chat_skill_harness_stability",
+  "ensure_tutorial_grilling_invest_skill",
+  "enable_tutorial_grilling_invest_skill_access",
+  "first_chat_skill_grilling_invest"
 ] as const satisfies readonly TutorialStepBehaviorId[];
 
 const supportedBehaviors = new Set<TutorialStepBehaviorId>(REAL_TUTORIAL_RUNNER_BEHAVIORS);
@@ -65,9 +69,9 @@ export function parseRealTutorialSessionCount(value: string | undefined) {
 }
 
 export function assertRealTutorialGate(args: { enabled: boolean; only: string; sessions: number }) {
-  const gateScenarios = new Set(["chatgpt-browser-skill", "harness-stability-skill"]);
+  const gateScenarios = new Set(["chatgpt-browser-skill", "harness-stability-skill", "grilling-invest-skill"]);
   if (args.enabled && (!gateScenarios.has(args.only) || args.sessions < 10)) {
-    throw new Error("REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=chatgpt-browser-skill、harness-stability-skill，且 REAL_TUTORIAL_SESSIONS 至少為 10。");
+    throw new Error("REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=chatgpt-browser-skill、harness-stability-skill 或 grilling-invest-skill，且 REAL_TUTORIAL_SESSIONS 至少為 10。");
   }
 }
 

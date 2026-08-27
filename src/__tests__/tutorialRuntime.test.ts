@@ -224,6 +224,46 @@ describe("tutorial YAML automation linkage", () => {
     expect(controller.setExplicitSkillId).toHaveBeenLastCalledWith(harnessSkill.id);
   });
 
+  it("defines grilling_invest as a bounded multi-turn, on-demand reference tutorial", () => {
+    const scenario = getTutorialScenario("grilling-invest-skill");
+    expect(scenario).toBeTruthy();
+    const steps = scenario?.steps ?? [];
+    expect(steps.find((step) => step.behavior === "set_history_limit_for_multiturn")?.automation).toBeDefined();
+    const chatSteps = steps.filter((step) => step.behavior === "first_chat_skill_grilling_invest");
+    expect(chatSteps.length).toBe(5);
+    expect(chatSteps.slice(0, -1).every((step) => step.automation?.expect?.assistantQuestionCountMax === 1)).toBe(true);
+    expect(chatSteps.slice(0, -1).every((step) => step.automation?.expect?.skillTraceExcludes?.includes("references/companies/"))).toBe(true);
+    const finalStep = chatSteps.at(-1);
+    expect(finalStep?.automation?.expect?.skillTraceIncludes).toContain("references/twse-top10-index.md");
+    expect(finalStep?.automation?.expect?.skillTraceIncludesAny).toContain("references/companies/");
+    expect(finalStep?.automation?.composerSeed).toContain("最多兩家");
+  });
+
+  it("evaluates Grill Me one-question and deferred-company checks from YAML", () => {
+    const firstStep = getStep("grilling-invest-skill", "interview-start");
+    const prompt = firstStep.automation?.expect?.userPrompt ?? "";
+    const trace = [
+      { label: "Skill load", content: "grilling_invest" },
+      { label: "Tool result", content: "internal:skill.read: success; path=references/risk-framework.md" }
+    ];
+    expect(evaluateTutorialStep(firstStep, makeState({
+      history: [makeUser(prompt), makeAssistant("assistant-invest-1", "我先確認你的投資期限？接著還想知道你的收入？", { skillTrace: trace })]
+    })).completed).toBe(false);
+    expect(evaluateTutorialStep(firstStep, makeState({
+      history: [makeUser(prompt), makeAssistant("assistant-invest-2", "我先確認你的投資期限？", { skillTrace: trace })]
+    })).completed).toBe(true);
+
+    const finalStep = getStep("grilling-invest-skill", "recommendation");
+    const finalPrompt = finalStep.automation?.expect?.userPrompt ?? "";
+    const indexOnlyTrace = [
+      { label: "Skill load", content: "resource_paths=references/twse-top10-index.md,references/companies/2330.md" },
+      { label: "Tool result", content: "internal:skill.read: success; path=references/twse-top10-index.md" }
+    ];
+    expect(evaluateTutorialStep(finalStep, makeState({
+      history: [makeUser(finalPrompt), makeAssistant("assistant-invest-final", "2025 的教育性分析，這不是買賣指示。", { skillTrace: indexOnlyTrace })]
+    })).completed).toBe(false);
+  });
+
   it("requires both local tool successes and the fixed report for the harness stability chat", () => {
     const step = getStep("harness-stability-skill", "run-harness-flow");
     const prompt = step.automation?.expect?.userPrompt ?? "";
@@ -683,6 +723,7 @@ describe("tutorial YAML automation linkage", () => {
       "agent-browser-mcp-chat.yaml",
       "chatgpt-browser-skill.yaml",
       "harness-stability-skill.yaml",
+      "grilling-invest-skill.yaml"
     ];
     const scenarios = await Promise.all(files.map(async (file) => parseTutorialScenario(await fs.readFile(path.join(tutorialDir, file), "utf8"))));
     expect(() => assertRealTutorialScenariosSupported(scenarios)).not.toThrow();
@@ -759,8 +800,9 @@ describe("tutorial YAML automation linkage", () => {
     expect(() => assertRealTutorialGate({ enabled: false, only: "", sessions: 1 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 10 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "harness-stability-skill", sessions: 10 })).not.toThrow();
+    expect(() => assertRealTutorialGate({ enabled: true, only: "grilling-invest-skill", sessions: 10 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 9 })).toThrow("至少為 10");
-    expect(() => assertRealTutorialGate({ enabled: true, only: "built-in-tools-chat", sessions: 10 })).toThrow("chatgpt-browser-skill");
+    expect(() => assertRealTutorialGate({ enabled: true, only: "built-in-tools-chat", sessions: 10 })).toThrow("grilling-invest-skill");
   });
 
 });

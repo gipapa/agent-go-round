@@ -51,6 +51,11 @@ function normalizeAutomation(input: unknown): TutorialStepAutomation | undefined
           requireOpenedToolResult: expectInput.requireOpenedToolResult === true,
           skillTraceIncludes: normalizeStringArray(expectInput.skillTraceIncludes),
           skillTraceIncludesAny: normalizeStringArray(expectInput.skillTraceIncludesAny),
+          skillTraceExcludes: normalizeStringArray(expectInput.skillTraceExcludes),
+          assistantQuestionCountMax:
+            typeof expectInput.assistantQuestionCountMax === "number" && Number.isFinite(expectInput.assistantQuestionCountMax)
+              ? Math.max(0, Math.floor(expectInput.assistantQuestionCountMax))
+              : undefined,
           skillLoadContainsAny: normalizeStringArray(expectInput.skillLoadContainsAny)
         }
       : undefined

@@ -19,7 +19,8 @@ const TUTORIAL_FILES = [
   "sequential-skill-chat.yaml",
   "agent-browser-mcp-chat.yaml",
   "chatgpt-browser-skill.yaml",
-  "harness-stability-skill.yaml"
+  "harness-stability-skill.yaml",
+  "grilling-invest-skill.yaml"
 ];
 
 function makeTutorialCredential(): ModelCredentialEntry {
@@ -247,6 +248,20 @@ async function assertHarnessStabilityAutomationExists() {
   assert.deepEqual(step.automation?.expect?.assistantContentIncludesAny, ["AGR-HARNESS-STABLE-V1", "AGR‑HARNESS‑STABLE‑V1"]);
 }
 
+async function assertGrillingInvestAutomationExists() {
+  const scenario = (await loadTutorialCatalog()).find((item) => item.id === "grilling-invest-skill");
+  assert.ok(scenario, "grilling-invest-skill should be present in the tutorial catalog");
+  const chatSteps = scenario.steps.filter((step) => step.behavior === "first_chat_skill_grilling_invest");
+  assert.equal(chatSteps.length, 5);
+  chatSteps.slice(0, -1).forEach((step) => {
+    assert.equal(step.automation?.expect?.assistantQuestionCountMax, 1, `${step.id} should enforce one question`);
+    assert.ok(step.automation?.expect?.skillTraceExcludes?.includes("references/companies/"), `${step.id} should defer company reads`);
+  });
+  const finalStep = chatSteps.at(-1);
+  assert.ok(finalStep?.automation?.expect?.skillTraceIncludes?.includes("references/twse-top10-index.md"));
+  assert.ok(finalStep?.automation?.expect?.skillTraceIncludesAny?.includes("references/companies/"));
+}
+
 async function main() {
   await assertAllAutomatedChatStepsAreYamlDriven();
   await assertApplyEntryUsesYamlSeed();
@@ -255,6 +270,7 @@ async function main() {
   await assertHistoryLimitStepRequiresOne();
   await assertChatgptBrowserSkillAutomationExists();
   await assertHarnessStabilityAutomationExists();
+  await assertGrillingInvestAutomationExists();
   console.log("tutorial-runtime-check: ok");
 }
 

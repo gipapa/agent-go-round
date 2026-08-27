@@ -1,0 +1,203 @@
+id: grilling-invest-skill
+title: "[8] 使用 grilling_invest 進行台股風險訪談"
+description: 以 Matt Pocock Grill Me 的逐題訪談模式，先確認投資者的目標、個性與風險承受能力，再按需讀取最多兩家台灣前十大公司的分析資料。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識 grilling_invest 案例
+    checklistLabel: 認識逐題投資風險訪談
+    instructionTitle: 先了解這個案例測試什麼
+    instructionBody: |
+      這個案例不會一開始就挑股票。
+
+      Agent 會先逐題了解：
+      - 投資目標與期限
+      - 資金流動性與緊急預備金
+      - 可接受的暫時跌幅
+      - 投資經驗與面對波動時的反應
+      - 是否能接受單一公司或產業集中
+
+      風險輪廓完成後，才會從固定的 TWSE 市值排名快照中選出最多兩家公司比較。結果是教育性分析，不是即時報價、保證獲利或代客下單指示。
+    behavior: manual_info
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: set-history-limit
+    title: 保留足夠的多輪對話歷史
+    checklistLabel: 將對話歷史調高至 8
+    instructionTitle: 讓模型看得到前幾輪訪談
+    instructionBody: |
+      請前往 Chat Config > History，將 `Messages sent to model` 設為至少 `8`。
+
+      Grill Me 需要讀取前幾輪的回答，才能避免重複詢問或忘記你的風險條件。案例結束後，系統會恢復你原本的設定。
+    tab: chat_config
+    targetId: chat-config-history-card
+    behavior: set_history_limit_for_multiturn
+    completionLabel: 等待將 Messages sent to model 調高至至少 8
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: create-skill
+    title: 建立 grilling_invest skill 與投資 references
+    checklistLabel: 建立 grilling_invest skill
+    instructionTitle: 系統會建立可按需讀取的投資資料
+    instructionBody: |
+      系統會建立一個純前端、儲存在本機 IndexedDB 的 tutorial skill，包含：
+      - 風險訪談框架
+      - TWSE 前十大市值公司的固定索引
+      - 十家公司各自獨立的短篇分析 reference
+
+      Agent 不會預先載入十家公司全文，而是在風險訪談完成後只讀取需要比較的資料。
+    tab: chat_config
+    targetId: chat-config-skills-card
+    behavior: ensure_tutorial_grilling_invest_skill
+    completionLabel: 等待系統建立 grilling_invest skill 與按需 references
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: enable-skill
+    title: 授權 Agent 使用 grilling_invest
+    checklistLabel: 開啟 grilling_invest 權限
+    instructionTitle: 讓目前 Agent 可以載入這個 skill
+    instructionBody: |
+      請到 Agents 編輯目前的 tutorial Agent，開啟 Skills，並選擇 `grilling_invest`。
+
+      這個 skill 不需要 MCP 或 Built-in Tools；只會使用 skill.load 與 skill.read 取得本機文字 references。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_grilling_invest_skill_access
+    completionLabel: 等待 Agent 開啟 grilling_invest skill 權限
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: interview-start
+    title: 開始投資風險訪談
+    checklistLabel: 確認第一輪只問一題
+    instructionTitle: 先說明你的投資目標
+    instructionBody: |
+      請送出這段訊息。這一輪只應讀取風險框架並提出一個問題，不應載入任何公司分析。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_grilling_invest
+    completionLabel: 等待 grilling_invest 完成第一輪單題訪談
+    actionLabel: 下一步
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 我想用台股前十大公司規劃至少八年的退休投資。請啟動 grilling_invest，先不要分析公司，先一次問我一個風險問題。
+      activeAgentPreset: tutorial_agent_base
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 10
+      expect:
+        userPrompt: 我想用台股前十大公司規劃至少八年的退休投資。請啟動 grilling_invest，先不要分析公司，先一次問我一個風險問題。
+        requireAssistant: true
+        skillLoadContainsAny:
+          - grilling-invest
+          - grilling_invest
+        skillTraceIncludes:
+          - references/risk-framework.md
+        skillTraceExcludes:
+          - references/companies/
+        assistantQuestionCountMax: 1
+
+  - id: interview-liquidity
+    title: 回答投資期限與流動性問題
+    checklistLabel: 維持多輪上下文並追問流動性
+    instructionTitle: 告訴 Agent 這筆錢何時可能使用
+    instructionBody: |
+      請送出你的回答。Agent 應記住上一輪的退休目標，並只追問下一個尚未解決的風險面向。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_grilling_invest
+    completionLabel: 等待 grilling_invest 追問下一個風險面向
+    actionLabel: 下一步
+    automation:
+      composerSeed: 這筆錢主要用於退休，八年內不需要提領；我有六個月生活費的緊急預備金。請記住這些條件，再問下一個尚未解決的風險問題。
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 這筆錢主要用於退休，八年內不需要提領；我有六個月生活費的緊急預備金。請記住這些條件，再問下一個尚未解決的風險問題。
+        requireAssistant: true
+        skillTraceExcludes:
+          - references/companies/
+        assistantQuestionCountMax: 1
+
+  - id: interview-capacity
+    title: 回答可承受的損失
+    checklistLabel: 確認風險承受能力
+    instructionTitle: 說明遇到市場下跌時你會怎麼做
+    instructionBody: |
+      請具體描述你能接受的暫時跌幅，以及收入是否穩定。這是確認「心理能承受」與「財務能承受」是否一致的關鍵。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_grilling_invest
+    completionLabel: 等待 grilling_invest 繼續單題訪談
+    actionLabel: 下一步
+    automation:
+      composerSeed: 我的工作收入相對穩定；如果長期投資暫時下跌約 20%，我可以繼續持有，但跌幅超過 30% 時可能會焦慮。請根據目前資訊繼續只問一個問題。
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 我的工作收入相對穩定；如果長期投資暫時下跌約 20%，我可以繼續持有，但跌幅超過 30% 時可能會焦慮。請根據目前資訊繼續只問一個問題。
+        requireAssistant: true
+        skillTraceExcludes:
+          - references/companies/
+        assistantQuestionCountMax: 1
+
+  - id: interview-experience
+    title: 回答投資經驗與集中風險
+    checklistLabel: 完成主要風險輪廓
+    instructionTitle: 說明經驗與集中持股的接受度
+    instructionBody: |
+      請告訴 Agent 你過去投資過什麼，以及是否能接受資產集中在半導體或單一公司。Agent 應在資料不足時繼續追問，而不是提前選股。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_grilling_invest
+    completionLabel: 等待 grilling_invest 完成風險輪廓訪談
+    actionLabel: 下一步
+    automation:
+      composerSeed: 我投資過 ETF 和大型股，但不想把全部資產放在單一公司；可以接受部分台股科技曝險，但希望保留較穩定的部分。請確認還有沒有一個必要的風險問題。
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 我投資過 ETF 和大型股，但不想把全部資產放在單一公司；可以接受部分台股科技曝險，但希望保留較穩定的部分。請確認還有沒有一個必要的風險問題。
+        requireAssistant: true
+        skillTraceExcludes:
+          - references/companies/
+        assistantQuestionCountMax: 1
+
+  - id: recommendation
+    title: 依風險輪廓取得有限度的公司分析
+    checklistLabel: 產生風險匹配的教育性分析
+    instructionTitle: 讓 Agent 只比較最多兩家公司
+    instructionBody: |
+      送出最後一段訊息。這一輪才允許讀取 TWSE 索引與最多兩家公司 profile。
+
+      請檢查結果是否包含：
+      - 你的風險輪廓與使用的假設
+      - 固定資料日期
+      - 最多兩家公司比較
+      - 適合與不適合的風險特徵
+      - 需要自行查證的事項與教育性免責聲明
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_grilling_invest
+    completionLabel: 等待 grilling_invest 完成有限度公司比較與教育性建議
+    actionLabel: 完成案例教學
+    automation:
+      composerSeed: 根據我們剛才確認的風險輪廓，現在才讀取 TWSE 前十大索引，選擇最多兩家最相關的公司做教育性比較。請不要讀取全部十家公司，並清楚列出資料日期、適合與不適合的風險特徵、需要自行查證的事項，以及這不是買賣指示。
+      activeAgentPreset: tutorial_agent_base
+      expect:
+        userPrompt: 根據我們剛才確認的風險輪廓，現在才讀取 TWSE 前十大索引，選擇最多兩家最相關的公司做教育性比較。請不要讀取全部十家公司，並清楚列出資料日期、適合與不適合的風險特徵、需要自行查證的事項，以及這不是買賣指示。
+        requireAssistant: true
+        skillTraceIncludes:
+          - references/twse-top10-index.md
+        skillTraceIncludesAny:
+          - references/companies/
+        assistantContentIncludesAny:
+          - 教育性
+          - 不是買賣指示
+          - 非投資建議
+        assistantContentIncludes:
+          - 2025

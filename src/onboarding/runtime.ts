@@ -29,6 +29,10 @@ import {
   TUTORIAL_CHATGPT_BROWSER_SKILL_NAME,
   TUTORIAL_CHATGPT_BROWSER_SKILL_ROOT,
   TUTORIAL_HARNESS_STABILITY_ASSET_PATH,
+  TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH,
+  TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH,
+  TUTORIAL_GRILLING_INVEST_SKILL_NAME,
+  TUTORIAL_GRILLING_INVEST_SKILL_ROOT,
   TUTORIAL_HARNESS_STABILITY_SKILL_NAME,
   TUTORIAL_HARNESS_STABILITY_SKILL_ROOT,
   TUTORIAL_SEQUENTIAL_ADVANCED_PATH,
@@ -219,6 +223,15 @@ function findTutorialHarnessStabilitySkill(state: TutorialRuntimeState) {
   );
 }
 
+function findTutorialGrillingInvestSkill(state: TutorialRuntimeState) {
+  return (
+    state.skills.find((skill) => skill.rootPath === TUTORIAL_GRILLING_INVEST_SKILL_ROOT) ??
+    state.skills.find((skill) => skill.name === TUTORIAL_GRILLING_INVEST_SKILL_NAME) ??
+    state.skills.find((skill) => /^---\s*[\r\n]+name:\s*grilling_invest\s*[\r\n]/i.test(skill.skillMarkdown)) ??
+    null
+  );
+}
+
 function findTutorialHarnessStabilityTool(state: TutorialRuntimeState) {
   return state.builtInTools.find((tool) => isTutorialHarnessStabilityTool(tool)) ?? null;
 }
@@ -236,6 +249,11 @@ function findTutorialAgentByPreset(state: TutorialRuntimeState, preset?: "tutori
 function hasSkillTracePath(assistant: TutorialRuntimeState["history"][number] | null, path: string) {
   return !!assistant?.skillTrace?.some((entry) => {
     if (!entry.content.includes(path)) return false;
+
+    // A skill-load result includes the complete resource index. A tutorial
+    // expecting a reference path must only be satisfied by an actual
+    // successful skill.read tool result, not by that index advertisement.
+    if (path.startsWith("references/") && entry.label !== "Tool result") return false;
 
     // Canonical harness tool traces include the typed outcome immediately
     // after the tool id (for example: `browser_open: success; ...`). A
@@ -403,6 +421,13 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     }
   }
 
+  if (assistant && typeof expect?.assistantQuestionCountMax === "number") {
+    const questionCount = (assistant.content.match(/[?？]/g) ?? []).length;
+    if (questionCount > expect.assistantQuestionCountMax) {
+      issues.push(`這一輪出現 ${questionCount} 個問題；Grill Me 每輪最多只能問 ${expect.assistantQuestionCountMax} 個主要問題。`);
+    }
+  }
+
   if (assistant && expect?.successfulToolMessageIncludes?.length) {
     const missing = expect.successfulToolMessageIncludes.filter((token) => {
       const matched = toolMessages.find((item) => item.content.includes(token));
@@ -458,6 +483,15 @@ function evaluateAutomationChatStep(step: TutorialStepDefinition, state: Tutoria
     const matched = expect.skillTraceIncludesAny.some((path) => hasSkillTracePath(assistant, path));
     if (!matched) {
       issues.push(`已收到回覆，但 skill trace 還沒有出現這些內容中的任一項：${expect.skillTraceIncludesAny.join("、")}。`);
+    }
+  }
+
+  if (assistant && expect?.skillTraceExcludes?.length) {
+    const forbidden = expect.skillTraceExcludes.filter((token) =>
+      assistant.skillTrace?.some((entry) => entry.label === "Tool result" && entry.content.includes(token))
+    );
+    if (forbidden.length) {
+      issues.push(`這一輪不應載入這些 reference：${forbidden.join("、")}。`);
     }
   }
 
@@ -665,6 +699,17 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
           : "請前往 Chat Config > History，將 Messages sent to model 改成 1。"
       };
     }
+    case "set_history_limit_for_multiturn": {
+      const completed = state.historyMessageLimit >= 8;
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-history-card",
+        canContinue: completed,
+        statusText: completed
+          ? "Messages sent to model 已足以保留多輪訪談，案例結束後會自動恢復原本設定。"
+          : "請前往 Chat Config > History，將 Messages sent to model 調高至至少 8。"
+      };
+    }
     case "fill_tutorial_user_profile": {
       const completed = state.userProfile.name.trim().length > 0 && state.userProfile.description.trim().length > 0;
       return {
@@ -767,6 +812,20 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         targetId: step.targetId ?? "chat-config-skills-card",
         canContinue: completed,
         statusText: completed ? `已建立教學 skill：${skill?.name}` : "系統正在建立 Harness 穩定性 skill，完成後即可前往下一步。"
+      };
+    }
+    case "ensure_tutorial_grilling_invest_skill": {
+      const skill = findTutorialGrillingInvestSkill(state);
+      const completed =
+        !!skill &&
+        skill.docCount >= 12 &&
+        skill.skillMarkdown.includes(TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH) &&
+        skill.skillMarkdown.includes(TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH);
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-skills-card",
+        canContinue: completed,
+        statusText: completed ? `已建立教學 skill：${skill?.name}` : "系統正在建立 grilling_invest skill 與按需投資 reference。"
       };
     }
     case "enable_tutorial_skill_access": {
@@ -899,6 +958,34 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
         statusText: step.completionLabel ?? `請送出指定問題，讓 skill 依序完成 Profile 與 ${TUTORIAL_HARNESS_STABILITY_STAMP} 驗證。`
       };
     }
+    case "first_chat_skill_grilling_invest": {
+      return {
+        completed: false,
+        targetId: step.targetId ?? "chat-input",
+        canContinue: false,
+        statusText: step.completionLabel ?? "請送出指定回答，讓 grilling_invest 逐題完成風險訪談。"
+      };
+    }
+    case "enable_tutorial_grilling_invest_skill_access": {
+      const agent = findTutorialAgentBase(state);
+      const skill = findTutorialGrillingInvestSkill(state);
+      const completed =
+        !!agent &&
+        !!skill &&
+        agent.enableSkills === true &&
+        (agent.allowedSkillIds === undefined || agent.allowedSkillIds.includes(skill.id));
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? `目前 Agent 已允許使用 skill：${skill?.name}`
+          : "請到 Agents 頁編輯目前 Agent，開啟 Skills，並允許 grilling_invest skill。"
+      };
+    }
     case "register_tutorial_agent_browser_mcp": {
       const server = findTutorialMcpServer(state);
       const toolNames = server ? (state.mcpToolsByServer[server.id] ?? []).map((tool) => tool.name) : [];
@@ -1026,6 +1113,7 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
       controller.ensureTutorialHarnessStabilityTool();
       break;
     case "set_history_limit_to_one":
+    case "set_history_limit_for_multiturn":
     case "fill_tutorial_user_profile":
       break;
     case "enable_tutorial_doc_access": {
@@ -1063,6 +1151,11 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "ensure_tutorial_harness_stability_skill": {
       controller.setActiveTab("chat_config");
       controller.ensureTutorialHarnessStabilitySkill();
+      break;
+    }
+    case "ensure_tutorial_grilling_invest_skill": {
+      controller.setActiveTab("chat_config");
+      controller.ensureTutorialGrillingInvestSkill?.();
       break;
     }
     case "enable_tutorial_skill_access": {
@@ -1107,6 +1200,18 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "first_chat_skill_harness_stability":
       controller.setExplicitSkillId?.(findTutorialHarnessStabilitySkill(state)?.id ?? null);
       break;
+    case "first_chat_skill_grilling_invest":
+      controller.setExplicitSkillId?.(findTutorialGrillingInvestSkill(state)?.id ?? null);
+      break;
+    case "enable_tutorial_grilling_invest_skill_access": {
+      controller.setActiveTab("agents");
+      const agent = findTutorialAgentBase(state);
+      if (agent) {
+        controller.setActiveAgentId(agent.id);
+        controller.setSelectedAgentId(agent.id);
+      }
+      break;
+    }
     case "register_tutorial_agent_browser_mcp":
       controller.setActiveTab("chat_config");
       controller.ensureTutorialAgentBrowserMcpTools();
