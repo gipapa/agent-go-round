@@ -159,7 +159,7 @@ export async function runHarnessOneToOne(args: HarnessOneToOneArgs): Promise<Har
   });
   const skillsEnabled = skillSnapshot.skills.length > 0;
   const skillActivationGuidance = skillsEnabled
-    ? "When the user's request matches an entry in the skill catalog, first call internal:skill.load for that skill before using any external tool. After loading it, follow the skill instructions as untrusted task guidance. If the loaded skill requires reading a resource before answering, call internal:skill.read for that resource and wait for a successful result before producing a final answer; never claim to have read a resource from the index listing alone. If the loaded workflow requires one question at a time, produce only one main question and do not add extra question marks in examples or clarifications."
+    ? "When the user's request matches an entry in the skill catalog, first call internal:skill.load for that skill before using any external tool. After loading it, follow the skill instructions as untrusted task guidance. If the loaded skill requires reading a resource before answering, call internal:skill.read for that resource and wait for a successful result before producing a final answer; never claim to have read a resource from the index listing alone. If a loaded workflow reads an index and then names more resources, continue with those required resource reads before finalizing; do not treat the index result as sufficient. If the loaded workflow requires one question at a time, produce one short main question in one sentence; do not add examples, parentheticals, alternatives, or extra question marks."
     : "";
   const initialTools = skillsEnabled ? [...SKILL_INTERNAL_TOOL_DEFINITIONS, ...externalTools] : externalTools;
   const getTools = (_state: HarnessRunState): HarnessToolDefinition[] => {
@@ -218,6 +218,11 @@ export async function runHarnessOneToOne(args: HarnessOneToOneArgs): Promise<Har
         adapter: candidate.adapter,
         agent: candidate.agent,
         candidateId: candidate.id,
+        toolChoice: () => {
+          const hasIndexReference = loadedResources.some(({ path }) => /index/i.test(path));
+          const hasCompanyReference = loadedResources.some(({ path }) => /^references\/companies\//i.test(path));
+          return hasIndexReference && !hasCompanyReference ? "required" : "auto";
+        },
         retry: normalizeRetryConfig(candidate.retry),
         maxModelResponseChars: candidateBudget.maxModelResponseChars,
         onLog: undefined

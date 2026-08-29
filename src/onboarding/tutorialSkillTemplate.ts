@@ -332,11 +332,13 @@ This tutorial is an adapted frontend-only version of Matt Pocock's grill-me skil
 ## Workflow
 
 - Before producing the first interview answer, call internal:skill.read with path \`${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}\` and wait for a successful result. Do not read company profiles yet.
-- HARD OUTPUT RULE: during the interview, the final answer must contain exactly one question mark (\`?\` or \`？\`) total. Ask exactly one main question, and never add a second question mark after a parenthetical example or clarification. Briefly restate what the user said, identify one unresolved branch, and put examples or clarifications in statements without question marks.
+- HARD OUTPUT RULE: during the interview, the final answer must contain exactly one question mark (\`?\` or \`？\`) total. Ask exactly one short main question in one sentence. Do not add examples, parenthetical text, alternatives, colons, semicolons, or a second question after a clarification; briefly restate what the user said only in a separate statement without question marks.
+- Treat each interview turn as one field only, never a compound question joined by "and", "or", "以及", or "或". The first user message already states an eight-year retirement goal, so ask only about one new field such as whether the funds may be needed before retirement; do not ask about goal and horizon together. A compliant first-turn ending is: \`這筆退休資金在未來八年內是否可能需要提領？\`
+- Until the user explicitly requests the final comparison and says it is now time to read the TWSE index, never read the TWSE index or any company reference. During all interview turns, read only \`${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}\`, even if the user asks whether another risk question is necessary.
 - Resolve goal, horizon, liquidity needs, income/emergency-fund stability, prior experience, emotional response to drawdowns, and concentration tolerance before analysing companies.
 - If the user's answers conflict, name the conflict and ask one clarifying question instead of guessing.
 - Once the risk profile is sufficiently clear, read [TWSE Top 10 Index](${TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH}) and select no more than two relevant companies.
-- Read only the selected company references from the index. Never load all ten company profiles for a single conversation.
+- After reading the index, do not produce a final answer from the index alone: call internal:skill.read for at least one selected path under \`references/companies/\` and no more than two selected company paths before answering. Read only the selected company references from the index. Never load all ten company profiles for a single conversation.
 - Keep the existing conversation context bounded. If a reference or comparison would exceed the available context, narrow the comparison and say why.
 - Finish with the user's stated assumptions, risk profile, suitable and unsuitable risk characteristics, candidate comparison, diversification considerations, facts to verify, and a clear educational-analysis disclaimer.
 - Keep the final comparison concise (no more than 400 words): summarize the selected references instead of quoting or reproducing them.
@@ -347,7 +349,7 @@ This tutorial is an adapted frontend-only version of Matt Pocock's grill-me skil
 
 - Read the risk framework reference (${TUTORIAL_GRILLING_INVEST_RISK_REFERENCE_PATH}) with internal:skill.read before the first interview question; do not answer from the skill-load resource index alone.
 - Read the TWSE index reference (${TUTORIAL_GRILLING_INVEST_INDEX_REFERENCE_PATH}) only after the risk interview is complete.
-- Read at most two paths under references/companies/, and only after selecting them from the index.
+- After reading the index, read at least one and at most two paths under references/companies/ before producing a final answer; select them from the index.
 - Do not reread a reference unless a bounded chunk is genuinely needed.
 
 \`\`\`skill-config

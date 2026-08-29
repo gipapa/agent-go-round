@@ -469,6 +469,7 @@ export function createAdapterNativeToolTransport(args: {
   adapter: AgentAdapter;
   agent: AgentConfig;
   candidateId: string;
+  toolChoice?: (context: HarnessModelContext) => "auto" | "required";
   retry?: RetryConfig;
   onLog?: (text: string) => void;
   maxModelResponseChars: number;
@@ -496,6 +497,7 @@ export function createAdapterNativeToolTransport(args: {
             return providerToolName(index >= 0 ? index : 0);
           }),
           tools: context.tools.map((tool, index) => ({ type: "function" as const, function: { name: providerToolName(index), description: tool.description, parameters: tool.inputSchema } })),
+          toolChoice: args.toolChoice?.(context),
           retry: args.retry,
           onLog: args.onLog,
           signal,

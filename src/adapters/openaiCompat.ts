@@ -16,6 +16,7 @@ const MAX_DETECTION_RESPONSE_CHARS = 64 * 1024;
 const DEFAULT_MAX_RESPONSE_CHARS = 64_000;
 const DEFAULT_MAX_TOKENS = 4_096;
 const GPT_OSS_MAX_TOKENS = 1_024;
+const MAX_NATIVE_WIRE_RESPONSE_CHARS = 1_024 * 1_024;
 
 function normalizeMaxResponseChars(value: number | undefined) {
   return Number.isFinite(value) && (value as number) >= 0
@@ -327,9 +328,14 @@ export const OpenAICompatAdapter: AgentAdapter = {
             stream: true,
             messages: req.messages,
             tools: req.tools,
-            tool_choice: "auto",
-            max_tokens: isGptOss ? GPT_OSS_MAX_TOKENS : DEFAULT_MAX_TOKENS,
-            ...(isGptOss ? { reasoning_effort: "low" } : {})
+            tool_choice: req.toolChoice ?? "auto",
+            ...(isGptOss
+              ? {
+                  max_completion_tokens: GPT_OSS_MAX_TOKENS,
+                  reasoning_effort: "low",
+                  include_reasoning: false
+                }
+              : { max_tokens: DEFAULT_MAX_TOKENS })
           })
         }, { signal: req.signal, timeoutMs });
       } catch (error) {
@@ -448,7 +454,10 @@ export const OpenAICompatAdapter: AgentAdapter = {
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
           wireChars += chunk.length;
-          if (wireChars > maxResponseChars + 65_536) {
+          // Native providers may include hidden reasoning and repeated SSE
+          // envelope metadata in the wire stream. Bound that separately from
+          // the visible text/tool payload limit below.
+          if (wireChars > MAX_NATIVE_WIRE_RESPONSE_CHARS) {
             await reader.cancel().catch(() => {});
             yield { type: "error", kind: "response_limit", retryable: false, message: `Native model response exceeded ${maxResponseChars} chars.` };
             return;

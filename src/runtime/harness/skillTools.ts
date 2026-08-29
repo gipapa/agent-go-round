@@ -129,7 +129,7 @@ export const SKILL_INTERNAL_TOOL_DEFINITIONS: HarnessToolDefinition[] = [
   },
   {
     id: SKILL_READ_TOOL_ID,
-    description: "Read a bounded chunk from a reference or text asset in the loaded skill.",
+    description: "Read a bounded chunk from a reference or text asset in the loaded skill. When the skill names a reference path, read it before answering; after an index read, continue reading any required selected references before producing a final answer.",
     inputSchema: {
       type: "object",
       required: ["path"],

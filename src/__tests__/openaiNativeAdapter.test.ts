@@ -34,9 +34,16 @@ describe("OpenAI-compatible native adapter", () => {
 
   it("requests low reasoning for Groq GPT-OSS native calls", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { reasoning_effort?: string; max_tokens?: number };
+      const body = JSON.parse(String(init?.body)) as {
+        reasoning_effort?: string;
+        include_reasoning?: boolean;
+        max_tokens?: number;
+        max_completion_tokens?: number;
+      };
       expect(body.reasoning_effort).toBe("low");
-      expect(body.max_tokens).toBe(1_024);
+      expect(body.include_reasoning).toBe(false);
+      expect(body.max_completion_tokens).toBe(1_024);
+      expect(body.max_tokens).toBeUndefined();
       return new Response(JSON.stringify({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }), {
         headers: { "content-type": "application/json" }
       });
@@ -47,6 +54,20 @@ describe("OpenAI-compatible native adapter", () => {
       ...request,
       agent: { ...request.agent, model: "openai/gpt-oss-20b" }
     })) events.push(event);
+    expect(events).toEqual([{ type: "text_delta", text: "done" }, { type: "done", finishReason: "stop" }]);
+  });
+
+  it("passes a required native tool choice through to the provider", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { tool_choice?: string };
+      expect(body.tool_choice).toBe("required");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }), {
+        headers: { "content-type": "application/json" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const events = [];
+    for await (const event of OpenAICompatAdapter.nativeChat!({ ...request, toolChoice: "required" })) events.push(event);
     expect(events).toEqual([{ type: "text_delta", text: "done" }, { type: "done", finishReason: "stop" }]);
   });
 
@@ -176,6 +197,18 @@ describe("OpenAI-compatible native adapter", () => {
     const events = [];
     for await (const event of OpenAICompatAdapter.nativeChat!(request)) events.push(event);
     expect(events).toEqual([{ type: "error", kind: "provider", retryable: false, message: "Provider returned a malformed OpenAI-compatible native SSE chunk." }]);
+  });
+
+  it("does not count hidden native reasoning against the visible response limit", async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "r".repeat(70_000) } }] })}\n\n` +
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" }, finish_reason: "stop" }] })}\n\n`,
+      { headers: { "content-type": "text/event-stream" } }
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const events = [];
+    for await (const event of OpenAICompatAdapter.nativeChat!(request)) events.push(event);
+    expect(events).toEqual([{ type: "text_delta", text: "done" }, { type: "done", finishReason: "stop" }]);
   });
 
   it("rejects native streaming tool calls without a valid provider index", async () => {

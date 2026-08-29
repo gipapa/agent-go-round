@@ -49,6 +49,7 @@ const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
 const REAL_TUTORIAL_PROMPT_OVERRIDE = process.env.REAL_TUTORIAL_PROMPT_OVERRIDE?.trim() || "";
 const REAL_TUTORIAL_SESSIONS = parseRealTutorialSessionCount(process.env.REAL_TUTORIAL_SESSIONS);
 const REAL_TUTORIAL_GATE = process.env.REAL_TUTORIAL_GATE === "1";
+const REAL_TUTORIAL_API_KEY_INDEX = Number.parseInt(process.env.REAL_TUTORIAL_API_KEY_INDEX ?? "0", 10);
 const REQUIRES_AGENT_BROWSER_MCP =
   !REAL_TUTORIAL_ONLY ||
   REAL_TUTORIAL_ONLY === "agent-browser-mcp-chat" ||
@@ -592,6 +593,9 @@ async function waitForTutorialNextEnabled(timeoutMs: number, step: TutorialStepD
             const assistant = await getLatestAssistantText().catch(() => "");
             if (assistant.trim().startsWith("【執行失敗】")) {
               throw new Error(`assistant 回覆失敗：${assistant.trim()}`);
+            }
+            if (statusText.includes("這一輪出現") && statusText.includes("最多只能問")) {
+              throw new Error(`tutorial evaluator rejected the assistant reply：${statusText}`);
             }
             console.log(
               `[wait:${step.id}] ${Math.round(elapsedMs / 1000)}s status=${statusText || "(empty)"} assistant=${truncateForLog(
@@ -1174,6 +1178,15 @@ function indentBlock(text: string, prefix: string) {
 
 let realConfig: RealTutorialConfig;
 
+function selectRealTutorialApiKey(config: RealTutorialConfig) {
+  if (!Number.isInteger(REAL_TUTORIAL_API_KEY_INDEX) || REAL_TUTORIAL_API_KEY_INDEX < 0 || REAL_TUTORIAL_API_KEY_INDEX >= config.apiKeys.length) {
+    throw new Error(`REAL_TUTORIAL_API_KEY_INDEX 必須是現有 key 的索引（目前共有 ${config.apiKeys.length} 把 key）。`);
+  }
+  if (REAL_TUTORIAL_API_KEY_INDEX === 0) return config;
+  const selected = config.apiKeys[REAL_TUTORIAL_API_KEY_INDEX];
+  return { ...config, apiKeys: [selected, ...config.apiKeys.filter((_, index) => index !== REAL_TUTORIAL_API_KEY_INDEX)] };
+}
+
 async function runTutorialSession(scenarios: TutorialScenarioDefinition[], sessionNumber: number) {
   selectFreshBrowserSession(sessionNumber);
   console.log(`\n=== real tutorial session ${sessionNumber}/${REAL_TUTORIAL_SESSIONS} (${agentBrowserSession}) ===`);
@@ -1207,7 +1220,7 @@ async function runTutorialSession(scenarios: TutorialScenarioDefinition[], sessi
 }
 
 async function main() {
-  realConfig = await readRealTutorialConfig();
+  realConfig = selectRealTutorialApiKey(await readRealTutorialConfig());
   const scenarios = await loadScenarios();
 
   assertRealTutorialGate({ enabled: REAL_TUTORIAL_GATE, only: REAL_TUTORIAL_ONLY, sessions: REAL_TUTORIAL_SESSIONS });

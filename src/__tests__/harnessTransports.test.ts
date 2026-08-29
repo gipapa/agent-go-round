@@ -178,6 +178,30 @@ describe("harness transports", () => {
     expect(toolMessage?.role === "tool" ? toolMessage.content : "").toContain("invalid_arguments");
   });
 
+  it("passes a transport tool-choice policy to native adapters", async () => {
+    let receivedToolChoice: string | undefined;
+    const adapter: AgentAdapter = {
+      async *chat() { yield { type: "done", text: "unused" }; },
+      async *nativeChat(request) {
+        receivedToolChoice = request.toolChoice;
+        yield { type: "text_delta", text: "done" };
+        yield { type: "done", finishReason: "stop" };
+      }
+    };
+    const transport = createAdapterNativeToolTransport({
+      adapter,
+      agent: { id: "agent", name: "Agent", type: "openai_compat" },
+      candidateId: "native-choice",
+      toolChoice: () => "required",
+      maxModelResponseChars: 100
+    });
+    await expect(transport.runStep(context, new AbortController().signal)).resolves.toMatchObject({
+      status: "step",
+      step: { type: "final", answer: "done" }
+    });
+    expect(receivedToolChoice).toBe("required");
+  });
+
   it("rejects a native tool finish reason without a tool payload", () => {
     expect(normalizeNativeToolStream({
       candidateId: "native-empty-call",

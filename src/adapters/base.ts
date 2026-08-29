@@ -49,6 +49,7 @@ export type NativeChatRequest = {
   agent: AgentConfig;
   messages: NativeChatMessage[];
   tools: NativeToolDefinition[];
+  toolChoice?: "auto" | "required";
   retry?: RetryConfig;
   onLog?: (t: string) => void;
   signal?: AbortSignal;
