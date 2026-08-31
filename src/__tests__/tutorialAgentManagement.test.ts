@@ -4,6 +4,7 @@ import {
   normalizeTutorialPrimaryAgentList,
   usesTutorialLoadBalancer
 } from "../onboarding/agentManagement";
+import { TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME } from "../onboarding/runtime";
 import type { AgentConfig, LoadBalancerConfig } from "../types";
 
 function agent(id: string, overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -32,6 +33,14 @@ describe("tutorial agent management", () => {
 
     const ambiguous = [legacy, agent("legacy-2", { loadBalancerId: tutorialLoadBalancer.id })];
     expect(normalizeTutorialPrimaryAgentList(ambiguous, [tutorialLoadBalancer])).toBe(ambiguous);
+  });
+
+  it("recognizes the text protocol tutorial load balancer as tutorial-owned", () => {
+    const textProtocolLoadBalancer = loadBalancer("tutorial-text-lb", TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
+    const legacy = agent("legacy-text", { loadBalancerId: textProtocolLoadBalancer.id });
+
+    expect(usesTutorialLoadBalancer(legacy, [textProtocolLoadBalancer])).toBe(true);
+    expect(normalizeTutorialPrimaryAgentList([legacy], [textProtocolLoadBalancer])[0].tutorialRole).toBe("primary");
   });
 
   it("never allows a managed MAGI agent to own the tutorial role", () => {

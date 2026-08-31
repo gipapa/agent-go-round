@@ -17,6 +17,8 @@ import {
   TUTORIAL_TIME_TOOL_NAME,
   TUTORIAL_PRIMARY_MODEL,
   TUTORIAL_SECONDARY_MODEL,
+  TUTORIAL_TEXT_PROTOCOL_MODEL,
+  TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME,
   resolveTutorialExecutionDeadlineMs
 } from "../onboarding/runtime";
 import {
@@ -177,7 +179,8 @@ describe("tutorial YAML automation linkage", () => {
       ensureTutorialSequentialSkill: vi.fn(),
       ensureTutorialChatgptBrowserSkill: vi.fn(),
       ensureTutorialHarnessStabilityTool: vi.fn(),
-      ensureTutorialHarnessStabilitySkill: vi.fn()
+      ensureTutorialHarnessStabilitySkill: vi.fn(),
+      ensureTutorialTextProtocolLoadBalancer: vi.fn()
     };
     const skill = {
       id: "tutorial-skill-id",
@@ -316,7 +319,8 @@ describe("tutorial YAML automation linkage", () => {
       ensureTutorialSequentialSkill: vi.fn(),
       ensureTutorialChatgptBrowserSkill: vi.fn(),
       ensureTutorialHarnessStabilityTool: vi.fn(),
-      ensureTutorialHarnessStabilitySkill: vi.fn()
+      ensureTutorialHarnessStabilitySkill: vi.fn(),
+      ensureTutorialTextProtocolLoadBalancer: vi.fn()
     };
 
     applyTutorialStepEntry(
@@ -393,6 +397,72 @@ describe("tutorial YAML automation linkage", () => {
     })).completed).toBe(false);
   });
 
+  it("requires an exact single text protocol instance for tutorial 9", () => {
+    const step = getStep("text-protocol-conformance", "create-text-protocol-load-balancer");
+    const baseInstance = makeTutorialLoadBalancer().instances[0];
+    const textLoadBalancer: LoadBalancerConfig = {
+      ...makeTutorialLoadBalancer(),
+      id: "lb-text-protocol",
+      name: TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME,
+      instances: [{ ...baseInstance, model: TUTORIAL_TEXT_PROTOCOL_MODEL, toolCallingCapability: "text_protocol" }]
+    };
+
+    expect(evaluateTutorialStep(step, makeState({ loadBalancers: [textLoadBalancer] })).completed).toBe(true);
+    expect(evaluateTutorialStep(step, makeState({
+      loadBalancers: [{ ...textLoadBalancer, instances: [{ ...baseInstance, toolCallingCapability: "native" }] }]
+    })).completed).toBe(false);
+    expect(evaluateTutorialStep(step, makeState({
+      loadBalancers: [{ ...textLoadBalancer, instances: [textLoadBalancer.instances[0], { ...baseInstance, id: "text-2", toolCallingCapability: "text_protocol" }] }]
+    })).completed).toBe(false);
+  });
+
+  it("requires the tutorial agent to use the dedicated text protocol load balancer", () => {
+    const step = getStep("text-protocol-conformance", "switch-agent-to-text-protocol-load-balancer");
+    const loadBalancer: LoadBalancerConfig = {
+      ...makeTutorialLoadBalancer(),
+      id: "lb-text-protocol",
+      name: TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME
+    };
+
+    expect(evaluateTutorialStep(step, makeState({
+      agents: [makeTutorialAgentBase({ loadBalancerId: loadBalancer.id })],
+      loadBalancers: [loadBalancer]
+    })).completed).toBe(true);
+    expect(evaluateTutorialStep(step, makeState({ loadBalancers: [loadBalancer] })).completed).toBe(false);
+  });
+
+  it("ensures the text protocol load balancer when entering tutorial 9", () => {
+    const ensureTextLoadBalancer = vi.fn();
+    const controller: TutorialEntryController = {
+      setActiveTab: vi.fn(),
+      setConfigModal: vi.fn(),
+      setActiveAgentId: vi.fn(),
+      setSelectedAgentId: vi.fn(),
+      setAgentLoadBalancerRetryPolicy: vi.fn(),
+      setComposerSeed: vi.fn(),
+      clearChat: vi.fn(),
+      ensureTutorialPrimaryLoadBalancer: vi.fn(),
+      ensureTutorialSecondaryLoadBalancer: vi.fn(),
+      ensureTutorialTextProtocolLoadBalancer: ensureTextLoadBalancer,
+      seedTutorialLoadBalancerDraft: vi.fn(),
+      ensureTutorialDoc: vi.fn(),
+      ensureTutorialTimeTool: vi.fn(),
+      ensureTutorialAgentBrowserMcpTools: vi.fn(),
+      ensureTutorialSequentialSkill: vi.fn(),
+      ensureTutorialChatgptBrowserSkill: vi.fn(),
+      ensureTutorialHarnessStabilityTool: vi.fn(),
+      ensureTutorialHarnessStabilitySkill: vi.fn()
+    };
+
+    applyTutorialStepEntry(
+      getStep("text-protocol-conformance", "create-text-protocol-load-balancer"),
+      makeState(),
+      controller
+    );
+
+    expect(ensureTextLoadBalancer).toHaveBeenCalledTimes(1);
+  });
+
   it("never selects managed MAGI agents as tutorial active agents", () => {
     const step = getStep("agent-browser-mcp-chat", "set-history-limit");
     const controller: TutorialEntryController = {
@@ -408,7 +478,8 @@ describe("tutorial YAML automation linkage", () => {
       ensureTutorialSequentialSkill: vi.fn(),
       ensureTutorialChatgptBrowserSkill: vi.fn(),
       ensureTutorialHarnessStabilityTool: vi.fn(),
-      ensureTutorialHarnessStabilitySkill: vi.fn()
+      ensureTutorialHarnessStabilitySkill: vi.fn(),
+      ensureTutorialTextProtocolLoadBalancer: vi.fn()
     };
     const now = Date.now();
     const magiAgent = makeTutorialAgentBase({
@@ -477,7 +548,8 @@ describe("tutorial YAML automation linkage", () => {
       ensureTutorialSequentialSkill: vi.fn(),
       ensureTutorialChatgptBrowserSkill: vi.fn(),
       ensureTutorialHarnessStabilityTool: vi.fn(),
-      ensureTutorialHarnessStabilitySkill: vi.fn()
+      ensureTutorialHarnessStabilitySkill: vi.fn(),
+      ensureTutorialTextProtocolLoadBalancer: vi.fn()
     };
 
     const untaggedAgent = makeTutorialAgentBase({
@@ -815,7 +887,9 @@ describe("tutorial YAML automation linkage", () => {
     expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 10 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "harness-stability-skill", sessions: 10 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "grilling-invest-skill", sessions: 10 })).not.toThrow();
+    expect(() => assertRealTutorialGate({ enabled: true, only: "text-protocol-conformance", sessions: 3 })).not.toThrow();
     expect(() => assertRealTutorialGate({ enabled: true, only: "chatgpt-browser-skill", sessions: 9 })).toThrow("至少為 10");
+    expect(() => assertRealTutorialGate({ enabled: true, only: "text-protocol-conformance", sessions: 2 })).toThrow("至少為 3");
     expect(() => assertRealTutorialGate({ enabled: true, only: "built-in-tools-chat", sessions: 10 })).toThrow("grilling-invest-skill");
   });
 

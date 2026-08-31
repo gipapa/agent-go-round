@@ -1,0 +1,163 @@
+id: text-protocol-conformance
+title: "[9]（進階驗證）Strict Text Protocol 相容性測試"
+description: 以與案例七相同的本地多工具工作負載，驗證模型是否能穩定使用 Strict Text Action Protocol 完成 canonical harness 流程。
+exitTitle: 離開案例教學
+exitBody: 離開導覽時，可以選擇是否保留這次教學期間新增或修改的工具、文件、MCP 與 skills。Agent、Credentials、Profile 與聊天紀錄會保留，方便你回到一般介面後繼續操作。
+steps:
+  - id: intro
+    title: 認識 Strict Text Protocol 案例
+    checklistLabel: 認識進階相容性驗證
+    instructionTitle: 這是一個進階的模型相容性測試
+    instructionBody: |
+      這個案例會使用與案例七完全相同的本地工具與 skill，但把 Agent 的工具傳輸方式改成 Strict Text Action Protocol。
+
+      這裡會驗證：
+      - 模型能否通過無副作用的 capability probe
+      - 模型能否連續產生正確的 text action JSON
+      - 工具結果回到純文字 transcript 後，模型能否繼續下一個 action
+      - 最後是否能根據兩個工具結果完成固定報告
+
+      這個案例不使用 MCP、不連線外部網站，也不與 native tool calling 混用，方便判斷失敗是否來自 text protocol 相容性。
+    behavior: manual_info
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: set-history-limit
+    title: 將對話歷史縮到 1 則
+    checklistLabel: 將對話歷史改為 1
+    instructionTitle: 降低重複驗證的上下文變因
+    instructionBody: |
+      請前往 Chat Config > History，將 `Messages sent to model` 改成 `1`。
+      這個案例只需要目前這一則對話的工具結果；案例結束後會恢復原本設定。
+    tab: chat_config
+    targetId: chat-config-history-card
+    behavior: set_history_limit_to_one
+    completionLabel: 等待將 Messages sent to model 改成 1
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: fill-profile
+    title: 填寫固定的教學 Profile
+    checklistLabel: 填寫 Profile
+    instructionTitle: 提供第一個工具的 deterministic 輸入
+    instructionBody: |
+      請至少填寫 Character name 與自我描述。稍後 skill 會透過 `get_user_profile` 讀取這些資料。
+    tab: profile
+    targetId: profile-name-input
+    behavior: fill_tutorial_user_profile
+    completionLabel: 等待填寫 Profile
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: create-verification-tool
+    title: 建立本地驗證戳記工具
+    checklistLabel: 建立 Worker 驗證工具
+    instructionTitle: 系統會自動建立 readonly Worker 工具
+    instructionBody: |
+      系統會建立「教學 Harness 驗證戳記工具」。它不會讀寫資料，只會回傳固定戳記，讓案例能穩定驗證 custom built-in tool 的 Worker execution 與結果回注入。
+    tab: chat_config
+    targetId: chat-config-tools-card
+    behavior: create_tutorial_harness_stability_tool
+    completionLabel: 等待系統建立教學 Harness 驗證戳記工具
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: create-skill
+    title: 建立 Harness 穩定性 skill
+    checklistLabel: 建立本地多工具 skill
+    instructionTitle: 系統會自動建立 skill 與報告模板
+    instructionBody: |
+      這個 skill 會強制先讀 Profile、再取得固定驗證戳記，最後按 asset 模板產生報告。它不會使用 Docs、MCP 或外部網站。
+    tab: chat_config
+    targetId: chat-config-skills-card
+    behavior: ensure_tutorial_harness_stability_skill
+    completionLabel: 等待系統建立 Harness 穩定性 skill
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: create-text-protocol-load-balancer
+    title: 建立 Strict Text Protocol Load Balancer
+    checklistLabel: 建立 text protocol Load Balancer
+    instructionTitle: 建立只使用 text protocol 的測試 instance
+    instructionBody: |
+      系統會建立「教學用Load Balancer 3」，並設定：
+      - 只有一個 instance
+      - Model：`qwen/qwen3.6-27b`
+      - Tool calling capability：`Strict text action protocol`
+
+      這個 Load Balancer 刻意只放一個 instance，避免本案例同時測試 failover，讓失敗可以歸因到 text protocol。
+    tab: chat_config
+    targetId: chat-config-load-balancer-card
+    behavior: create_text_protocol_load_balancer
+    completionLabel: 等待建立 text protocol Load Balancer
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: switch-agent-to-text-protocol-load-balancer
+    title: 將 Agent 切換到 text protocol
+    checklistLabel: 將 Agent 綁定 text protocol Load Balancer
+    instructionTitle: 讓目前 Agent 使用 Strict Text Protocol
+    instructionBody: |
+      請前往 Agents，編輯目前的教學 Agent，將 Load Balancer 切換為：
+      - `教學用Load Balancer 3`
+
+      儲存後，後面的對話才會先執行 text protocol capability probe，再開始工具流程。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: switch_tutorial_agent_to_text_protocol_load_balancer
+    completionLabel: 等待 Agent 切換到 text protocol Load Balancer
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: enable-skill
+    title: 授權本地 tools 與 skill
+    checklistLabel: 開啟 Agent 權限
+    instructionTitle: 讓 Agent 可以執行兩個 local tools
+    instructionBody: |
+      請在 Agents 編輯目前 Agent，開啟 Skills 與 Built-in Tools；可選擇 All，或至少允許 Harness 穩定性 skill、get_user_profile 與教學 Harness 驗證戳記工具。
+    tab: agents
+    targetId: agents-edit-active-button
+    behavior: enable_tutorial_harness_stability_skill_access
+    completionLabel: 等待 Agent 開啟 skill 與兩個 built-in tools 權限
+    actionLabel: 下一步
+    automation:
+      activeAgentPreset: tutorial_agent_base
+
+  - id: run-text-protocol-flow
+    title: 執行 Strict Text Protocol 多工具流程
+    checklistLabel: 連續呼叫兩個工具並完成報告
+    instructionTitle: 驗證 probe、action envelope 與結果回注
+    instructionBody: |
+      送出後，skill 必須先讀取 Profile，再呼叫本地驗證戳記工具；兩個成功結果都回到同一份純文字 transcript 後，才可輸出固定報告。
+
+      通過條件會同時檢查 skill load、兩個成功 tool trace、固定戳記與 text protocol 的完整流程，而不只看自然語言回答。
+    tab: chat
+    targetId: chat-input
+    behavior: first_chat_skill_harness_stability
+    completionLabel: 等待完成 text protocol 的 Profile、Worker 驗證戳記與固定報告
+    actionLabel: 完成案例教學
+    automation:
+      clearChatOnEnter: true
+      composerSeed: 請使用 Harness 穩定性 skill，依序讀取我的 Profile、取得本地驗證戳記，最後用指定模板回報驗證結果。兩個工具都成功前不要回答。
+      activeAgentPreset: tutorial_agent_base
+      loadBalancerDelaySecond: 10
+      loadBalancerMaxRetries: 2
+      expect:
+        userPrompt: 請使用 Harness 穩定性 skill，依序讀取我的 Profile、取得本地驗證戳記，最後用指定模板回報驗證結果。兩個工具都成功前不要回答。
+        requireAssistant: true
+        skillLoadContainsAny:
+          - harness-stability
+          - harness-stability-tutorial-skill
+        skillTraceIncludes:
+          - get_user_profile
+          - 教學 Harness 驗證戳記工具
+        assistantContentIncludesAny:
+          - AGR-HARNESS-STABLE-V1
+          - AGR‑HARNESS‑STABLE‑V1

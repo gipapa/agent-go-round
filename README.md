@@ -104,6 +104,9 @@ REAL_TUTORIAL_ONLY=chatgpt-browser-skill npm run test:real_tutorial
 
 # 不依賴 MCP 或外部網站的本地 harness 穩定性案例
 REAL_TUTORIAL_ONLY=harness-stability-skill npm run test:real_tutorial
+
+# Tutorial 9：Strict Text Protocol 相容性案例
+REAL_TUTORIAL_ONLY=text-protocol-conformance npm run test:real_tutorial
 ```
 
 Rollout gate 會在獨立的 agent-browser session 連續執行 primary native-tool 案例；需要本機 provider 設定與可用網路：
@@ -138,9 +141,15 @@ REAL_TUTORIAL_GATE=1 \
 REAL_TUTORIAL_ONLY=grilling-invest-skill \
 REAL_TUTORIAL_SESSIONS=10 \
 npm run test:real_tutorial
+
+# Tutorial 9 的 Strict Text Protocol conformance gate
+REAL_TUTORIAL_GATE=1 \
+REAL_TUTORIAL_ONLY=text-protocol-conformance \
+REAL_TUTORIAL_SESSIONS=3 \
+npm run test:real_tutorial
 ```
 
-`REAL_TUTORIAL_GATE=1` 可用在 `chatgpt-browser-skill`、`harness-stability-skill` 或 `grilling-invest-skill`。後者只使用本機 skill references，先做多輪風險訪談，再按需讀取最多兩家公司資料；不會使用 MCP 或即時行情。`REAL_TUTORIAL_SESSIONS=N` 也可用來重複其他 non-destructive tutorial 或 text-protocol conformance（例如 N=3）。Real tutorial 需要可用的 provider quota；通過單次 smoke test 不等於完成 10-session rollout gate。
+`REAL_TUTORIAL_GATE=1` 可用在 `chatgpt-browser-skill`、`harness-stability-skill` 或 `grilling-invest-skill`（各需 10 次），以及 `[9]（進階驗證）Strict Text Protocol 相容性測試`（需 3 次）。`grilling-invest-skill` 只使用本機 skill references，先做多輪風險訪談，再按需讀取最多兩家公司資料；不會使用 MCP 或即時行情。Real tutorial 需要可用的 provider quota；通過單次 smoke test 不等於完成 rollout gate。
 
 ## MCP 測試伺服器
 

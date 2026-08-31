@@ -1,8 +1,9 @@
 import type { HarnessModelContext, HarnessTransport, HarnessTransportResult } from "./types";
 import { parseTextActionResponse, renderToolMessageForTextTransport, TEXT_ACTION_PROTOCOL_INSTRUCTIONS } from "./textActionProtocol";
-import type { AgentAdapter, ChatEvent, NativeChatEvent, RetryConfig } from "../../adapters/base";
+import { normalizeRetryConfig, type AgentAdapter, type ChatEvent, type NativeChatEvent, type RetryConfig } from "../../adapters/base";
 import type { AgentConfig } from "../../types";
 import { errorMessage } from "../../utils/errors";
+import { getAbortSignalMessage, sleepWithAbort } from "../../utils/fetchWithTimeout";
 
 export const DEFAULT_NATIVE_MODEL_RESPONSE_CHARS = 64_000;
 
@@ -233,7 +234,7 @@ export function createAdapterTextTransport(args: {
   onLog?: (text: string) => void;
   maxModelResponseChars: number;
 }): HarnessTransport {
-  return createTextActionTransport({
+  const transport = createTextActionTransport({
     maxModelResponseChars: args.maxModelResponseChars,
     invoke: async (context, signal) => ({
       candidateId: args.candidateId,
@@ -243,11 +244,35 @@ export function createAdapterTextTransport(args: {
         history: [],
         system: [TEXT_ACTION_PROTOCOL_INSTRUCTIONS, context.system].filter(Boolean).join("\n\n"),
         retry: args.retry,
+        maxModelResponseChars: args.maxModelResponseChars,
         onLog: args.onLog,
         signal
       }))
     })
   });
+  const retry = normalizeRetryConfig(args.retry);
+  return {
+    async runStep(context, signal) {
+      for (let retryIndex = 0; ; retryIndex += 1) {
+        const result = await transport.runStep(context, signal);
+        if (
+          result.status !== "transport_error" ||
+          result.kind !== "empty" ||
+          !result.retryable ||
+          !retry ||
+          retryIndex >= retry.max
+        ) {
+          return result;
+        }
+        args.onLog?.(`[retry] empty text response; retry ${retryIndex + 1}/${retry.max} in ${retry.delaySec}s`);
+        try {
+          await sleepWithAbort(retry.delaySec * 1_000, signal);
+        } catch {
+          return { status: "aborted", message: getAbortSignalMessage(signal) };
+        }
+      }
+    }
+  };
 }
 
 async function* mapAdapterEvents(events: AsyncGenerator<ChatEvent>) : AsyncGenerator<TextTransportEvent> {

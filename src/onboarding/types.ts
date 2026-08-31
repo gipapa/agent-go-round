@@ -12,6 +12,8 @@ export type TutorialStepBehaviorId =
   | "first_chat_joke"
   | "create_multi_load_balancer"
   | "switch_tutorial_agent_to_multi_load_balancer"
+  | "create_text_protocol_load_balancer"
+  | "switch_tutorial_agent_to_text_protocol_load_balancer"
   | "create_tutorial_doc"
   | "enable_tutorial_doc_access"
   | "first_chat_doc_persona"
@@ -151,6 +153,7 @@ export type TutorialEntryController = {
   clearChat: () => void;
   ensureTutorialPrimaryLoadBalancer: () => void;
   ensureTutorialSecondaryLoadBalancer: () => void;
+  ensureTutorialTextProtocolLoadBalancer: () => void;
   seedTutorialLoadBalancerDraft: (kind: "single" | "multi") => void;
   ensureTutorialDoc: () => void;
   ensureTutorialTimeTool: () => void;

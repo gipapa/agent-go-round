@@ -17,7 +17,7 @@ import {
   TUTORIAL_TIME_TOOL_DESCRIPTION,
   TUTORIAL_TIME_TOOL_NAME
 } from "../src/onboarding/tutorialBuiltInToolTemplate";
-import { TUTORIAL_PRIMARY_MODEL } from "../src/onboarding/runtime";
+import { TUTORIAL_PRIMARY_MODEL, TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME, TUTORIAL_TEXT_PROTOCOL_MODEL } from "../src/onboarding/runtime";
 import { AGENT_GO_ROUND_INDEXED_DB_TARGETS, AGENT_GO_ROUND_LOCAL_STORAGE_KEYS } from "../src/utils/resetAppStorage";
 import { errorMessage } from "../src/utils/errors";
 
@@ -33,7 +33,8 @@ const TUTORIAL_FILES = [
   "agent-browser-mcp-chat.yaml",
   "chatgpt-browser-skill.yaml",
   "harness-stability-skill.yaml",
-  "grilling-invest-skill.yaml"
+  "grilling-invest-skill.yaml",
+  "text-protocol-conformance.yaml"
 ];
 
 const APP_URL = "http://127.0.0.1:5566/";
@@ -44,6 +45,7 @@ const MODEL_COOLDOWN_MS = 12000;
 const DEFAULT_REAL_TUTORIAL_REPLY_TIMEOUT_MS = 10 * 60 * 1000;
 const TUTORIAL_PRIMARY_LB_NAME = "教學用Load Balancer 1";
 const TUTORIAL_SECONDARY_LB_NAME = "教學用Load Balancer 2";
+const TUTORIAL_TEXT_PROTOCOL_LB_NAME = TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME;
 const execFile = promisify(execFileCallback);
 const REAL_TUTORIAL_ONLY = process.env.REAL_TUTORIAL_ONLY?.trim() || "";
 const REAL_TUTORIAL_PROMPT_OVERRIDE = process.env.REAL_TUTORIAL_PROMPT_OVERRIDE?.trim() || "";
@@ -500,6 +502,30 @@ async function hasLoadBalancer(name: string) {
   `);
 }
 
+async function hasTutorialTextProtocolLoadBalancer() {
+  return browserEval<boolean>(`
+    (() => {
+      try {
+        const raw = localStorage.getItem("agr_load_balancers_v1");
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        const entries = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : [];
+        const loadBalancer = entries.find((entry) => String(entry?.name || "").trim() === ${literal(TUTORIAL_TEXT_PROTOCOL_LB_NAME)});
+        if (!loadBalancer || !Array.isArray(loadBalancer.instances) || loadBalancer.instances.length !== 1) return false;
+        const instance = loadBalancer.instances[0];
+        return (
+          String(instance?.model || "").trim() === ${literal(TUTORIAL_TEXT_PROTOCOL_MODEL)} &&
+          String(instance?.toolCallingCapability || "").trim() === "text_protocol" &&
+          String(instance?.credentialId || "").trim() !== "" &&
+          String(instance?.credentialKeyId || "").trim() !== ""
+        );
+      } catch {
+        return false;
+      }
+    })()
+  `);
+}
+
 async function hasLoadBalancerWithDistinctKeys(name: string, minimumKeys: number) {
   return browserEval<boolean>(`
     (() => {
@@ -670,6 +696,7 @@ async function getLatestSkillTraceText() {
 }
 
 async function getLatestLogText(limit = 12) {
+  await expandLogPanelForDiagnostics();
   return browserEval<string>(`
     (() => {
       const rows = Array.from(document.querySelectorAll(".log-entry"));
@@ -678,6 +705,36 @@ async function getLatestLogText(limit = 12) {
         .map((row) => String(row.textContent || "").replace(/\\s+/g, " ").trim())
         .filter(Boolean)
         .join("\\n");
+    })()
+  `);
+}
+
+async function expandLogPanelForDiagnostics() {
+  await browserEval<boolean>(`
+    (() => {
+      const shell = document.querySelector(".log-shell");
+      if (!shell) return false;
+      if (shell.querySelector(".log-entry")) return true;
+      const expand = Array.from(shell.querySelectorAll("button.log-toggle"))
+        .find((button) => String(button.textContent || "").trim() === "Expand");
+      if (!(expand instanceof HTMLElement)) return false;
+      expand.click();
+      return true;
+    })()
+  `);
+}
+
+async function getLatestCapabilityProbeLogText(limit = 20) {
+  await expandLogPanelForDiagnostics();
+  return browserEval<string>(`
+    (() => {
+      const rows = Array.from(document.querySelectorAll(".log-entry"));
+      return rows
+        .slice(0, ${limit})
+        .map((row) => row.querySelector(".log-details-body")?.textContent || row.textContent || "")
+        .map((text) => String(text).trim())
+        .filter((text) => text.includes("stage=capability_probe"))
+        .join("\\n---\\n");
     })()
   `);
 }
@@ -897,6 +954,32 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
       await clickByTutorialId("agents-edit-active-button");
       await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
       await selectOptionByTutorialId("agent-load-balancer-select", TUTORIAL_SECONDARY_LB_NAME);
+      await clickByTutorialId("agent-save-button");
+      return;
+    case "create_text_protocol_load_balancer":
+      try {
+        await waitFor(() => hasTutorialTextProtocolLoadBalancer(), 5000, "等待案例自動建立 text protocol Load Balancer");
+      } catch {
+        await createLoadBalancerByTutorialUi({
+          name: TUTORIAL_TEXT_PROTOCOL_LB_NAME,
+          description: "教學用 Strict Text Protocol Load Balancer",
+          instances: [{
+            credentialLabel: "Groq",
+            keyLabel: "Key 1",
+            model: TUTORIAL_TEXT_PROTOCOL_MODEL,
+            description: "Strict text action protocol tutorial instance",
+            capability: "text_protocol",
+            maxRetries: 4,
+            delaySecond: 5
+          }]
+        });
+      }
+      await waitFor(() => hasTutorialTextProtocolLoadBalancer(), 10000, "等待 text protocol Load Balancer 設定完成");
+      return;
+    case "switch_tutorial_agent_to_text_protocol_load_balancer":
+      await clickByTutorialId("agents-edit-active-button");
+      await waitForSelector('[data-tutorial-id="agent-edit-modal"]', 10000);
+      await selectOptionByTutorialId("agent-load-balancer-select", TUTORIAL_TEXT_PROTOCOL_LB_NAME);
       await clickByTutorialId("agent-save-button");
       return;
     case "create_tutorial_doc":
@@ -1253,12 +1336,14 @@ async function main() {
       const statusText = await getPromptStatusText();
       const assistantText = await getLatestAssistantText();
       const skillTraceText = await getLatestSkillTraceText();
+      const capabilityProbeLogText = await getLatestCapabilityProbeLogText();
       const logText = await getLatestLogText();
       console.error("\n[real-tutorial] browser diagnostics");
       if (stepId) console.error(`current step: ${stepId}`);
       if (statusText) console.error(`prompt status: ${statusText}`);
       if (assistantText) console.error(`latest assistant:\n${assistantText}`);
       if (skillTraceText) console.error(`latest skill trace:\n${skillTraceText}`);
+      if (capabilityProbeLogText) console.error(`capability probe logs:\n${capabilityProbeLogText}`);
       if (logText) console.error(`latest log rows:\n${logText}`);
     } catch (diagnosticError: unknown) {
       console.error(`\n[real-tutorial] failed to collect browser diagnostics: ${errorMessage(diagnosticError)}`);

@@ -24,6 +24,8 @@ export const REAL_TUTORIAL_RUNNER_BEHAVIORS = [
   "first_chat_joke",
   "create_multi_load_balancer",
   "switch_tutorial_agent_to_multi_load_balancer",
+  "create_text_protocol_load_balancer",
+  "switch_tutorial_agent_to_text_protocol_load_balancer",
   "create_tutorial_doc",
   "enable_tutorial_doc_access",
   "first_chat_doc_persona",
@@ -69,9 +71,17 @@ export function parseRealTutorialSessionCount(value: string | undefined) {
 }
 
 export function assertRealTutorialGate(args: { enabled: boolean; only: string; sessions: number }) {
-  const gateScenarios = new Set(["chatgpt-browser-skill", "harness-stability-skill", "grilling-invest-skill"]);
-  if (args.enabled && (!gateScenarios.has(args.only) || args.sessions < 10)) {
-    throw new Error("REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=chatgpt-browser-skill、harness-stability-skill 或 grilling-invest-skill，且 REAL_TUTORIAL_SESSIONS 至少為 10。");
+  const gateMinimums: Record<string, number> = {
+    "chatgpt-browser-skill": 10,
+    "harness-stability-skill": 10,
+    "grilling-invest-skill": 10,
+    "text-protocol-conformance": 3
+  };
+  const minimum = gateMinimums[args.only];
+  if (args.enabled && (minimum === undefined || args.sessions < minimum)) {
+    const supported = Object.keys(gateMinimums).join("、");
+    const requirement = minimum === undefined ? "指定支援的案例" : `至少為 ${minimum}`;
+    throw new Error(`REAL_TUTORIAL_GATE 需要 REAL_TUTORIAL_ONLY=${supported}，且 ${args.only || "指定案例"} 的 REAL_TUTORIAL_SESSIONS ${requirement}。`);
   }
 }
 

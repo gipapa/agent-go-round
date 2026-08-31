@@ -20,7 +20,8 @@ const TUTORIAL_FILES = [
   "agent-browser-mcp-chat.yaml",
   "chatgpt-browser-skill.yaml",
   "harness-stability-skill.yaml",
-  "grilling-invest-skill.yaml"
+  "grilling-invest-skill.yaml",
+  "text-protocol-conformance.yaml"
 ];
 
 function makeTutorialCredential(): ModelCredentialEntry {
@@ -181,7 +182,8 @@ async function assertApplyEntryUsesYamlSeed() {
     ensureTutorialSequentialSkill: () => calls.ensureTutorialSequentialSkill.push(true),
     ensureTutorialChatgptBrowserSkill: () => calls.ensureTutorialChatgptBrowserSkill.push(true),
     ensureTutorialHarnessStabilityTool: () => calls.ensureTutorialHarnessStabilityTool.push(true),
-    ensureTutorialHarnessStabilitySkill: () => calls.ensureTutorialHarnessStabilitySkill.push(true)
+    ensureTutorialHarnessStabilitySkill: () => calls.ensureTutorialHarnessStabilitySkill.push(true),
+    ensureTutorialTextProtocolLoadBalancer: () => {}
   };
 
   applyTutorialStepEntry(
@@ -262,6 +264,27 @@ async function assertGrillingInvestAutomationExists() {
   assert.ok(finalStep?.automation?.expect?.skillTraceIncludesAny?.includes("references/companies/"));
 }
 
+async function assertTextProtocolConformanceAutomationExists() {
+  const scenario = (await loadTutorialCatalog()).find((item) => item.id === "text-protocol-conformance");
+  assert.ok(scenario, "text-protocol-conformance should be present in the tutorial catalog");
+  assert.ok(scenario.title.includes("進階驗證"), "text-protocol-conformance should be marked as an advanced verification case");
+  assert.ok(
+    scenario.steps.some((step) => step.behavior === "create_text_protocol_load_balancer"),
+    "text-protocol-conformance should create a dedicated text protocol load balancer"
+  );
+  assert.ok(
+    scenario.steps.some((step) => step.behavior === "switch_tutorial_agent_to_text_protocol_load_balancer"),
+    "text-protocol-conformance should switch the tutorial agent to the text protocol load balancer"
+  );
+  const chatStep = scenario.steps.find((step) => step.id === "run-text-protocol-flow");
+  assert.equal(chatStep?.behavior, "first_chat_skill_harness_stability");
+  assert.equal(chatStep?.automation?.loadBalancerDelaySecond, 10);
+  assert.equal(chatStep?.automation?.loadBalancerMaxRetries, 2);
+  assert.equal(chatStep?.automation?.composerSeed, chatStep?.automation?.expect?.userPrompt);
+  assert.deepEqual(chatStep?.automation?.expect?.skillTraceIncludes, ["get_user_profile", "教學 Harness 驗證戳記工具"]);
+  assert.deepEqual(chatStep?.automation?.expect?.assistantContentIncludesAny, ["AGR-HARNESS-STABLE-V1", "AGR‑HARNESS‑STABLE‑V1"]);
+}
+
 async function main() {
   await assertAllAutomatedChatStepsAreYamlDriven();
   await assertApplyEntryUsesYamlSeed();
@@ -271,6 +294,7 @@ async function main() {
   await assertChatgptBrowserSkillAutomationExists();
   await assertHarnessStabilityAutomationExists();
   await assertGrillingInvestAutomationExists();
+  await assertTextProtocolConformanceAutomationExists();
   console.log("tutorial-runtime-check: ok");
 }
 

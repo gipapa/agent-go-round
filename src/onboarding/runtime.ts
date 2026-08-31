@@ -56,10 +56,12 @@ export const TUTORIAL_DOC_CONTENT = "你是個說話結尾都會喵喵叫的助�
 export const TUTORIAL_MCP_NAME = "教學用MCP";
 export const TUTORIAL_PRIMARY_LOAD_BALANCER_NAME = "教學用Load Balancer 1";
 export const TUTORIAL_SECONDARY_LOAD_BALANCER_NAME = "教學用Load Balancer 2";
+export const TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME = "教學用Load Balancer 3";
 // Compound systems only support Groq-managed built-in tools. The tutorial
 // exercises local/remote tool calling through MCP, so use tool-capable models.
 export const TUTORIAL_PRIMARY_MODEL = "openai/gpt-oss-20b";
 export const TUTORIAL_SECONDARY_MODEL = "openai/gpt-oss-20b";
+export const TUTORIAL_TEXT_PROTOCOL_MODEL = "qwen/qwen3.6-27b";
 export const TUTORIAL_AGENT_ROLE = "primary";
 
 export function isTutorialTimeTool(tool: Pick<BuiltInToolConfig, "name" | "description" | "inputSchema" | "code">) {
@@ -173,6 +175,19 @@ function loadBalancerMatchesTutorialGroq(state: TutorialRuntimeState, loadBalanc
     credential?.preset === "groq" &&
     normalizeCredentialUrl(credential.endpoint) === "https://api.groq.com/openai/v1" &&
     firstInstance.model === TUTORIAL_PRIMARY_MODEL
+  );
+}
+
+function tutorialTextProtocolLoadBalancerMatches(state: TutorialRuntimeState) {
+  const loadBalancer = findLoadBalancerByName(state, TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
+  const instance = loadBalancer?.instances.length === 1 ? loadBalancer.instances[0] : null;
+  if (!loadBalancer || !instance || instance.toolCallingCapability !== "text_protocol") return false;
+  const credential = state.credentials.find((entry) => entry.id === instance.credentialId) ?? null;
+  return (
+    credential?.preset === "groq" &&
+    normalizeCredentialUrl(credential.endpoint) === "https://api.groq.com/openai/v1" &&
+    instance.model === TUTORIAL_TEXT_PROTOCOL_MODEL &&
+    !!credential.keys.some((key) => key.id === instance.credentialKeyId && key.apiKey.trim())
   );
 }
 
@@ -641,6 +656,34 @@ export function evaluateTutorialStep(step: TutorialStepDefinition, state: Tutori
           : "請編輯目前 Agent，將 Load Balancer 改成「教學用Load Balancer 2」。"
       };
     }
+    case "create_text_protocol_load_balancer": {
+      const loadBalancer = findLoadBalancerByName(state, TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
+      const completed = tutorialTextProtocolLoadBalancerMatches(state);
+      return {
+        completed,
+        targetId: step.targetId ?? "chat-config-load-balancer-card",
+        canContinue: completed,
+        statusText: completed
+          ? `已建立 Strict Text Protocol load balancer：${loadBalancer?.name}`
+          : `請建立「${TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME}」，只加入 1 個 Groq instance，並選擇 Strict text action protocol。`
+      };
+    }
+    case "switch_tutorial_agent_to_text_protocol_load_balancer": {
+      const loadBalancer = findLoadBalancerByName(state, TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
+      const agent = findTutorialAgentBase(state);
+      const completed = !!agent && !!loadBalancer && agent.loadBalancerId === loadBalancer.id;
+      return {
+        completed,
+        targetId:
+          typeof document !== "undefined" && document.querySelector('[data-tutorial-id="agent-edit-modal"]')
+            ? "agent-edit-modal"
+            : "agents-edit-active-button",
+        canContinue: completed,
+        statusText: completed
+          ? `目前 Agent 已切換到 ${loadBalancer?.name}`
+          : `請編輯目前 Agent，將 Load Balancer 改成「${TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME}」。`
+      };
+    }
     case "create_tutorial_doc": {
       const doc = state.docs.find((item) => item.title === TUTORIAL_DOC_NAME);
       const contentOk = !!doc && doc.content.trim() === TUTORIAL_DOC_CONTENT;
@@ -1103,12 +1146,16 @@ export function applyTutorialStepEntry(step: TutorialStepDefinition, state: Tuto
     case "setup_groq_credential":
     case "create_groq_agent":
     case "switch_tutorial_agent_to_multi_load_balancer":
+    case "switch_tutorial_agent_to_text_protocol_load_balancer":
       break;
     case "create_single_load_balancer":
       controller.ensureTutorialPrimaryLoadBalancer();
       break;
     case "create_multi_load_balancer":
       controller.ensureTutorialSecondaryLoadBalancer();
+      break;
+    case "create_text_protocol_load_balancer":
+      controller.ensureTutorialTextProtocolLoadBalancer();
       break;
     case "create_tutorial_doc":
       controller.ensureTutorialDoc();

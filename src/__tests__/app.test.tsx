@@ -5,6 +5,7 @@ import type { ChatRequest } from "../adapters/base";
 import type { AgentConfig, BuiltInToolConfig, DocItem, LoadBalancerConfig, McpServerConfig } from "../types";
 import type { ModelCredentials } from "../storage/settingsStore";
 import App from "../app/App";
+import { TUTORIAL_PRIMARY_MODEL, TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME, TUTORIAL_TEXT_PROTOCOL_MODEL } from "../onboarding/runtime";
 
 const responderRef = vi.hoisted<{ current: (req: ChatRequest) => string }>(() => ({ current: () => "" }));
 const docsFixtureRef = vi.hoisted(() => ({ current: [] as DocItem[] }));
@@ -158,7 +159,65 @@ function seedLoadBalancedAgent(agent: AgentConfig) {
   };
 }
 
-async function renderApp() {
+function seedTutorialBaseResources() {
+  const credential = {
+    id: "tutorial-groq-credential",
+    preset: "groq" as const,
+    label: "Groq",
+    endpoint: "https://api.groq.com/openai/v1",
+    keys: [{ id: "tutorial-groq-key-1", apiKey: "tutorial-test-key", createdAt: 1, updatedAt: 1 }],
+    createdAt: 1,
+    updatedAt: 1
+  };
+  const loadBalancer: LoadBalancerConfig = {
+    id: "tutorial-primary-load-balancer",
+    name: "教學用Load Balancer 1",
+    description: "教學用 key failover Load Balancer",
+    instances: [{
+      id: "tutorial-primary-instance",
+      credentialId: credential.id,
+      credentialKeyId: credential.keys[0].id,
+      model: TUTORIAL_PRIMARY_MODEL,
+      description: "Primary tutorial instance",
+      maxRetries: 4,
+      delaySecond: 5,
+      resumeMinute: 60,
+      failure: false,
+      failureCount: 0,
+      nextCheckTime: null,
+      toolCallingCapability: "native",
+      createdAt: 1,
+      updatedAt: 1
+    }],
+    createdAt: 1,
+    updatedAt: 1
+  };
+  const agent: AgentConfig = {
+    id: "tutorial-agent",
+    name: "教學測試 Agent",
+    type: "openai_compat",
+    loadBalancerId: loadBalancer.id,
+    tutorialRole: "primary",
+    enableDocs: false,
+    enableMcp: false,
+    enableBuiltInTools: false,
+    enableSkills: false
+  };
+  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify([credential]));
+  localStorage.setItem(LOAD_BALANCERS_KEY, JSON.stringify([loadBalancer]));
+  seedAgents([agent]);
+  seedUi({
+    activeTab: "chat",
+    mode: "one_to_one",
+    activeAgentId: agent.id,
+    memberAgentIds: [],
+    historyMessageLimit: 1,
+    userName: "教學測試使用者",
+    userDescription: "用來驗證 tutorial harness 的測試使用者。"
+  });
+}
+
+async function renderApp(options: { startTutorial?: boolean } = {}) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -168,7 +227,7 @@ async function renderApp() {
   await flushPromises();
   // Dismiss the landing page so workspace UI (textarea, tabs) becomes available.
   const landingStart = container.querySelector<HTMLButtonElement>(
-    'button[data-tutorial-id="landing-start"]'
+    `button[data-tutorial-id="${options.startTutorial ? "landing-start-tutorial" : "landing-start"}"]`
   );
   if (landingStart) {
     await act(async () => {
@@ -243,6 +302,26 @@ async function waitForText(text: string, timeoutMs = 2000) {
   throw new Error(`Timed out waiting for text: ${text}\nDOM: ${container?.textContent?.slice(0, 1200) ?? ""}`);
 }
 
+async function waitForCondition(check: () => boolean, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (check()) return;
+    await flushPromises();
+  }
+  throw new Error("Timed out waiting for condition");
+}
+
+async function advanceTutorialWhenReady(timeoutMs = 3000) {
+  await waitForCondition(() => {
+    const button = container?.querySelector<HTMLButtonElement>('button[data-tutorial-id="tutorial-next"]');
+    return !!button && !button.disabled;
+  }, timeoutMs);
+  await act(async () => {
+    container?.querySelector<HTMLButtonElement>('button[data-tutorial-id="tutorial-next"]')?.click();
+  });
+  await flushPromises();
+}
+
 async function waitForBodyText(text: string, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -257,6 +336,7 @@ beforeEach(() => {
   responderRef.current = () => "";
   callTool.mockClear();
   localStorage.clear();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
   vi.spyOn(window, "confirm").mockReturnValue(true);
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   if (!globalThis.crypto?.randomUUID) {
@@ -280,6 +360,35 @@ afterEach(async () => {
 });
 
 describe("App chat flows (mocked)", () => {
+  it("creates one dedicated text protocol load balancer in tutorial 9", async () => {
+    seedTutorialBaseResources();
+
+    await renderApp({ startTutorial: true });
+    for (let index = 0; index < 8; index += 1) {
+      await act(async () => {
+        container?.querySelector<HTMLButtonElement>('button[data-tutorial-id="tutorial-skip-case"]')?.click();
+      });
+      await flushPromises();
+    }
+    await waitForText("[9]（進階驗證）Strict Text Protocol 相容性測試");
+
+    await advanceTutorialWhenReady();
+    await advanceTutorialWhenReady();
+    await advanceTutorialWhenReady();
+    await advanceTutorialWhenReady();
+    await advanceTutorialWhenReady();
+    await waitForText("建立只使用 text protocol 的測試 instance");
+    await waitForCondition(() => {
+      const raw = localStorage.getItem(LOAD_BALANCERS_KEY);
+      const parsed = raw ? JSON.parse(raw) as LoadBalancerConfig[] | { data?: LoadBalancerConfig[] } : [];
+      const loadBalancers = Array.isArray(parsed) ? parsed : parsed.data ?? [];
+      const matches = loadBalancers.filter((entry) => entry.name === TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
+      return matches.length === 1 && matches[0].instances.length === 1 &&
+        matches[0].instances[0].model === TUTORIAL_TEXT_PROTOCOL_MODEL &&
+        matches[0].instances[0].toolCallingCapability === "text_protocol";
+    });
+  });
+
   it("supports normal talking history memory", async () => {
     const agent: AgentConfig = {
       id: "agent-1",

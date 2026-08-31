@@ -78,8 +78,11 @@ import {
   isTutorialHarnessStabilityTool,
   isTutorialTimeTool,
   TUTORIAL_MCP_NAME,
+  TUTORIAL_PRIMARY_LOAD_BALANCER_NAME,
   TUTORIAL_PRIMARY_MODEL,
   TUTORIAL_SECONDARY_MODEL,
+  TUTORIAL_TEXT_PROTOCOL_MODEL,
+  TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME,
   resolveTutorialExecutionDeadlineMs
 } from "../onboarding/runtime";
 import {
@@ -526,6 +529,8 @@ export default function App() {
   const tutorialStepKeyRef = React.useRef("");
   const tutorialHistoryLimitRestoreRef = React.useRef<number | null>(null);
   const tutorialLoadBalancerRetryRestoreRef = React.useRef<Record<string, Array<{ instanceId: string; maxRetries: number; delaySecond: number; resumeMinute: number }>> | null>(null);
+  const tutorialTextProtocolLoadBalancerDraftRef = React.useRef<LoadBalancerConfig | null>(null);
+  const tutorialTextProtocolLastEnsureLogRef = React.useRef("");
   const activeChatAbortRef = React.useRef<AbortController | null>(null);
   const tutorialRestoringRef = React.useRef(false);
   const tutorialKeepChangesHint = "即使選擇保留這次教學變更，系統仍會刪除「教學用DOC」，避免之後的問答持續被案例 2 的人格設定影響。";
@@ -685,6 +690,9 @@ export default function App() {
       ensureTutorialSecondaryLoadBalancer: () => {
         ensureTutorialSecondaryLoadBalancer();
       },
+      ensureTutorialTextProtocolLoadBalancer: () => {
+        ensureTutorialTextProtocolLoadBalancer();
+      },
       seedTutorialLoadBalancerDraft: (kind) => queueTutorialLoadBalancerDraft(kind),
       ensureTutorialDoc: () => {
         void ensureTutorialDoc();
@@ -728,6 +736,10 @@ export default function App() {
     }
     if (currentTutorialStep.behavior === "create_multi_load_balancer") {
       ensureTutorialSecondaryLoadBalancer();
+      return;
+    }
+    if (currentTutorialStep.behavior === "create_text_protocol_load_balancer") {
+      ensureTutorialTextProtocolLoadBalancer();
     }
   }, [tutorialScenario, currentTutorialStep?.behavior, modelCredentials, credentialTestResults, loadBalancers]);
 
@@ -1208,6 +1220,100 @@ export default function App() {
       message: `Tutorial load balancer ensured: ${nextEntry.name}`,
       details: `${credential.label} / ${TUTORIAL_PRIMARY_MODEL}`
     });
+  }
+
+  function ensureTutorialTextProtocolLoadBalancer() {
+    const primaryLoadBalancer = loadBalancers.find((entry) => entry.name.trim() === TUTORIAL_PRIMARY_LOAD_BALANCER_NAME) ?? null;
+    const primaryInstance = primaryLoadBalancer?.instances[0] ?? null;
+    const primaryCredential =
+      (primaryInstance
+        ? modelCredentials.find((entry) => entry.id === primaryInstance.credentialId && entry.preset === "groq" && entry.keys.some((key) => key.apiKey.trim()))
+        : null) ??
+      modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => credentialTestResults[key.id]?.ok === true)) ??
+      modelCredentials.find((entry) => entry.preset === "groq" && entry.keys.some((key) => key.apiKey.trim())) ??
+      null;
+    if (!primaryCredential) return;
+
+    const primaryKey =
+      primaryCredential.keys.find((entry) => entry.id === primaryInstance?.credentialKeyId && entry.apiKey.trim()) ??
+      primaryCredential.keys.find((entry) => credentialTestResults[entry.id]?.ok === true) ??
+      primaryCredential.keys.find((entry) => entry.apiKey.trim()) ??
+      null;
+    if (!primaryKey) return;
+
+    const existing = loadBalancers.find((entry) => entry.name.trim() === TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME) ?? null;
+    const existingInstance = existing?.instances[0] ?? null;
+    const draft = existing ?? tutorialTextProtocolLoadBalancerDraftRef.current ?? createLoadBalancer(TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
+    if (!existing) tutorialTextProtocolLoadBalancerDraftRef.current = draft;
+    const now = Date.now();
+    const nextInstance = createLoadBalancerInstance({
+      id: existingInstance?.id,
+      credentialId: primaryCredential.id,
+      credentialKeyId: primaryKey.id,
+      model: TUTORIAL_TEXT_PROTOCOL_MODEL,
+      description: "Strict text action protocol tutorial instance",
+      maxRetries: existingInstance?.maxRetries ?? DEFAULT_INSTANCE_MAX_RETRIES,
+      delaySecond: existingInstance?.delaySecond ?? DEFAULT_INSTANCE_DELAY_SECOND,
+      resumeMinute: existingInstance?.resumeMinute ?? DEFAULT_INSTANCE_RESUME_MINUTE,
+      failure: false,
+      failureCount: 0,
+      nextCheckTime: null,
+      toolCallingCapability: "text_protocol",
+      contextBudget: TUTORIAL_CONTEXT_BUDGET,
+      createdAt: existingInstance?.createdAt
+    });
+    const nextEntry: LoadBalancerConfig = {
+      ...draft,
+      name: TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME,
+      description: "教學用 Strict Text Protocol Load Balancer",
+      instances: [nextInstance],
+      updatedAt: now
+    };
+
+    const alreadyMatches =
+      !!existing &&
+      existing.description === nextEntry.description &&
+      existing.instances.length === 1 &&
+      existing.instances[0]?.credentialId === nextInstance.credentialId &&
+      existing.instances[0]?.credentialKeyId === nextInstance.credentialKeyId &&
+      existing.instances[0]?.model === nextInstance.model &&
+      existing.instances[0]?.description === nextInstance.description &&
+      existing.instances[0]?.toolCallingCapability === nextInstance.toolCallingCapability &&
+      JSON.stringify(existing.instances[0]?.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
+      existing.instances[0]?.failure === false &&
+      existing.instances[0]?.failureCount === 0 &&
+      existing.instances[0]?.nextCheckTime === null;
+
+    if (alreadyMatches) {
+      setLoadBalancerPanelSelectedId(existing.id);
+      return;
+    }
+
+    setLoadBalancers((prev) => {
+      const current = prev.find(
+        (entry) => entry.id === nextEntry.id || entry.name.trim() === TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME
+      );
+      if (!current) return [nextEntry, ...prev];
+      const replacement = { ...nextEntry, id: current.id, createdAt: current.createdAt };
+      return prev.map((entry) => (entry.id === current.id ? replacement : entry));
+    });
+    setLoadBalancerPanelSelectedId(existing?.id ?? nextEntry.id);
+    const ensureLogKey = [
+      nextEntry.id,
+      primaryCredential.id,
+      primaryKey.id,
+      nextInstance.model,
+      nextInstance.toolCallingCapability
+    ].join(":");
+    if (tutorialTextProtocolLastEnsureLogRef.current !== ensureLogKey) {
+      tutorialTextProtocolLastEnsureLogRef.current = ensureLogKey;
+      logNow({
+        category: "load_balancer",
+        ok: true,
+        message: `Tutorial load balancer ensured: ${nextEntry.name}`,
+        details: `${primaryCredential.label} / ${TUTORIAL_TEXT_PROTOCOL_MODEL} / text_protocol`
+      });
+    }
   }
 
   function ensureTutorialSecondaryLoadBalancer() {
@@ -1999,6 +2105,15 @@ export default function App() {
       });
       if (probe.ok) {
         verifiedCandidates.push(candidate);
+        logNow({
+          category: "chat",
+          agent: oneToOneAgent.name,
+          requestId,
+          stage: "capability_probe",
+          ok: true,
+          message: `Candidate ${candidate.instance.id} passed text-protocol compatibility`,
+          details: `${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
+        });
       } else {
         logNow({
           category: "chat",
@@ -2023,17 +2138,15 @@ export default function App() {
         signal: preflightSignal
       });
       directTextCapability = probe.ok;
-      if (!probe.ok) {
-        logNow({
-          category: "chat",
-          agent: oneToOneAgent.name,
-          requestId,
-          stage: "capability_probe",
-          ok: false,
-          message: "Active agent is not text-protocol compatible",
-          details: probe.diagnostic
-        });
-      }
+      logNow({
+        category: "chat",
+        agent: oneToOneAgent.name,
+        requestId,
+        stage: "capability_probe",
+        ok: probe.ok,
+        message: probe.ok ? "Active agent passed text-protocol compatibility" : "Active agent is not text-protocol compatible",
+        details: `${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
+      });
     }
     if (preflightSignal.aborted || args.isCurrent?.() === false) return finishPreflightStop();
     const candidateById = new Map(candidates.map((candidate) => [candidate.instance.id, candidate]));

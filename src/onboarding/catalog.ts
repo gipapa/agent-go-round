@@ -8,6 +8,7 @@ import agentBrowserMcpChatRaw from "./tutorials/agent-browser-mcp-chat.yaml?raw"
 import chatgptBrowserSkillRaw from "./tutorials/chatgpt-browser-skill.yaml?raw";
 import harnessStabilitySkillRaw from "./tutorials/harness-stability-skill.yaml?raw";
 import grillingInvestSkillRaw from "./tutorials/grilling-invest-skill.yaml?raw";
+import textProtocolConformanceRaw from "./tutorials/text-protocol-conformance.yaml?raw";
 import { errorMessage } from "../utils/errors";
 
 type TutorialCatalogIssue = {
@@ -37,7 +38,8 @@ export const tutorialCatalog: TutorialScenarioDefinition[] = [
   safeParseScenario(agentBrowserMcpChatRaw, "agent-browser-mcp-chat"),
   safeParseScenario(chatgptBrowserSkillRaw, "chatgpt-browser-skill"),
   safeParseScenario(harnessStabilitySkillRaw, "harness-stability-skill"),
-  safeParseScenario(grillingInvestSkillRaw, "grilling-invest-skill")
+  safeParseScenario(grillingInvestSkillRaw, "grilling-invest-skill"),
+  safeParseScenario(textProtocolConformanceRaw, "text-protocol-conformance")
 ].filter((scenario): scenario is TutorialScenarioDefinition => !!scenario);
 
 export function getTutorialScenario(id: string) {

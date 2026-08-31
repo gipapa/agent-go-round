@@ -57,6 +57,85 @@ describe("OpenAI-compatible native adapter", () => {
     expect(events).toEqual([{ type: "text_delta", text: "done" }, { type: "done", finishReason: "stop" }]);
   });
 
+  it("bounds Groq GPT-OSS text-protocol calls and hides reasoning", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        model?: string;
+        max_tokens?: number;
+        max_completion_tokens?: number;
+        reasoning_effort?: string;
+        include_reasoning?: boolean;
+      };
+      expect(body.model).toBe("openai/gpt-oss-20b");
+      expect(body.max_tokens).toBeUndefined();
+      expect(body.max_completion_tokens).toBe(4_096);
+      expect(body.reasoning_effort).toBe("low");
+      expect(body.include_reasoning).toBe(false);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "text answer" } }] }), {
+        headers: { "content-type": "application/json" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const textRequest: ChatRequest = {
+      agent: { ...request.agent, model: "openai/gpt-oss-20b" },
+      input: "return a text protocol action",
+      history: []
+    };
+    const events = [];
+    for await (const event of OpenAICompatAdapter.chat(textRequest)) events.push(event);
+    expect(events).toEqual([{ type: "done", text: "text answer" }]);
+  });
+
+  it("disables reasoning for the tutorial Qwen text-protocol model", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        max_tokens?: number;
+        max_completion_tokens?: number;
+        reasoning_effort?: string;
+        include_reasoning?: boolean;
+      };
+      expect(body.max_tokens).toBeUndefined();
+      expect(body.max_completion_tokens).toBe(4_096);
+      expect(body.reasoning_effort).toBe("none");
+      expect(body.include_reasoning).toBe(false);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "text answer" } }] }), {
+        headers: { "content-type": "application/json" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const events = [];
+    for await (const event of OpenAICompatAdapter.chat({
+      agent: { ...request.agent, model: "qwen/qwen3.6-27b" },
+      input: "return a text protocol action",
+      history: []
+    })) events.push(event);
+    expect(events).toEqual([{ type: "done", text: "text answer" }]);
+  });
+
+  it("preserves safe provider diagnostics for an empty text stream", async () => {
+    const chunks = [
+      { choices: [{ delta: {}, finish_reason: "length" }] },
+      { choices: [], usage: { completion_tokens: 5_500, completion_tokens_details: { reasoning_tokens: 5_500 } } }
+    ];
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
+      { headers: { "content-type": "text/event-stream" } }
+    )));
+    const events = [];
+    for await (const event of OpenAICompatAdapter.chat({
+      agent: { ...request.agent, model: "openai/gpt-oss-20b" },
+      input: "return a text protocol action",
+      history: []
+    })) events.push(event);
+
+    expect(events).toEqual([{
+      type: "error",
+      kind: "empty",
+      retryable: true,
+      message: "Model returned an empty response (finish_reason=length, completion_tokens=5500, reasoning_tokens=5500)."
+    }]);
+  });
+
   it("passes a required native tool choice through to the provider", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { tool_choice?: string };

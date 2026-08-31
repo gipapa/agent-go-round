@@ -187,7 +187,7 @@ export function projectModelContext(args: {
   const systemParts = [
     args.system?.trim() ?? "",
     catalog ? `[UNTRUSTED_TOOL_CATALOG]\n${catalog}` : "",
-    skillInstructions ? `[UNTRUSTED_SKILL_INSTRUCTIONS]\n${skillInstructions}` : "",
+    skillInstructions ? `[ACTIVE_SKILL_INSTRUCTIONS]\n${skillInstructions}` : "",
     resourceBlocks.length ? resourceBlocks.join("\n\n") : ""
   ].filter(Boolean);
   const system = systemParts.join("\n\n");

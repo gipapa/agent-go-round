@@ -110,6 +110,21 @@ describe("harness context projector", () => {
     expect(projectModelContext({ transcript: [{ role: "user", content: "goal" }], tools: [], skillInstructions: "x".repeat(20), budget: { maxSkillInstructionChars: 10 } })).toMatchObject({ code: "skill_instructions_too_large" });
   });
 
+  it("marks controller-loaded skill instructions as active while keeping resources untrusted", () => {
+    const projected = projectModelContext({
+      transcript: [{ role: "user", content: "goal" }],
+      tools: [],
+      skillInstructions: "Call the profile tool first.",
+      resources: [{ path: "reference.md", content: "reference data" }]
+    });
+    expect("system" in projected).toBe(true);
+    if ("system" in projected) {
+      expect(projected.system).toContain("[ACTIVE_SKILL_INSTRUCTIONS]\nCall the profile tool first.");
+      expect(projected.system).toContain("[UNTRUSTED_SKILL_RESOURCE path=\"reference.md\"]");
+      expect(projected.system).not.toContain("UNTRUSTED_SKILL_INSTRUCTIONS");
+    }
+  });
+
   it("fails closed instead of dropping the latest tool call/result pair", () => {
     const projected = projectModelContext({
       transcript: [

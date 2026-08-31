@@ -116,10 +116,12 @@ describe("harness transports", () => {
   it("renders canonical tool results into a text adapter request without dropping them", async () => {
     let received = "";
     let receivedSystem = "";
+    let receivedMaxResponseChars: number | undefined;
     const adapter: AgentAdapter = {
       async *chat(request) {
         received = request.input;
         receivedSystem = request.system ?? "";
+        receivedMaxResponseChars = request.maxModelResponseChars;
         yield { type: "done", text: "final answer" };
       }
     };
@@ -142,6 +144,58 @@ describe("harness transports", () => {
     expect(received).toContain('"toolId":"x"');
     expect(received).toContain('"input":{}');
     expect(receivedSystem).toContain("TEXT_ACTION");
+    expect(receivedSystem).toContain("ACTIVE_SKILL_INSTRUCTIONS");
+    expect(receivedSystem).toContain("UNTRUSTED_TOOL_CATALOG");
+    expect(receivedMaxResponseChars).toBe(100);
+  });
+
+  it("retries empty adapter text responses using the candidate retry policy", async () => {
+    let calls = 0;
+    const logs: string[] = [];
+    const adapter: AgentAdapter = {
+      async *chat() {
+        calls += 1;
+        yield { type: "done", text: calls === 1 ? "" : "recovered" };
+      }
+    };
+    const transport = createAdapterTextTransport({
+      adapter,
+      agent: { id: "agent", name: "Agent", type: "openai_compat" },
+      candidateId: "text-retry",
+      retry: { delaySec: 0, max: 1 },
+      onLog: (text) => logs.push(text),
+      maxModelResponseChars: 100
+    });
+
+    await expect(transport.runStep(context, new AbortController().signal)).resolves.toMatchObject({
+      status: "step",
+      step: { type: "final", answer: "recovered" }
+    });
+    expect(calls).toBe(2);
+    expect(logs).toEqual([expect.stringContaining("retry 1/1")]);
+  });
+
+  it("stops retrying empty adapter text responses at the configured limit", async () => {
+    let calls = 0;
+    const adapter: AgentAdapter = {
+      async *chat() {
+        calls += 1;
+        yield { type: "done", text: "" };
+      }
+    };
+    const transport = createAdapterTextTransport({
+      adapter,
+      agent: { id: "agent", name: "Agent", type: "openai_compat" },
+      candidateId: "text-retry-exhausted",
+      retry: { delaySec: 0, max: 2 },
+      maxModelResponseChars: 100
+    });
+
+    await expect(transport.runStep(context, new AbortController().signal)).resolves.toMatchObject({
+      status: "transport_error",
+      kind: "empty"
+    });
+    expect(calls).toBe(3);
   });
 
   it("keeps native historical calls paired with structured tool outcomes", async () => {

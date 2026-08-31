@@ -16,6 +16,7 @@ const MAX_DETECTION_RESPONSE_CHARS = 64 * 1024;
 const DEFAULT_MAX_RESPONSE_CHARS = 64_000;
 const DEFAULT_MAX_TOKENS = 4_096;
 const GPT_OSS_MAX_TOKENS = 1_024;
+const GPT_OSS_TEXT_MAX_TOKENS = 4_096;
 const MAX_NATIVE_WIRE_RESPONSE_CHARS = 1_024 * 1_024;
 
 function normalizeMaxResponseChars(value: number | undefined) {
@@ -97,6 +98,9 @@ export const OpenAICompatAdapter: AgentAdapter = {
     const timeoutMs = req.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
     const maxResponseChars = normalizeMaxResponseChars(req.maxModelResponseChars);
     const maxResponseBodyChars = maxResponseChars + 65_536;
+    const model = req.agent.model ?? "gpt-4o-mini";
+    const isGptOss = /^openai\/gpt-oss-(?:20b|120b)$/.test(model);
+    const isQwenNonReasoning = model === "qwen/qwen3.6-27b";
 
     const messages: OpenAIMessage[] = [];
     if (req.system?.trim()) messages.push({ role: "system", content: req.system.trim() });
@@ -124,9 +128,22 @@ export const OpenAICompatAdapter: AgentAdapter = {
               ...(req.agent.headers ?? {})
             },
             body: JSON.stringify({
-              model: req.agent.model ?? "gpt-4o-mini",
+              model,
               stream: true,
-              messages
+              messages,
+              ...(isGptOss
+                ? {
+                    max_completion_tokens: GPT_OSS_TEXT_MAX_TOKENS,
+                    reasoning_effort: "low",
+                    include_reasoning: false
+                  }
+                : isQwenNonReasoning
+                  ? {
+                      max_completion_tokens: DEFAULT_MAX_TOKENS,
+                      reasoning_effort: "none",
+                      include_reasoning: false
+                    }
+                  : { max_tokens: DEFAULT_MAX_TOKENS })
             })
           },
           { signal: req.signal, timeoutMs }
@@ -207,6 +224,23 @@ export const OpenAICompatAdapter: AgentAdapter = {
     let buf = "";
     let full = "";
     let wireChars = 0;
+    let finishReason = "";
+    let completionTokens: number | undefined;
+    let reasoningTokens: number | undefined;
+
+    const emptyStreamError = (): ChatEvent => {
+      const details = [
+        finishReason ? `finish_reason=${finishReason}` : "",
+        completionTokens !== undefined ? `completion_tokens=${completionTokens}` : "",
+        reasoningTokens !== undefined ? `reasoning_tokens=${reasoningTokens}` : ""
+      ].filter(Boolean).join(", ");
+      return {
+        type: "error",
+        kind: "empty",
+        retryable: true,
+        message: `Model returned an empty response${details ? ` (${details})` : ""}.`
+      };
+    };
 
     try {
       while (true) {
@@ -234,7 +268,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
           if (!trimmed.startsWith("data:")) continue;
           const data = trimmed.slice(5).trim();
           if (data === "[DONE]") {
-            yield { type: "done", text: full };
+            yield full.trim() ? { type: "done", text: full } : emptyStreamError();
             return;
           }
           let j: unknown;
@@ -246,6 +280,11 @@ export const OpenAICompatAdapter: AgentAdapter = {
             return;
           }
           const choice = firstChoice(j);
+          if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
+          const usage = asRecord(asRecord(j)?.usage);
+          if (typeof usage?.completion_tokens === "number") completionTokens = usage.completion_tokens;
+          const completionDetails = asRecord(usage?.completion_tokens_details);
+          if (typeof completionDetails?.reasoning_tokens === "number") reasoningTokens = completionDetails.reasoning_tokens;
           const deltaRecord = asRecord(choice?.delta);
           const delta = typeof deltaRecord?.content === "string" ? deltaRecord.content : "";
           const msgContent = choiceMessageContent(choice);
@@ -280,7 +319,7 @@ export const OpenAICompatAdapter: AgentAdapter = {
       return;
     }
 
-    yield { type: "done", text: full };
+    yield full.trim() ? { type: "done", text: full } : emptyStreamError();
   },
 
   async *nativeChat(req: NativeChatRequest): AsyncGenerator<NativeChatEvent> {
