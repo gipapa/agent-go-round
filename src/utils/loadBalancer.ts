@@ -1,4 +1,4 @@
-import { AgentConfig, LoadBalancerConfig, LoadBalancerInstance } from "../types";
+import { AgentConfig, LoadBalancerConfig, LoadBalancerInstance, normalizeToolTransportPolicy } from "../types";
 import { ModelCredentialEntry, ModelCredentialKeyEntry, ModelCredentialPreset } from "../storage/settingsStore";
 import { normalizeCredentialUrl } from "./credential";
 import { generateId } from "./id";
@@ -123,7 +123,7 @@ export function createLoadBalancerInstance(seed?: Partial<LoadBalancerInstance>)
     failure: seed?.failure ?? false,
     failureCount: typeof seed?.failureCount === "number" ? seed.failureCount : 0,
     nextCheckTime: seed?.nextCheckTime ?? null,
-    toolCallingCapability: seed?.toolCallingCapability,
+    toolTransportPolicy: normalizeToolTransportPolicy(seed?.toolTransportPolicy ?? seed?.toolCallingCapability),
     contextBudget: seed?.contextBudget,
     createdAt: seed?.createdAt ?? now,
     updatedAt: seed?.updatedAt ?? now
@@ -209,7 +209,11 @@ export function migrateAgentsToLoadBalancers(args: {
       credentialKeyId: ensured.keyId,
       model: agent.model ?? (agent.type === "chrome_prompt" ? "chrome_prompt" : "gpt-4o-mini"),
       description: "Migrated from legacy agent settings",
-      toolCallingCapability: agent.capabilities?.toolCallingCapability ?? (agent.type === "chrome_prompt" ? "text_protocol" : "native")
+      toolTransportPolicy: normalizeToolTransportPolicy(
+        agent.capabilities?.toolTransportPolicy ??
+        agent.capabilities?.toolCallingCapability ??
+        (agent.type === "chrome_prompt" ? "text_only" : "native_only")
+      )
     });
     const created = {
       ...lb,

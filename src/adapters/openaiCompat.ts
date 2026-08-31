@@ -46,6 +46,28 @@ function choiceMessageContent(choice: Record<string, unknown> | null): string {
   return typeof choice?.text === "string" ? choice.text : "";
 }
 
+function nativeToolCallCount(choice: Record<string, unknown> | null) {
+  if (!choice) return 0;
+  const message = asRecord(choice.message);
+  const delta = asRecord(choice.delta);
+  const messageCalls = Array.isArray(message?.tool_calls) ? message.tool_calls.length : 0;
+  const deltaCalls = Array.isArray(delta?.tool_calls) ? delta.tool_calls.length : 0;
+  const hasMessageFunctionCall = !!message?.function_call && typeof message.function_call === "object";
+  const hasDeltaFunctionCall = !!delta?.function_call && typeof delta.function_call === "object";
+  return messageCalls + deltaCalls + (hasMessageFunctionCall ? 1 : 0) + (hasDeltaFunctionCall ? 1 : 0);
+}
+
+function unexpectedNativeToolCall(choice: Record<string, unknown> | null): ChatEvent | null {
+  const count = nativeToolCallCount(choice);
+  if (count === 0) return null;
+  return {
+    type: "error",
+    kind: "provider",
+    retryable: false,
+    message: `unexpected_native_tool_call_in_text_mode: provider returned ${count} native tool call payload${count === 1 ? "" : "s"}.`
+  };
+}
+
 function httpError(status: number, text: string): ChatEvent {
   const kind = status === 429 ? "rate_limit" : status === 401 || status === 403 ? "auth" : "http";
   const retryable = (status === 429 && !isDailyTokenRateLimit(text)) || status >= 500;
@@ -201,7 +223,13 @@ export const OpenAICompatAdapter: AgentAdapter = {
       }
       try {
         const json = JSON.parse(bounded.text) as unknown;
-        const text = choiceMessageContent(firstChoice(json));
+        const choice = firstChoice(json);
+        const nativeCallError = unexpectedNativeToolCall(choice);
+        if (nativeCallError) {
+          yield nativeCallError;
+          return;
+        }
+        const text = choiceMessageContent(choice);
         if (text.length > maxResponseChars) {
           yield { type: "error", kind: "response_limit", retryable: false, message: `Model response exceeded ${maxResponseChars} chars.` };
           return;
@@ -280,6 +308,12 @@ export const OpenAICompatAdapter: AgentAdapter = {
             return;
           }
           const choice = firstChoice(j);
+          const nativeCallError = unexpectedNativeToolCall(choice);
+          if (nativeCallError) {
+            await reader.cancel().catch(() => {});
+            yield nativeCallError;
+            return;
+          }
           if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
           const usage = asRecord(asRecord(j)?.usage);
           if (typeof usage?.completion_tokens === "number") completionTokens = usage.completion_tokens;

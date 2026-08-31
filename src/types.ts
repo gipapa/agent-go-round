@@ -2,6 +2,17 @@ import type { JSONSchema7 } from "json-schema";
 
 export type AgentType = "openai_compat" | "chrome_prompt" | "custom" | "a2a";
 
+export type ToolTransportPolicy = "auto" | "native_only" | "text_only" | "disabled";
+export type LegacyToolCallingCapability = "native" | "text_protocol" | "none";
+
+export function normalizeToolTransportPolicy(value: unknown): ToolTransportPolicy {
+  if (value === "auto" || value === "native_only" || value === "text_only" || value === "disabled") return value;
+  if (value === "native") return "native_only";
+  if (value === "text_protocol") return "text_only";
+  if (value === "none") return "disabled";
+  return "disabled";
+}
+
 export type Role = "system" | "user" | "assistant" | "tool";
 
 export type ChatTraceEntry = {
@@ -140,7 +151,10 @@ export type LoadBalancerInstance = {
   nextCheckTime?: number | null;
   createdAt: number;
   updatedAt: number;
-  toolCallingCapability?: "native" | "text_protocol" | "none";
+  /** Canonical persisted policy. */
+  toolTransportPolicy?: ToolTransportPolicy;
+  /** @deprecated Read only for migration from pre-policy settings. */
+  toolCallingCapability?: ToolTransportPolicy | LegacyToolCallingCapability;
   contextBudget?: {
     maxTotalChars?: number;
     maxCatalogChars?: number;
@@ -189,7 +203,9 @@ export type AgentConfig = {
     streaming?: boolean;
     tools?: boolean;
     mcp?: boolean;
-    toolCallingCapability?: "native" | "text_protocol" | "none";
+    toolTransportPolicy?: ToolTransportPolicy;
+    /** @deprecated Read only for migration from pre-policy agent settings. */
+    toolCallingCapability?: ToolTransportPolicy | LegacyToolCallingCapability;
   };
 
   allowedDocIds?: string[];

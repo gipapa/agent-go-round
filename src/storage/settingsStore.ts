@@ -1,4 +1,4 @@
-import { LoadBalancerConfig, McpServerConfig, McpToolPolicy, OrchestratorMode, VoiceSettings } from "../types";
+import { LoadBalancerConfig, McpServerConfig, McpToolPolicy, OrchestratorMode, VoiceSettings, normalizeToolTransportPolicy } from "../types";
 import { readJsonStorage, writeJsonStorage } from "./safeStorage";
 
 export type UiState = {
@@ -194,6 +194,18 @@ export function saveModelCredentials(credentials: ModelCredentials) {
   writeJsonStorage(MODEL_CREDENTIALS_KEY, credentials);
 }
 
+function normalizeLoadBalancerInstance(instance: LoadBalancerConfig["instances"][number]) {
+  const { toolCallingCapability: legacyPolicy, ...canonicalInstance } = instance ?? {};
+  return {
+    ...canonicalInstance,
+    toolTransportPolicy: normalizeToolTransportPolicy(canonicalInstance.toolTransportPolicy ?? legacyPolicy),
+    resumeMinute:
+      typeof instance?.resumeMinute === "number" && Number.isFinite(instance.resumeMinute)
+        ? instance.resumeMinute
+        : 60
+  };
+}
+
 export function loadLoadBalancers(): LoadBalancerConfig[] {
   const parsed = readJsonStorage<unknown>(LOAD_BALANCERS_KEY, {
     defaultValue: [],
@@ -210,19 +222,16 @@ export function loadLoadBalancers(): LoadBalancerConfig[] {
       )
       .map((item) => ({
         ...item,
-        instances: item.instances.map((instance: LoadBalancerConfig["instances"][number]) => ({
-          ...instance,
-          resumeMinute:
-            typeof instance?.resumeMinute === "number" && Number.isFinite(instance.resumeMinute)
-              ? instance.resumeMinute
-              : 60
-        }))
+        instances: item.instances.map(normalizeLoadBalancerInstance)
       }))
     : [];
 }
 
 export function saveLoadBalancers(loadBalancers: LoadBalancerConfig[]) {
-  writeJsonStorage(LOAD_BALANCERS_KEY, loadBalancers);
+  writeJsonStorage(LOAD_BALANCERS_KEY, loadBalancers.map((loadBalancer) => ({
+    ...loadBalancer,
+    instances: loadBalancer.instances.map(normalizeLoadBalancerInstance)
+  })));
 }
 
 export function getLoadBalancersStorageKey() {

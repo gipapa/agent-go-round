@@ -407,20 +407,20 @@ export default function LoadBalancersPanel(props: {
                     </div>
 
                     <div>
-                      <label style={label}>Harness tool-calling capability</label>
+                      <label style={label}>Harness tool transport policy</label>
                       <select
-                        value={instance.toolCallingCapability ?? ""}
-                        onChange={(e) => updateInstance(instance.id, { toolCallingCapability: (e.target.value || undefined) as LoadBalancerInstance["toolCallingCapability"] })}
+                        value={instance.toolTransportPolicy ?? "disabled"}
+                        onChange={(e) => updateInstance(instance.id, { toolTransportPolicy: e.target.value as LoadBalancerInstance["toolTransportPolicy"] })}
                         style={inp as React.CSSProperties}
                         data-tutorial-id={`load-balancer-instance-capability-${index}`}
                       >
-                        <option value="">Not configured (harness unavailable)</option>
-                        <option value="native">Native tool calls</option>
-                        <option value="text_protocol">Strict text action protocol (probe required)</option>
-                        <option value="none">Unavailable for harness tools</option>
+                        <option value="auto">Auto (native probe, then text fallback)</option>
+                        <option value="native_only">Native tool calls only</option>
+                        <option value="text_only">Strict text action protocol (probe required)</option>
+                        <option value="disabled">Disabled for harness tools</option>
                       </select>
                       <div style={{ fontSize: 12, opacity: 0.72, marginTop: 6 }}>
-                        Text protocol candidates receive a no-side-effect conformance probe before a run.
+                        Auto and text-only policies run no-side-effect conformance probes before a run.
                       </div>
                     </div>
 

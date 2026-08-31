@@ -24,9 +24,9 @@ describe("LoadBalancersPanel harness capability", () => {
     const capability = document.querySelector<HTMLSelectElement>('[data-tutorial-id="load-balancer-instance-capability-0"]');
     expect(capability).not.toBeNull();
     if (!capability) return;
-    expect(capability.value).toBe("");
-    fireEvent.change(capability, { target: { value: "native" } });
-    expect(capability.value).toBe("native");
+    expect(capability.value).toBe("disabled");
+    fireEvent.change(capability, { target: { value: "native_only" } });
+    expect(capability.value).toBe("native_only");
 
     const maxTotal = document.querySelector<HTMLInputElement>('[data-tutorial-id="load-balancer-instance-context-budget-maxTotalChars-0"]');
     expect(maxTotal).not.toBeNull();

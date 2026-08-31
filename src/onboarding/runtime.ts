@@ -181,7 +181,7 @@ function loadBalancerMatchesTutorialGroq(state: TutorialRuntimeState, loadBalanc
 function tutorialTextProtocolLoadBalancerMatches(state: TutorialRuntimeState) {
   const loadBalancer = findLoadBalancerByName(state, TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
   const instance = loadBalancer?.instances.length === 1 ? loadBalancer.instances[0] : null;
-  if (!loadBalancer || !instance || instance.toolCallingCapability !== "text_protocol") return false;
+  if (!loadBalancer || !instance || instance.toolTransportPolicy !== "text_only") return false;
   const credential = state.credentials.find((entry) => entry.id === instance.credentialId) ?? null;
   return (
     credential?.preset === "groq" &&

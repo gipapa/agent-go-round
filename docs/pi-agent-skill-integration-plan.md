@@ -303,6 +303,11 @@ type HarnessTransportResult =
     }
   | { status: "aborted"; message: string };
 
+type ToolTransportPolicy = "auto" | "native_only" | "text_only" | "disabled";
+type DetectedToolCapability = {
+  native: "unknown" | "supported" | "unsupported";
+  text: "unknown" | "supported" | "unsupported";
+};
 type ToolCallingCapability = "native" | "text_protocol" | "none";
 ```
 
@@ -310,9 +315,9 @@ Required changes：
 
 1. `AgentAdapter.chat()` 必須以 typed `error`/`aborted` event 回報失敗，不能再把 `Request failed:` 放在一般 `done.text`。
 2. Load balancer 依 typed error 做 retry/failover；provider 成功回覆但 protocol invalid 不可被當成 network failure。
-3. 每個 load-balancer candidate 記錄 tool-calling capability 與 context budget。Harness 只選擇 compatible candidates。
+3. 每個 load-balancer candidate 記錄 transport policy 與 context budget；runtime 另外保存短期 detected capability。Harness 只選擇完成協商且 compatible 的 candidates。
 4. Custom adapter 必須真的轉送 system/action protocol 與 rendered transcript；若 body template 無法承載必要欄位，capability 為 `none`。
-5. Text capability 必須通過無副作用 conformance probe；不能只依 adapter type 推定。結果依 candidate/model/template revision cache，任一 revision 改變就失效。
+5. Native/text capability 必須通過無副作用 probe；不能只依 adapter type 推定。結果依 endpoint、model、adapter/template 與 credential-key revision cache，任一 revision 改變就失效。
 6. Native 與 text transport 都輸出同一 `HarnessTransportResult`，不分叉 core loop。
 
 ### 5.5 Headless ToolEffectRunner

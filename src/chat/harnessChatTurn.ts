@@ -7,6 +7,7 @@ import type { ToolDashboardHelpers } from "../utils/toolDashboard";
 import { projectPersistedHarnessRun } from "./harnessProjection";
 import { runHarnessOneToOne } from "../orchestrators/harnessOneToOne";
 import { errorMessage } from "../utils/errors";
+import type { ToolCallingCapability } from "../runtime/harness/capability";
 
 export type HarnessChatTurnResult = {
   requestId: string;
@@ -106,7 +107,7 @@ export async function runHarnessChatTurn(args: {
   system?: string;
   agent: AgentConfig;
   adapter: AgentAdapter;
-  transportCandidates?: Array<{ id: string; agent: AgentConfig; adapter: AgentAdapter; capability?: "native" | "text_protocol" | "none"; retry?: RetryConfig; contextBudget?: Partial<ContextBudget> }>;
+  transportCandidates?: Array<{ id: string; agent: AgentConfig; adapter: AgentAdapter; capability?: ToolCallingCapability; retry?: RetryConfig; contextBudget?: Partial<ContextBudget> }>;
   docs: DocItem[];
   skills: HarnessSkillPackage[];
   explicitSkillId?: string;

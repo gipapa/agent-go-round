@@ -142,7 +142,7 @@ function seedLoadBalancedAgent(agent: AgentConfig) {
           failure: false,
           failureCount: 0,
           nextCheckTime: null,
-          toolCallingCapability: "text_protocol",
+          toolTransportPolicy: "text_only",
           createdAt: 1,
           updatedAt: 1
         }
@@ -185,7 +185,7 @@ function seedTutorialBaseResources() {
       failure: false,
       failureCount: 0,
       nextCheckTime: null,
-      toolCallingCapability: "native",
+      toolTransportPolicy: "native_only",
       createdAt: 1,
       updatedAt: 1
     }],
@@ -385,7 +385,7 @@ describe("App chat flows (mocked)", () => {
       const matches = loadBalancers.filter((entry) => entry.name === TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME);
       return matches.length === 1 && matches[0].instances.length === 1 &&
         matches[0].instances[0].model === TUTORIAL_TEXT_PROTOCOL_MODEL &&
-        matches[0].instances[0].toolCallingCapability === "text_protocol";
+        matches[0].instances[0].toolTransportPolicy === "text_only";
     });
   });
 

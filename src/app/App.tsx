@@ -144,7 +144,13 @@ import { useDocsController } from "../resources/useDocsController";
 import { useSkillsController } from "../resources/useSkillsController";
 import { useAgentHarnessController, type AgentHarnessTaskContext } from "../chat/useAgentHarnessController";
 import { createLogRequestId } from "../runtime/logging";
-import { getTextCapabilityRevision, normalizeToolCallingCapability, probeTextCapability } from "../runtime/harness/capability";
+import {
+  getAgentToolTransportPolicy,
+  getCandidateToolTransportPolicy,
+  getTextCapabilityRevision,
+  negotiateToolCallingCapability,
+  type ToolCallingCapability
+} from "../runtime/harness/capability";
 import { fetchCredentialModels } from "../credentials/runtime";
 import { useCredentialController } from "../credentials/useCredentialController";
 import { generateId } from "../utils/id";
@@ -1113,7 +1119,7 @@ export default function App() {
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
                 description: "Primary tutorial instance",
-                toolCallingCapability: "native",
+                toolTransportPolicy: "native_only",
                 contextBudget: TUTORIAL_CONTEXT_BUDGET
               })
             ]
@@ -1125,19 +1131,19 @@ export default function App() {
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
                 description: "Primary provider / model baseline",
-                toolCallingCapability: "native",
+                toolTransportPolicy: "native_only",
                 contextBudget: TUTORIAL_CONTEXT_BUDGET
               }),
               createLoadBalancerInstance({
                 model: TUTORIAL_SECONDARY_MODEL,
                 description: "Alternate key with secondary model",
-                toolCallingCapability: "native",
+                toolTransportPolicy: "native_only",
                 contextBudget: TUTORIAL_CONTEXT_BUDGET
               }),
               createLoadBalancerInstance({
                 model: TUTORIAL_PRIMARY_MODEL,
                 description: "Primary key retry position",
-                toolCallingCapability: "native",
+                toolTransportPolicy: "native_only",
                 contextBudget: TUTORIAL_CONTEXT_BUDGET
               })
             ]
@@ -1173,7 +1179,7 @@ export default function App() {
       failure: false,
       failureCount: 0,
       nextCheckTime: null,
-      toolCallingCapability: "native" as const,
+      toolTransportPolicy: "native_only" as const,
       contextBudget: TUTORIAL_CONTEXT_BUDGET,
       updatedAt: now
     }));
@@ -1196,7 +1202,7 @@ export default function App() {
           instance.credentialKeyId === nextInstance.credentialKeyId &&
           instance.model === nextInstance.model &&
           instance.description === nextInstance.description &&
-          instance.toolCallingCapability === nextInstance.toolCallingCapability &&
+          instance.toolTransportPolicy === nextInstance.toolTransportPolicy &&
           JSON.stringify(instance.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
           instance.failure === false &&
           instance.failureCount === 0 &&
@@ -1258,7 +1264,7 @@ export default function App() {
       failure: false,
       failureCount: 0,
       nextCheckTime: null,
-      toolCallingCapability: "text_protocol",
+      toolTransportPolicy: "text_only",
       contextBudget: TUTORIAL_CONTEXT_BUDGET,
       createdAt: existingInstance?.createdAt
     });
@@ -1278,7 +1284,7 @@ export default function App() {
       existing.instances[0]?.credentialKeyId === nextInstance.credentialKeyId &&
       existing.instances[0]?.model === nextInstance.model &&
       existing.instances[0]?.description === nextInstance.description &&
-      existing.instances[0]?.toolCallingCapability === nextInstance.toolCallingCapability &&
+      existing.instances[0]?.toolTransportPolicy === nextInstance.toolTransportPolicy &&
       JSON.stringify(existing.instances[0]?.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
       existing.instances[0]?.failure === false &&
       existing.instances[0]?.failureCount === 0 &&
@@ -1303,7 +1309,7 @@ export default function App() {
       primaryCredential.id,
       primaryKey.id,
       nextInstance.model,
-      nextInstance.toolCallingCapability
+      nextInstance.toolTransportPolicy
     ].join(":");
     if (tutorialTextProtocolLastEnsureLogRef.current !== ensureLogKey) {
       tutorialTextProtocolLastEnsureLogRef.current = ensureLogKey;
@@ -1311,7 +1317,7 @@ export default function App() {
         category: "load_balancer",
         ok: true,
         message: `Tutorial load balancer ensured: ${nextEntry.name}`,
-        details: `${primaryCredential.label} / ${TUTORIAL_TEXT_PROTOCOL_MODEL} / text_protocol`
+        details: `${primaryCredential.label} / ${TUTORIAL_TEXT_PROTOCOL_MODEL} / text_only`
       });
     }
   }
@@ -1362,7 +1368,7 @@ export default function App() {
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
-        toolCallingCapability: "native",
+        toolTransportPolicy: "native_only",
         contextBudget: TUTORIAL_CONTEXT_BUDGET,
         createdAt: existing?.instances[0]?.createdAt
       }),
@@ -1378,7 +1384,7 @@ export default function App() {
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
-        toolCallingCapability: "native",
+        toolTransportPolicy: "native_only",
         contextBudget: TUTORIAL_CONTEXT_BUDGET,
         createdAt: existing?.instances[1]?.createdAt
       }),
@@ -1394,7 +1400,7 @@ export default function App() {
         failure: false,
         failureCount: 0,
         nextCheckTime: null,
-        toolCallingCapability: "native",
+        toolTransportPolicy: "native_only",
         contextBudget: TUTORIAL_CONTEXT_BUDGET,
         createdAt: existing?.instances[2]?.createdAt
       })
@@ -1419,7 +1425,7 @@ export default function App() {
           instance.credentialKeyId === nextInstance.credentialKeyId &&
           instance.model === nextInstance.model &&
           instance.description === nextInstance.description &&
-          instance.toolCallingCapability === nextInstance.toolCallingCapability &&
+          instance.toolTransportPolicy === nextInstance.toolTransportPolicy &&
           JSON.stringify(instance.contextBudget) === JSON.stringify(TUTORIAL_CONTEXT_BUDGET) &&
           instance.failure === false &&
           instance.failureCount === 0 &&
@@ -2011,19 +2017,18 @@ export default function App() {
     const adapter = pickAdapter(resolvedActiveAgent);
     const assistantId = generateId();
     const resolvedCandidates = resolveLoadBalancerPlanForAgent(oneToOneAgent);
-    const candidateCapabilities = new Map(resolvedCandidates.map((candidate) => {
-      const capability = normalizeToolCallingCapability(
-        candidate.instance.toolCallingCapability ?? candidate.hydratedAgent.capabilities?.toolCallingCapability
-      );
-      return [candidate.instance.id, capability] as const;
-    }));
+    const candidatePolicies = new Map(resolvedCandidates.map((candidate) => [
+      candidate.instance.id,
+      getCandidateToolTransportPolicy(candidate)
+    ] as const));
+    const candidateCapabilities = new Map<string, ToolCallingCapability>();
     let candidates = resolvedCandidates.filter((candidate) => {
-      const capability = candidateCapabilities.get(candidate.instance.id);
-      const candidateAdapter = pickAdapter(candidate.hydratedAgent);
-      return capability !== "none" && !(capability === "native" && !candidateAdapter.nativeChat);
+      const policy = candidatePolicies.get(candidate.instance.id);
+      return policy !== "disabled";
     });
-    const mainCapability = normalizeToolCallingCapability(
-      oneToOneAgent.capabilities?.toolCallingCapability ?? (oneToOneAgent.loadBalancerId ? "none" : adapter.nativeChat ? "native" : "text_protocol")
+    const mainPolicy = getAgentToolTransportPolicy(
+      oneToOneAgent,
+      oneToOneAgent.loadBalancerId ? "disabled" : adapter.nativeChat ? "native_only" : "text_only"
     );
 
     logNow({
@@ -2085,16 +2090,16 @@ export default function App() {
     const verifiedCandidates = [] as typeof candidates;
     for (const candidate of candidates) {
       if (preflightSignal.aborted || args.isCurrent?.() === false) return finishPreflightStop();
-      const capability = candidateCapabilities.get(candidate.instance.id);
-      if (capability !== "text_protocol") {
-        verifiedCandidates.push(candidate);
-        continue;
+      const policy = candidatePolicies.get(candidate.instance.id) ?? "disabled";
+      const candidateAdapter = pickAdapter(candidate.hydratedAgent);
+      if (policy === "text_only" || policy === "auto") {
+        patchMessage(assistantId, { statusText: policy === "auto" ? "正在協商工具傳輸方式…" : "正在驗證文字 action protocol…", isStreaming: true });
       }
-      patchMessage(assistantId, { statusText: "正在驗證文字 action protocol…", isStreaming: true });
-      const probe = await probeTextCapability({
+      const probe = await negotiateToolCallingCapability({
+        policy,
         candidateId: candidate.instance.id,
         agent: candidate.hydratedAgent,
-        adapter: pickAdapter(candidate.hydratedAgent),
+        adapter: candidateAdapter,
         retry: {
           delaySec: Math.max(0, candidate.instance.delaySecond),
           max: Math.max(0, candidate.instance.maxRetries)
@@ -2103,7 +2108,8 @@ export default function App() {
         revision: getTextCapabilityRevision(candidate.hydratedAgent, `${candidate.instance.credentialId}:${candidate.instance.credentialKeyId ?? "default"}:${candidate.instance.model}`),
         signal: preflightSignal
       });
-      if (probe.ok) {
+      if (probe.ok && probe.status === "supported" && probe.capability !== "none") {
+        candidateCapabilities.set(candidate.instance.id, probe.capability);
         verifiedCandidates.push(candidate);
         logNow({
           category: "chat",
@@ -2111,8 +2117,8 @@ export default function App() {
           requestId,
           stage: "capability_probe",
           ok: true,
-          message: `Candidate ${candidate.instance.id} passed text-protocol compatibility`,
-          details: `${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
+          message: `Candidate ${candidate.instance.id} selected ${probe.capability} transport`,
+          details: `policy=${policy}; status=${probe.status}; ${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
         });
       } else {
         logNow({
@@ -2121,31 +2127,34 @@ export default function App() {
           requestId,
           stage: "capability_probe",
           ok: false,
-          message: `Candidate ${candidate.instance.id} is not text-protocol compatible`,
-          details: probe.diagnostic
+          message: `Candidate ${candidate.instance.id} is unavailable for harness tools`,
+          details: `policy=${policy}; status=${probe.status}; ${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
         });
       }
     }
     candidates = verifiedCandidates;
-    let directTextCapability: boolean | undefined;
-    if (!oneToOneAgent.loadBalancerId && mainCapability === "text_protocol") {
-      patchMessage(assistantId, { statusText: "正在驗證文字 action protocol…", isStreaming: true });
-      const probe = await probeTextCapability({
+    let directCapability: ToolCallingCapability = "none";
+    if (!oneToOneAgent.loadBalancerId) {
+      if (mainPolicy === "text_only" || mainPolicy === "auto") {
+        patchMessage(assistantId, { statusText: mainPolicy === "auto" ? "正在協商工具傳輸方式…" : "正在驗證文字 action protocol…", isStreaming: true });
+      }
+      const probe = await negotiateToolCallingCapability({
+        policy: mainPolicy,
         candidateId: resolvedActiveAgent.id,
         agent: resolvedActiveAgent,
         adapter,
         revision: getTextCapabilityRevision(resolvedActiveAgent),
         signal: preflightSignal
       });
-      directTextCapability = probe.ok;
+      if (probe.ok && probe.status === "supported") directCapability = probe.capability;
       logNow({
         category: "chat",
         agent: oneToOneAgent.name,
         requestId,
         stage: "capability_probe",
-        ok: probe.ok,
-        message: probe.ok ? "Active agent passed text-protocol compatibility" : "Active agent is not text-protocol compatible",
-        details: `${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
+        ok: probe.ok && probe.status === "supported",
+        message: probe.ok && probe.status === "supported" ? `Active agent selected ${probe.capability} transport` : "Active agent is unavailable for harness tools",
+        details: `policy=${mainPolicy}; status=${probe.status}; ${probe.diagnostic}${probe.cached ? " (cached)" : ""}`
       });
     }
     if (preflightSignal.aborted || args.isCurrent?.() === false) return finishPreflightStop();
@@ -2162,9 +2171,9 @@ export default function App() {
           },
           contextBudget: candidate.instance.contextBudget
         }))
-      : directTextCapability === false || mainCapability === "none"
+      : directCapability === "none"
         ? []
-        : [{ id: resolvedActiveAgent.id, agent: resolvedActiveAgent, adapter, capability: mainCapability }];
+        : [{ id: resolvedActiveAgent.id, agent: resolvedActiveAgent, adapter, capability: directCapability }];
 
     const resolvedMcpToolsForAgent = await ensureMcpToolsLoadedForServers(availableMcpServersForAgent, {
       onStatus: (statusText) => patchMessage(assistantId, { statusText, isStreaming: true }),

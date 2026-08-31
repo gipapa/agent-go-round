@@ -404,15 +404,15 @@ describe("tutorial YAML automation linkage", () => {
       ...makeTutorialLoadBalancer(),
       id: "lb-text-protocol",
       name: TUTORIAL_TEXT_PROTOCOL_LOAD_BALANCER_NAME,
-      instances: [{ ...baseInstance, model: TUTORIAL_TEXT_PROTOCOL_MODEL, toolCallingCapability: "text_protocol" }]
+      instances: [{ ...baseInstance, model: TUTORIAL_TEXT_PROTOCOL_MODEL, toolTransportPolicy: "text_only" }]
     };
 
     expect(evaluateTutorialStep(step, makeState({ loadBalancers: [textLoadBalancer] })).completed).toBe(true);
     expect(evaluateTutorialStep(step, makeState({
-      loadBalancers: [{ ...textLoadBalancer, instances: [{ ...baseInstance, toolCallingCapability: "native" }] }]
+      loadBalancers: [{ ...textLoadBalancer, instances: [{ ...baseInstance, toolTransportPolicy: "native_only" }] }]
     })).completed).toBe(false);
     expect(evaluateTutorialStep(step, makeState({
-      loadBalancers: [{ ...textLoadBalancer, instances: [textLoadBalancer.instances[0], { ...baseInstance, id: "text-2", toolCallingCapability: "text_protocol" }] }]
+      loadBalancers: [{ ...textLoadBalancer, instances: [textLoadBalancer.instances[0], { ...baseInstance, id: "text-2", toolTransportPolicy: "text_only" }] }]
     })).completed).toBe(false);
   });
 

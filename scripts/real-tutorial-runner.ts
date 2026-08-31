@@ -439,7 +439,7 @@ async function createLoadBalancerByTutorialUi(args: {
     keyLabel?: string;
     model: string;
     description?: string;
-    capability?: "native" | "text_protocol" | "none";
+    policy?: "auto" | "native_only" | "text_only" | "disabled";
     maxRetries?: number;
     delaySecond?: number;
     resumeMinute?: number;
@@ -465,13 +465,15 @@ async function createLoadBalancerByTutorialUi(args: {
     if (instance.description) {
       await setValueByTutorialId(`load-balancer-instance-description-${index}`, instance.description);
     }
-    if (instance.capability) {
-      const capabilityLabel = instance.capability === "native"
-        ? "Native tool calls"
-        : instance.capability === "text_protocol"
+    if (instance.policy) {
+      const policyLabel = instance.policy === "auto"
+        ? "Auto (native probe, then text fallback)"
+        : instance.policy === "native_only"
+        ? "Native tool calls only"
+        : instance.policy === "text_only"
         ? "Strict text action protocol"
-        : "Unavailable for harness tools";
-      await selectOptionByTutorialId(`load-balancer-instance-capability-${index}`, capabilityLabel);
+        : "Disabled for harness tools";
+      await selectOptionByTutorialId(`load-balancer-instance-capability-${index}`, policyLabel);
     }
     if (typeof instance.maxRetries === "number") {
       await setValueByTutorialId(`load-balancer-instance-max-retries-${index}`, String(instance.maxRetries));
@@ -515,7 +517,7 @@ async function hasTutorialTextProtocolLoadBalancer() {
         const instance = loadBalancer.instances[0];
         return (
           String(instance?.model || "").trim() === ${literal(TUTORIAL_TEXT_PROTOCOL_MODEL)} &&
-          String(instance?.toolCallingCapability || "").trim() === "text_protocol" &&
+          String(instance?.toolTransportPolicy || "").trim() === "text_only" &&
           String(instance?.credentialId || "").trim() !== "" &&
           String(instance?.credentialKeyId || "").trim() !== ""
         );
@@ -905,7 +907,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
               keyLabel: "Key 1",
               model: TUTORIAL_PRIMARY_MODEL,
               description: "Primary tutorial instance",
-              capability: "native",
+              policy: "native_only",
               maxRetries: 4,
               delaySecond: 5
             },
@@ -915,7 +917,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
                   keyLabel: "Key 2",
                   model: TUTORIAL_PRIMARY_MODEL,
                   description: "Alternate key for failover",
-                  capability: "native" as const,
+                  policy: "native_only" as const,
                   maxRetries: 4,
                   delaySecond: 5
                 }]
@@ -968,7 +970,7 @@ async function performStepAction(step: TutorialStepDefinition, config: RealTutor
             keyLabel: "Key 1",
             model: TUTORIAL_TEXT_PROTOCOL_MODEL,
             description: "Strict text action protocol tutorial instance",
-            capability: "text_protocol",
+            policy: "text_only",
             maxRetries: 4,
             delaySecond: 5
           }]

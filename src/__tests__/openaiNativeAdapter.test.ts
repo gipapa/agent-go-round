@@ -112,6 +112,60 @@ describe("OpenAI-compatible native adapter", () => {
     expect(events).toEqual([{ type: "done", text: "text answer" }]);
   });
 
+  it("reports non-stream native tool calls as a text-protocol violation", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{
+        message: {
+          content: "",
+          tool_calls: [{ id: "call-1", type: "function", function: { name: "agr_tool_0", arguments: "{}" } }]
+        },
+        finish_reason: "tool_calls"
+      }]
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = [];
+    for await (const event of OpenAICompatAdapter.chat({
+      agent: request.agent,
+      input: "return a text protocol action",
+      history: [],
+      retry: { max: 2, delaySec: 0 }
+    })) events.push(event);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(events).toEqual([{
+      type: "error",
+      kind: "provider",
+      retryable: false,
+      message: "unexpected_native_tool_call_in_text_mode: provider returned 1 native tool call payload."
+    }]);
+  });
+
+  it("reports streaming native tool calls as a text-protocol violation", async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "call-1", function: { name: "agr_tool_0", arguments: "{}" } }] } }] })}\n\n` +
+      "data: [DONE]\n\n",
+      { headers: { "content-type": "text/event-stream" } }
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const events = [];
+    for await (const event of OpenAICompatAdapter.chat({
+      agent: request.agent,
+      input: "return a text protocol action",
+      history: [],
+      retry: { max: 2, delaySec: 0 }
+    })) events.push(event);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(events).toEqual([{
+      type: "error",
+      kind: "provider",
+      retryable: false,
+      message: "unexpected_native_tool_call_in_text_mode: provider returned 1 native tool call payload."
+    }]);
+  });
+
   it("preserves safe provider diagnostics for an empty text stream", async () => {
     const chunks = [
       { choices: [{ delta: {}, finish_reason: "length" }] },

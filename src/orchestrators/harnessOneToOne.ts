@@ -11,7 +11,7 @@ import { createFailoverTransport, type HarnessTransportCandidate } from "../runt
 import { DEFAULT_CONTEXT_BUDGET, type ContextBudget, type HarnessEvent, type HarnessMessage, type HarnessRunState, type HarnessToolCall, type HarnessToolDefinition } from "../runtime/harness/types";
 import { runAgentLoop } from "../runtime/harness/runAgentLoop";
 import { createHarnessToolRegistry } from "../runtime/harness/toolRegistry";
-import { normalizeToolCallingCapability, type ToolCallingCapability } from "../runtime/harness/capability";
+import { normalizeDetectedToolCapability, type ToolCallingCapability } from "../runtime/harness/capability";
 import { filterAgentHarnessCapabilities } from "../runtime/harness/agentScope";
 import type { ToolDashboardHelpers } from "../utils/toolDashboard";
 
@@ -203,7 +203,7 @@ export async function runHarnessOneToOne(args: HarnessOneToOneArgs): Promise<Har
     retry?: RetryConfig;
     contextBudget?: Partial<ContextBudget>;
   }, candidateBudget: ContextBudget) => {
-    const capability = normalizeToolCallingCapability(candidate.capability ?? (
+    const capability = normalizeDetectedToolCapability(candidate.capability ?? (
       args.transportCandidates === undefined
         ? candidate.adapter.nativeChat ? "native" : "text_protocol"
         : "none"

@@ -292,6 +292,36 @@ describe("harness one-to-one composition", () => {
     expect(nativeCalls).toBe(0);
   });
 
+  it("does not dispatch tools when text transport reports an unexpected native call", async () => {
+    let dispatches = 0;
+    const adapter: AgentAdapter = {
+      async *chat() {
+        yield {
+          type: "error",
+          kind: "provider",
+          retryable: false,
+          message: "unexpected_native_tool_call_in_text_mode: provider returned 1 native tool call payload."
+        };
+      }
+    };
+    const manager = new McpClientManager();
+    managers.push(manager);
+    const result = await runHarnessOneToOne({
+      agent: { id: "agent", name: "Agent", type: "custom", enableBuiltInTools: true },
+      adapter,
+      transportCandidates: [{ id: "text", agent: { id: "agent", name: "Agent", type: "custom" }, adapter, capability: "text_protocol" }],
+      input: "hello",
+      availableBuiltinTools: [{ ...echo, code: "dispatches += 1; return input.value;" }],
+      mcpClientManager: manager,
+      runId: "run-unexpected-native-text-call",
+      generation: 1
+    });
+
+    expect(result.stopReason).toBe("transport_error");
+    expect(dispatches).toBe(0);
+    expect(result.transcript.some((message) => message.role === "tool")).toBe(false);
+  });
+
   it("fails closed for a load-balancer candidate without an explicit capability", async () => {
     let calls = 0;
     const adapter: AgentAdapter = {

@@ -1,34 +1,64 @@
 import type { ResolvedLoadBalancerInstance } from "../../utils/loadBalancer";
 import { parseTextActionResponse } from "./textActionProtocol";
-import { createAdapterTextTransport } from "./transports";
+import { createAdapterNativeToolTransport, createAdapterTextTransport } from "./transports";
 import type { AgentAdapter, RetryConfig } from "../../adapters/base";
 import { supportsCustomTextProtocol } from "../../adapters/custom";
-import type { AgentConfig } from "../../types";
+import { normalizeToolTransportPolicy, type AgentConfig, type ToolTransportPolicy } from "../../types";
 import type { ContextBudget, HarnessModelContext, HarnessToolDefinition } from "./types";
 
 export type ToolCallingCapability = "native" | "text_protocol" | "none";
 
-export function normalizeToolCallingCapability(value: unknown): ToolCallingCapability {
+export type CapabilityProbeStatus = "supported" | "unsupported" | "unknown";
+
+export type DetectedToolCapability = {
+  native: CapabilityProbeStatus;
+  text: CapabilityProbeStatus;
+};
+
+export function normalizeDetectedToolCapability(value: unknown): ToolCallingCapability {
   return value === "native" || value === "text_protocol" ? value : "none";
+}
+
+/** @deprecated Use normalizeDetectedToolCapability for runtime results. */
+export function normalizeToolCallingCapability(value: unknown): ToolCallingCapability {
+  return normalizeDetectedToolCapability(value);
 }
 
 export type CapabilityProbeResult = {
   capability: ToolCallingCapability;
   ok: boolean;
+  status: CapabilityProbeStatus;
   diagnostic: string;
   cached?: boolean;
 };
 
+export function getAgentToolTransportPolicy(agent: AgentConfig, fallback?: unknown): ToolTransportPolicy {
+  return normalizeToolTransportPolicy(
+    agent.capabilities?.toolTransportPolicy ?? agent.capabilities?.toolCallingCapability ?? fallback
+  );
+}
+
+export function getCandidateToolTransportPolicy(candidate: ResolvedLoadBalancerInstance): ToolTransportPolicy {
+  return normalizeToolTransportPolicy(candidate.instance.toolTransportPolicy ?? candidate.instance.toolCallingCapability);
+}
+
+/** @deprecated Persist a policy and negotiate its detected capability instead. */
+export function getCandidateToolCallingCapability(candidate: ResolvedLoadBalancerInstance): ToolCallingCapability {
+  const policy = getCandidateToolTransportPolicy(candidate);
+  return policy === "native_only" ? "native" : policy === "text_only" ? "text_protocol" : "none";
+}
+
 export function evaluateTextCapabilityProbe(args: { response: string; expectedToolId: string }): CapabilityProbeResult {
   const parsed = parseTextActionResponse(args.response);
   if (parsed.type !== "step" || parsed.step.type !== "tool_call" || parsed.step.toolId !== args.expectedToolId) {
-    return { capability: "none", ok: false, diagnostic: "Text action conformance probe did not return the exact expected tool envelope." };
+    return {
+      capability: "none",
+      ok: false,
+      status: "unsupported",
+      diagnostic: "Text action conformance probe did not return the exact expected tool envelope."
+    };
   }
-  return { capability: "text_protocol", ok: true, diagnostic: "Text action protocol conformance probe passed." };
-}
-
-export function getCandidateToolCallingCapability(candidate: ResolvedLoadBalancerInstance): ToolCallingCapability {
-  return normalizeToolCallingCapability(candidate.instance.toolCallingCapability);
+  return { capability: "text_protocol", ok: true, status: "supported", diagnostic: "Text action protocol conformance probe passed." };
 }
 
 const TEXT_PROBE_TOOL_ID = "internal:capability.probe";
@@ -67,15 +97,20 @@ function revisionDigest(value: string) {
   return (hash >>> 0).toString(16);
 }
 
+function headerRevision(headers: Record<string, string> | undefined) {
+  const entries = Object.entries(headers ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  return revisionDigest(JSON.stringify(entries) ?? "");
+}
+
 function revisionForAgent(agent: AgentConfig) {
   let material = "invalid-agent-config";
   try {
     material = JSON.stringify({
       type: agent.type,
       endpoint: agent.endpoint,
-      apiKey: agent.apiKey,
+      apiKeyRevision: revisionDigest(agent.apiKey ?? ""),
       model: agent.model,
-      headers: agent.headers,
+      headerRevision: headerRevision(agent.headers),
       custom: agent.custom,
       capabilities: agent.capabilities
     }) ?? material;
@@ -84,6 +119,11 @@ function revisionForAgent(agent: AgentConfig) {
     // probe error. The adapter will still return a typed failure.
   }
   return revisionDigest(material);
+}
+
+function isTransientCapabilityFailure(kind: string, message: string) {
+  return kind === "network" || kind === "rate_limit" || kind === "auth" || kind === "empty" ||
+    (kind === "http" && /\bHTTP\s+5\d\d\b/i.test(message));
 }
 
 export function getTextCapabilityRevision(agent: AgentConfig, extra = "") {
@@ -122,9 +162,14 @@ export async function probeTextCapability(args: {
   const key = `${args.candidateId}:${args.revision ?? getTextCapabilityRevision(args.agent)}`;
   const cached = cache.get(key);
   if (cached) return { ...cached, cached: true };
-  if (args.signal?.aborted) return { capability: "none", ok: false, diagnostic: "Text capability probe was aborted." };
+  if (args.signal?.aborted) return { capability: "none", ok: false, status: "unknown", diagnostic: "Text capability probe was aborted." };
   if (args.agent.type === "custom" && args.agent.custom && !supportsCustomTextProtocol(args.agent)) {
-    const result = { capability: "none" as const, ok: false, diagnostic: "Custom adapter template does not expose both {{system}} and {{input}} placeholders." };
+    const result = {
+      capability: "none" as const,
+      ok: false,
+      status: "unsupported" as const,
+      diagnostic: "Custom adapter template does not expose both {{system}} and {{input}} placeholders."
+    };
     cache.set(key, result);
     return { ...result, cached: false };
   }
@@ -140,12 +185,143 @@ export async function probeTextCapability(args: {
   });
   const result = await transport.runStep(probeContext(), args.signal ?? new AbortController().signal);
   const probeResult: CapabilityProbeResult = result.status === "step" && result.step.type === "tool_call" && result.step.toolId === TEXT_PROBE_TOOL_ID
-    ? { capability: "text_protocol", ok: true, diagnostic: "Text action protocol conformance probe passed." }
-    : { capability: "none", ok: false, diagnostic: result.status === "transport_error" || result.status === "aborted"
-      ? `Text capability probe failed: ${result.message}`
-      : "Text action conformance probe did not return the exact expected tool envelope." };
-  if (!args.signal?.aborted) cache.set(key, probeResult);
+    ? { capability: "text_protocol", ok: true, status: "supported", diagnostic: "Text action protocol conformance probe passed." }
+    : {
+        capability: "none",
+        ok: false,
+        status: result.status === "protocol_error"
+          ? "unsupported"
+          : result.status === "transport_error"
+            ? isTransientCapabilityFailure(result.kind, result.message) ? "unknown" : "unsupported"
+            : "unknown",
+        diagnostic: result.status === "transport_error" || result.status === "aborted" || result.status === "context_error"
+          ? `Text capability probe failed: ${result.message}`
+          : "Text action conformance probe did not return the exact expected tool envelope."
+      };
+  if (!args.signal?.aborted && probeResult.status !== "unknown") cache.set(key, probeResult);
   return { ...probeResult, cached: false };
+}
+
+const NATIVE_PROBE_TOOL_ID = "internal:capability.probe";
+const NATIVE_PROBE_TOOL: HarnessToolDefinition = {
+  id: NATIVE_PROBE_TOOL_ID,
+  description: "A no-side-effect native tool capability probe. The runtime never dispatches this tool.",
+  inputSchema: { type: "object", additionalProperties: false },
+  intent: "context",
+  idempotency: "idempotent",
+  cancellation: "cooperative",
+  requireConfirmation: false,
+  executionKind: "internal"
+};
+
+function nativeProbeContext(): HarnessModelContext {
+  const system = [
+    "This is a no-side-effect native tool calling capability probe.",
+    "Use the required probe function exactly once. The runtime will not execute it."
+  ].join("\n");
+  const messages = [{ role: "user" as const, content: "Call the required capability probe now." }];
+  return {
+    system,
+    messages,
+    tools: [NATIVE_PROBE_TOOL],
+    chars: system.length + JSON.stringify(messages).length + JSON.stringify([NATIVE_PROBE_TOOL]).length
+  };
+}
+
+function nativeProbeLooksUnsupported(message: string) {
+  return /\bHTTP\s+(400|404|405|415|422)\b|(?:does\s+not|doesn't|not|unsupported|unavailable|disabled|invalid|not\s+allowed)[\s\S]{0,60}(?:tool|function)|(?:tool|function)[\s\S]{0,60}(?:not\s+supported|unsupported|unavailable|not\s+available|disabled|not\s+allowed|invalid)/i.test(message);
+}
+
+export async function probeNativeCapability(args: {
+  candidateId: string;
+  agent: AgentConfig;
+  adapter: AgentAdapter;
+  retry?: RetryConfig;
+  revision?: string;
+  signal?: AbortSignal;
+  cache?: TextCapabilityProbeCache;
+}): Promise<CapabilityProbeResult> {
+  const cache = args.cache ?? textCapabilityProbeCache;
+  const key = `native:${args.candidateId}:${args.revision ?? getTextCapabilityRevision(args.agent)}`;
+  const cached = cache.get(key);
+  if (cached) return { ...cached, cached: true };
+  if (args.signal?.aborted) return { capability: "none", ok: false, status: "unknown", diagnostic: "Native capability probe was aborted." };
+  if (!args.adapter.nativeChat) {
+    const result = { capability: "none" as const, ok: false, status: "unsupported" as const, diagnostic: "Native tool calling is unavailable for this adapter." };
+    cache.set(key, result);
+    return { ...result, cached: false };
+  }
+
+  const transport = createAdapterNativeToolTransport({
+    adapter: args.adapter,
+    agent: args.agent,
+    candidateId: args.candidateId,
+    toolChoice: () => "required",
+    retry: args.retry,
+    maxModelResponseChars: 4_000
+  });
+  const result = await transport.runStep(nativeProbeContext(), args.signal ?? new AbortController().signal);
+  let probeResult: CapabilityProbeResult;
+  if (result.status === "step" && result.step.type === "tool_call" && result.step.toolId === NATIVE_PROBE_TOOL_ID) {
+    probeResult = { capability: "native", ok: true, status: "supported", diagnostic: "Native tool calling capability probe passed." };
+  } else if (result.status === "step") {
+    probeResult = {
+      capability: "none",
+      ok: false,
+      status: "unsupported",
+      diagnostic: "Native capability probe did not return the required native tool call."
+    };
+  } else if (result.status === "protocol_error") {
+    probeResult = { capability: "none", ok: false, status: "unsupported", diagnostic: `Native capability probe failed: ${result.message ?? "invalid native response"}` };
+  } else if (result.status === "transport_error") {
+    const unsupported =
+      (result.kind === "http" && /\bHTTP\s+(400|404|405|415|422)\b/i.test(result.message)) ||
+      (result.kind === "provider" && nativeProbeLooksUnsupported(result.message));
+    probeResult = {
+      capability: "none",
+      ok: false,
+      status: unsupported ? "unsupported" : "unknown",
+      diagnostic: `Native capability probe failed: ${result.message}`
+    };
+  } else {
+    const diagnostic = result.status === "context_error"
+      ? result.message
+      : result.status === "aborted"
+        ? result.message
+        : "Native capability probe returned an unsupported result.";
+    probeResult = { capability: "none", ok: false, status: "unknown", diagnostic: `Native capability probe failed: ${diagnostic}` };
+  }
+  if (!args.signal?.aborted && probeResult.status !== "unknown") cache.set(key, probeResult);
+  return { ...probeResult, cached: false };
+}
+
+export async function negotiateToolCallingCapability(args: {
+  policy: ToolTransportPolicy;
+  candidateId: string;
+  agent: AgentConfig;
+  adapter: AgentAdapter;
+  retry?: RetryConfig;
+  maxModelResponseChars?: number;
+  revision?: string;
+  signal?: AbortSignal;
+  cache?: TextCapabilityProbeCache;
+}): Promise<CapabilityProbeResult> {
+  if (args.policy === "disabled") {
+    return { capability: "none", ok: false, status: "unsupported", diagnostic: "Harness tool calling is disabled by policy." };
+  }
+  if (args.policy === "native_only") {
+    return args.adapter.nativeChat
+      ? { capability: "native", ok: true, status: "supported", diagnostic: "Native transport selected by policy." }
+      : { capability: "none", ok: false, status: "unsupported", diagnostic: "Native tool calling is unavailable for this adapter." };
+  }
+  if (args.policy === "text_only") {
+    return probeTextCapability(args);
+  }
+
+  const native = await probeNativeCapability(args);
+  if (native.status === "supported") return native;
+  if (native.status !== "unsupported") return native;
+  return probeTextCapability(args);
 }
 
 export function selectHarnessCandidates(args: {
@@ -164,7 +340,11 @@ export function selectHarnessCandidates(args: {
   }
   if (catalogChars > args.budget.maxCatalogChars) return { candidates: [], errorCode: "tool_catalog_too_large" as const };
   return {
-    candidates: args.candidates.filter((candidate) => getCandidateToolCallingCapability(candidate) === args.requiredCapability),
+    candidates: args.candidates.filter((candidate) => {
+      const policy = getCandidateToolTransportPolicy(candidate);
+      return (args.requiredCapability === "native" && policy === "native_only") ||
+        (args.requiredCapability === "text_protocol" && policy === "text_only");
+    }),
     errorCode: undefined
   };
 }
