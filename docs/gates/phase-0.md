@@ -6,7 +6,7 @@
 |---|---|
 | Date (Asia/Taipei) | 2026-09-02 |
 | Executor / owner | Codex, authorized by gipapa |
-| Commit / tag | PR0 working tree; deterministic baseline tag `pre-pi-native-v2-2026-09` → `6d56d8ae23ec2a672ff1acd9353add8c601bface` |
+| Commit / tag | PR0 verified commit `71aa59f38b3c43710c1b56dda15966f2300b91e9`; deterministic baseline tag `pre-pi-native-v2-2026-09` → `6d56d8ae23ec2a672ff1acd9353add8c601bface` |
 | Provider | Groq; two configured local keys, contents not recorded |
 | Model | `openai/gpt-oss-20b` |
 | Environment | macOS arm64; Node 22.23.2 / npm 10.9.8; disposable fresh agent-browser sessions; runner child shells preserve Node 22 PATH |
@@ -52,5 +52,7 @@ missing sessions with the unmodified scenario prompts.
 - Baseline tag: `pre-pi-native-v2-2026-09`
 - Runner output and failure diagnostics: captured during the commands above and summarized in this file; no credential-bearing logs were saved.
 - Screenshots or browser session evidence: deterministic desktop/mobile/base-path screenshots are in [`docs/baseline/`](../baseline/); real sessions used disposable profiles and were cleaned up after each attempt.
+- Remote CI: [production verify/deploy run 33541521415](https://github.com/gipapa/agent-go-round/actions/runs/33541521415) passed; [preview verify/deploy run 33541767158](https://github.com/gipapa/agent-go-round/actions/runs/33541767158) passed.
+- Remote browser smoke: production and preview URLs both returned HTTP 200 with title `AgentGoRound`, heading `Agent Go Round`, and zero alert elements after Pages propagation.
 - Provider quota checked at: 2026-09-02, during each failed request; see observations above.
 - Follow-up issue: replenish/raise provider quota, then rerun `chatgpt-browser-skill` (10) and the remaining `grilling-invest-skill` sessions before claiming a complete Phase 0 real gate.

@@ -521,6 +521,7 @@ PR 0 已把現況改為：
 - `.github/workflows/gh-pages.yml` 的 `verify` job 依序跑 `npm run lint`、`npm test`、`npm run build` 與 `npm run check:bundle`（deterministic 部分）。
 - `deploy` job 明確 `needs: verify`；失敗的 gate 不會部署。
 - `.github/workflows/pages.yml` 已移除；GitHub Pages source 已確認為 `gh-pages` branch `/`，設定與回退指令見 `docs/deployment.md`。
+- commit `71aa59f38b3c43710c1b56dda15966f2300b91e9` 的 [production CI/deploy run](https://github.com/gipapa/agent-go-round/actions/runs/33541521415) 與 [preview run](https://github.com/gipapa/agent-go-round/actions/runs/33541767158) 均全綠；兩個 Pages URL 的 browser smoke 也通過。
 - 這是後續 12 個 phase 唯一的自動化安全網，不做等於整份計畫沒有 gate。
 
 ### 6.4 禁止同時大改舊 runtime

@@ -17,6 +17,9 @@ working tree.
 
 Production URL: <https://gipapa.github.io/agent-go-round/>
 
+PR0 remote verification: [CI and deploy run 33541521415](https://github.com/gipapa/agent-go-round/actions/runs/33541521415)
+passed on commit `71aa59f38b3c43710c1b56dda15966f2300b91e9`.
+
 ## Preview
 
 Run **Deploy preview to gh-pages** manually with a branch or commit, or push the
@@ -30,6 +33,11 @@ Preview URL after the first successful preview workflow run: <https://gipapa.git
 
 The preview workflow uses the same lint, test, build, and bundle checks as production
 and publishes to `gh-pages/preview/` with `keep_files: true`.
+
+PR0 preview verification: [Deploy preview run 33541767158](https://github.com/gipapa/agent-go-round/actions/runs/33541767158)
+passed on the same commit. After Pages propagation, browser smoke found HTTP 200,
+title `AgentGoRound`, heading `Agent Go Round`, and zero alert elements at both
+the production and preview URLs.
 
 ## Rollback to the Phase 0 baseline
 
