@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent and Routing · AgentGoRound Wiki</title>
+    <link rel="stylesheet" href="./wiki.css" />
+  </head>
+  <body>
+    <main class="wiki-shell">
+      <div class="wiki-breadcrumbs"><a href="./index.html">WIKI</a> / Agent and Routing</div>
+      <header class="wiki-header">
+        <div class="wiki-kicker">Concept Page</div>
+        <h1>Agent and Routing</h1>
+        <p>
+          AgentGoRound 的 agent 不直接綁 provider，而是綁到 <code>Load Balancer</code>。這讓同一個 agent 可以在多個 model、
+          keys、甚至 pseudo provider 之間切換，也讓失敗恢復與 cooldown 有固定語意。
+        </p>
+      </header>
+
+      <div class="wiki-sections">
+        <section>
+          <h2>Routing Stack</h2>
+          <ul>
+            <li><strong>Credential Pool</strong>：集中管理 endpoint 與多把 keys。</li>
+            <li><strong>Load Balancer</strong>：以 ordered instances 決定重試、delay、resume 與 failover。</li>
+            <li><strong>Agent Access Control</strong>：決定 agent 能碰哪些 docs、MCP、skills、built-in tools。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>為什麼這樣設計</h2>
+          <ul>
+            <li>把 provider 細節從 agent profile 抽離，讓 agent 比較像能力配置，而不是固定模型綁定。</li>
+            <li>失敗紀錄與 cooldown 放在 instance 層，比放在 agent 層更容易追蹤。</li>
+            <li>後來的 MAGI、tutorial、browser skill runtime 都可以直接吃這套 routing abstraction。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>See Also</h2>
+          <div class="wiki-nav">
+            <a class="wiki-link-card" href="browser-and-skill-runtime.html">
+              <strong>Browser and Skill Runtime</strong>
+              <span>看 routing 如何支撐 multi-turn browser workflows。</span>
+            </a>
+            <a class="wiki-link-card" href="magi-and-special-modes.html">
+              <strong>MAGI and Special Modes</strong>
+              <span>看三賢人模式如何依賴預先存在的三個 agent。</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

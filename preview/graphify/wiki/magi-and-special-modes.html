@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MAGI and Special Modes · AgentGoRound Wiki</title>
+    <link rel="stylesheet" href="./wiki.css" />
+  </head>
+  <body>
+    <main class="wiki-shell">
+      <div class="wiki-breadcrumbs"><a href="./index.html">WIKI</a> / MAGI and Special Modes</div>
+      <header class="wiki-header">
+        <div class="wiki-kicker">Concept Page</div>
+        <h1>MAGI and Special Modes</h1>
+        <p>
+          MAGI 是這個專案裡最明顯帶有「產品表演性」的模式：它不是多 agent generic framework，而是把
+          <code>Melchior / Balthasar / Casper</code> 三個固定角色變成受控的 deliberation system。
+        </p>
+      </header>
+
+      <div class="wiki-sections">
+        <section>
+          <h2>兩種模式</h2>
+          <ul>
+            <li><strong>Magi Vote</strong>：三賢人同時表決，各自回 ballot，再做最終裁定。</li>
+            <li><strong>Magi Consensus</strong>：三賢人持續交換摘要與理由，直到一致或 deadlock。</li>
+          </ul>
+        </section>
+
+        <section>
+          <h2>設計邊界</h2>
+          <ul>
+            <li>三個 agent 名稱固定，且必須預先存在。</li>
+            <li>三個角色各自綁定固定的 MAGI skill，不吃全域 docs、MCP、built-in tools、其他 user skills。</li>
+            <li>UI 呈現不是普通 chat bubble，而是 EVA 風格的裁決面板。</li>
+          </ul>
+          <div class="wiki-callout">
+            MAGI 的重點不是讓 agent 自由發揮，而是把角色差異、回合推進、最終裁決，都收束在一個可觀察的前端介面裡。
+          </div>
+        </section>
+
+        <section>
+          <h2>See Also</h2>
+          <div class="wiki-nav">
+            <a class="wiki-link-card" href="agent-and-routing.html">
+              <strong>Agent and Routing</strong>
+              <span>看 MAGI 如何依賴三個預先配置好的 agents。</span>
+            </a>
+            <a class="wiki-link-card" href="visualization-and-rendering.html">
+              <strong>Visualization and Rendering</strong>
+              <span>看 MAGI 的 UI 呈現如何成為產品辨識度的一部分。</span>
+            </a>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
