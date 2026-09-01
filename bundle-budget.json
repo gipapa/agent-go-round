@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "budgets": {
+    "initialRouteJsGzipBytes": 304550,
+    "maxSingleChunkGzipBytes": 304550,
+    "totalGzipBytes": 371844
+  },
+  "measurement": {
+    "gzip": "gzip level 9 per dist file, summed",
+    "initialRoute": "JavaScript files referenced by dist/index.html",
+    "maxSingleChunk": "largest .js file in dist"
+  }
+}

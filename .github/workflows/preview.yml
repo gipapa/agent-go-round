@@ -1,21 +1,29 @@
-name: CI and deploy to GitHub Pages
+name: Deploy preview to gh-pages
 
 on:
   push:
-    branches: ["main"]
+    branches: ["next"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or commit to preview"
+        required: true
+        default: "next"
 
 permissions:
   contents: write
 
 concurrency:
   group: "gh-pages"
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -25,7 +33,7 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          BASE_PATH: "/${{ github.event.repository.name }}/"
+          BASE_PATH: "/${{ github.event.repository.name }}/preview/"
       - run: npm run check:bundle
 
   deploy:
@@ -33,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -40,9 +50,10 @@ jobs:
       - run: npm ci
       - run: npm run build
         env:
-          BASE_PATH: "/${{ github.event.repository.name }}/"
+          BASE_PATH: "/${{ github.event.repository.name }}/preview/"
       - uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: dist
+          destination_dir: preview
           keep_files: true

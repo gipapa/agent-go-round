@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "predev": "node scripts/sync-graphify.mjs",
     "dev": "vite",
@@ -11,6 +14,7 @@
     "lint": "eslint src --max-warnings 0",
     "preview": "vite preview",
     "deploy": "vite build && gh-pages -d dist",
+    "check:bundle": "node scripts/check-bundle-budget.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

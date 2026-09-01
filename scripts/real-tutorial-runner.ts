@@ -96,7 +96,7 @@ async function loadScenarios(): Promise<TutorialScenarioDefinition[]> {
 }
 
 function startManagedProcess(name: string, cwd: string, command: string) {
-  const proc = spawn("bash", ["-lc", command], {
+  const proc = spawn("bash", ["-c", command], {
     cwd,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -239,7 +239,7 @@ async function isMcpServerReady() {
 }
 
 async function runShell(command: string) {
-  await execFile("bash", ["-lc", command], { cwd: ROOT });
+  await execFile("bash", ["-c", command], { cwd: ROOT });
 }
 
 async function waitForRestartedHttp(url: string, timeoutMs: number, hadServerBefore: boolean) {

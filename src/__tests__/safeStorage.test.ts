@@ -99,7 +99,14 @@ describe("safeStorage", () => {
       updatedAt: 0
     }]);
 
-    const stored = JSON.parse(localStorage.getItem("agr_load_balancers_v1") || "{}");
+    const stored = JSON.parse(localStorage.getItem("agr_load_balancers_v1") || "{}") as {
+      data?: Array<{
+        instances?: Array<{
+          toolTransportPolicy?: unknown;
+          toolCallingCapability?: unknown;
+        }>;
+      }>;
+    };
     expect(stored.data[0].instances[0].toolTransportPolicy).toBe("text_only");
     expect(stored.data[0].instances[0].toolCallingCapability).toBeUndefined();
   });
