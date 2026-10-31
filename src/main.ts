@@ -143,7 +143,7 @@ const get = <T extends HTMLElement>(id: string): T => {
 get<HTMLInputElement>("base-url").value = storedBaseUrl || configuredBaseUrl;
 get<HTMLInputElement>("model").value = storedModel || configuredModel;
 get<HTMLInputElement>("api-key").value = storedApiKey;
-get<HTMLInputElement>("remember-key").checked = Boolean(storedApiKey);
+get<HTMLInputElement>("remember-key").checked = true;
 
 const terminal = get<HTMLDivElement>("terminal");
 const promptElement = get<HTMLTextAreaElement>("prompt");
