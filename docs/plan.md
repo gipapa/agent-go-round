@@ -2,7 +2,7 @@
 
 日期：2026-10-31
 
-狀態：M0-A 實作中；最小 browser harness、Pi 0.84.4、scripted regression 與 Groq adapter 已建立，M0-B 尚未開始。
+狀態：M0-A 已建立；最小 browser harness、Pi 0.84.4、scripted regression 與 Groq adapter 已建立。M0-B 已完成 Herdr-inspired tab shell 第一版，跨 tab 訊息與回覆仍待實作。
 
 ## 目標
 
@@ -196,4 +196,4 @@ Groq 是第一個真實 provider 與早期對話驗收目標；日常回歸仍�
 
 評估 ChatGPT 訂閱 adapter、MCP discovery、context compaction 與 follow-up。模型可呼叫的跨 tab 詢問工具需沿用早期 router，加入授權、allow-list 與有限往返預算。Tree UI、steering、多模態、codemode、自動多代理編排及 voice 需有實際需求與獨立驗收後才加入。
 
-本次已開始 M0-A 實作：scripted regression、production build 與 browser smoke 已通過；Groq 真實額度驗收、M0-B tabs/跨 tab 對話及後續里程碑仍未完成，不宣稱 Groq live compatibility 或完整視窗產品驗收已通過。
+本次已完成 M0-B 視覺與互動第一版：Herdr-inspired sidebar、workspace tabs、獨立 agent pane、狀態標記、terminal-style prompt 與 provider drawer 已通過 browser smoke；Groq 真實額度驗收、跨 tab 訊息／回覆及後續里程碑仍未完成，不宣稱 Groq live compatibility 或完整產品驗收已通過。

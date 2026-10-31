@@ -2,7 +2,7 @@
 
 一個以穩定、簡單與高度客製化為目標的前端 agent harness，參考 Pi 的小核心與擴充方式，讓其他專案能加入自己的模型、工具與上下文。
 
-目前 `master` 已有 M0-A 的最小可執行 browser harness；M0-B 的 tabs 與跨 tab 對話尚未開始。
+目前 `master` 已有 M0-A 的最小可執行 browser harness，以及 M0-B 的 Herdr-inspired tab shell 第一版；跨 tab 訊息與回覆尚未完成。
 
 - [設計與實作規劃](docs/plan.md)
 - 完整舊版保存在 `v2` 分支，封存起點為 `73285d6`；舊版未完成的驗收紀錄亦保留在該分支。
