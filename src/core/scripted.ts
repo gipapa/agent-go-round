@@ -1,4 +1,4 @@
-import { AgentSession } from "./session";
+import { AgentSession, type SessionEventStore, type ToolApproval } from "./session";
 import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEvent, type Model } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 
@@ -57,7 +57,7 @@ export function createScriptedStreamFn(responses: readonly string[], delayMs = 0
   };
 }
 
-export function createScriptedSession(responses: readonly string[], options?: { sessionId?: string; delayMs?: number }): AgentSession {
+export function createScriptedSession(responses: readonly string[], options?: { sessionId?: string; delayMs?: number; eventStore?: SessionEventStore; approval?: ToolApproval; deadlineMs?: number; maxOutputCharacters?: number }): AgentSession {
   const model: Model<"openai-completions"> = {
     id: "scripted",
     name: "Scripted model",
@@ -73,6 +73,10 @@ export function createScriptedSession(responses: readonly string[], options?: { 
   return new AgentSession({
     sessionId: options?.sessionId ?? "scripted-session",
     model,
-    streamFn: createScriptedStreamFn(responses, options?.delayMs)
+    streamFn: createScriptedStreamFn(responses, options?.delayMs),
+    eventStore: options?.eventStore,
+    approval: options?.approval,
+    deadlineMs: options?.deadlineMs,
+    maxOutputCharacters: options?.maxOutputCharacters
   });
 }

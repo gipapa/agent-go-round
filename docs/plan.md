@@ -2,7 +2,7 @@
 
 日期：2026-10-31
 
-狀態：M0-A 已建立；最小 browser harness、Pi 0.84.4、scripted regression 與 Groq adapter 已建立。M0-B 已完成 Herdr-inspired tab shell 第一版，跨 tab 訊息與回覆仍待實作。
+狀態：M0-A 已建立；最小 browser harness、Pi 0.84.4、scripted regression 與 Groq adapter 已建立。M0-B 的 Herdr-inspired tab shell 與第一版使用者觸發跨 tab 訊息／關聯回覆已建立；M0-B.1 的手機／popup 共用直式 surface 已完成第一輪實作與 browser smoke，待使用者實際視覺確認。M3 的 JS loader／iframe bridge 第一輪已完成，並以不同 localhost origin 驗證 iframe handshake／host tool catalog；完整嵌入驗收仍待補齊。
 
 ## 目標
 
@@ -81,7 +81,9 @@ UI 與核心分離，簡潔文字介面、浮動 widget 與宿主自行製作的
 
 本規劃的 tab 先指同一應用內的對話分頁。跨瀏覽器分頁、跨裝置或對現有 Herdr terminal agents 的連線不屬於這次基本驗收，也不預設需要 BroadcastChannel 或外部 Herdr 服務。
 
-早期 layout：精簡 tab 列、active tab 的文字對話區、固定輸入區與送出／停止操作。Tab 顯示名稱、working/idle/error 等狀態及未讀提示；詳細 trace 可展開。先在 desktop 與 mobile 寬度確認對話、長訊息、捲動與鍵盤操作可用，完整 split-pane/layout 編輯延後。
+早期 layout：精簡 tab 列、active tab 的文字對話區、固定輸入區與送出／停止操作。Tab 顯示名稱、working/idle/error 等狀態及未讀提示；詳細 trace 可展開。
+
+下一個 UI 優先項目是手機與 popup 的共用直式呈現。兩者共用同一套 vertical surface 規則：單欄內容、固定且可見的標題／關閉操作、可獨立捲動的內容區、底部操作列、相同的欄距／內距／表單節奏與 touch target；避免在窄寬度出現水平捲動或被鍵盤遮住。手機將這套 surface 展開為全畫面；popup 則以 overlay／sheet 呈現，但不另外設計一套表單版型。桌面上的 popup 可以保留錨定位置，內容仍維持單欄直式。先完成這個共用基礎，再確認 desktop、mobile 與 popup 的對話、長訊息、捲動及鍵盤操作，完整 split-pane/layout 編輯延後。
 
 每個 tab 綁定穩定 `tabId`、`sessionId` 與自己的 runtime、history、draft、error、run 狀態。切換 tab 不會取消執行，也不會把串流或草稿寫入其他 tab。關閉 tab 會明確銷毀該 runtime；同時執行中的取消與 late result 必須被正確處理。
 
@@ -178,22 +180,57 @@ Groq 是第一個真實 provider 與早期對話驗收目標；日常回歸仍�
 
 這是第一個使用者產品驗收點，安排在 skills、MCP、持久化與完整工具層之前。
 
+第一版實作紀錄（2026-10-31）：
+
+- `src/core/tab-router.ts` 定義 `messageId`、`correlationId`、來源／目的 tab、明確 question/reply identity 與 route outcome；重複投遞去重，busy 不建立 queue，目標關閉、abort、error 與 late result 可辨識。
+- UI 的 `ask another tab` 會在送出前顯示來源、目的與完整內容；接收端以來源資料／user input 顯示，回覆只寫回發送端 transcript，不自動觸發發送端模型。
+- `src/core/tab-router.test.ts` 覆蓋成功回覆、busy rejection、duplicate、target closed、late result 與 aborted reply；browser smoke 已驗證 desktop 對話、360×740 mobile、路由預覽／回覆及既有 provider dialog 不互相污染。
+
+尚待確認：使用者實際視覺／觸控接受度與 Groq live acceptance；這些不由 scripted regression 代替。
+
+### M0-B.1：手機與 popup 的共用直式呈現（第一輪實作完成）
+
+先不擴充工具或跨 tab 功能，處理既有 Herdr-inspired shell 在窄畫面與彈出視窗中的呈現。手機主畫面與 provider/settings popup 共用一套 vertical surface layout；只由外層決定是 full-screen mobile surface 或 anchored/overlay popup。共用內容順序、單欄表單、間距、按鈕排列、捲動區與 safe-area／鍵盤處理，避免 mobile 與 popup 逐漸分叉。
+
+驗收至少包含：
+
+1. 手機寬度下 sidebar、workspace header、tabs、agent pane 與 composer 不產生水平捲動；主要操作仍可觸控，長訊息與輸入區能正常捲動。
+2. Provider/settings popup 在手機上以同一套直式內容呈現，標題、關閉、表單、remember/clear、狀態訊息與底部操作順序一致；開啟鍵盤後，輸入欄與提交操作不被遮住。
+3. Popup 在 desktop 保持 overlay 可用，但內容仍是單欄直式，不引入第二種表單排列；開關、焦點與 Escape／關閉操作不污染目前 tab 狀態。
+4. 以 browser smoke 實際檢查 desktop、窄手機寬度、popup 開啟與鍵盤狀態；記錄截圖與使用者視覺調整事項，確認後才回到跨 tab 訊息／回覆。
+
+完成紀錄（2026-10-31）：
+
+- `src/main.ts` 已加入 provider surface 的 dialog 語意、遮罩點擊關閉、Escape、focus trap、關閉後 focus 回復與 visual viewport 高度同步；popup 開關不改變 active tab。
+- `src/styles.css` 已加入共用單欄 surface：desktop anchored overlay、mobile full-screen、固定標題／底部操作列、獨立捲動、safe-area、窄寬度防水平溢出與鍵盤可用高度處理。
+- Browser smoke 已檢查 1280×800 desktop、360×740 mobile、360×400 keyboard-height viewport；確認 document 無水平捲動、mobile popup 寬高跟隨 viewport、Connect 操作仍在可視範圍、Escape 後 focus 回到 provider 按鈕且 tab 不變。
+- `npm test`（目前 51 tests）、`npm run typecheck`、`npm run build` 均通過。
+- Smoke 中發現並修正 `[hidden]` 被 flex layout 覆蓋的問題；popup 關閉狀態現已明確維持 `display: none`。
+
+尚待確認：使用者在實際手機／瀏覽器上的視覺、觸控、長訊息捲動與軟鍵盤體驗；跨 tab 的 scripted/browser 第一輪已完成，但仍未宣稱 Groq live compatibility 或完整產品驗收通過。
+
 ### M1：可靠的小核心
 
 在已可對話的核心補齊 typed tools、schema validation、approval、執行上限、版本化事件、memory store 與 deterministic regression。Pi 保持唯一 loop owner，工具預設依序執行；驗證工具往返、拒絕、取消、unknown outcome 與 late result。核心接受一個模型與少數工具即可執行，不依賴 UI、React、MCP 或 load balancer。
 
 從本階段就讓獨立小範例透過公開 SDK/module 入口使用核心，避免到嵌入階段才發現 App 耦合。Groq 工具測試與上述三個任務分開記錄，基本聊天成功不能當成 tool-loop 通過。
 
+第一輪實作紀錄（2026-10-31）：`AgentSession` 現在可注入 Pi `AgentTool`，由 Pi 負責 schema validation 與唯一 tool loop；產品邊界提供 `requiresApproval`、approval callback、每次 run 的 `maxToolCalls`、`deadlineMs`、`maxOutputCharacters`、abort-safe approval、version 1 public events 與 `MemorySessionEventStore`。`src/core/session-tools.test.ts` 與 `src/core/session.test.ts` 以 scripted fixtures 覆蓋 approved execution、approval rejection、invalid args、call limit、deadline、output limit、event recording 與 approval pending 時取消；`src/core/provider-transport.test.ts` 另以 localhost OpenAI-compatible SSE 驗證真實 provider adapter 的文字串流與 tool round-trip，但這不取代 Groq live acceptance。
+
 ### M2：持久化、恢復與最小 skills
 
 依 M0-B 使用者回饋調整已存在的視窗；加入可替換 persistence，驗證 reload/recovery、tab/session identity 與未完成操作。補上最小 instructions/skills 載入，沿用同一工具與事件契約。完成三個 Groq 真實工具短任務，留下實際結果與失敗分類。
 
-### M3：可嵌入版本
+第一輪 persistence 實作紀錄（2026-10-31）：新增 `SessionStore`、`MemorySessionStore` 與注入 storage 的 `LocalStorageSessionStore`；`AgentSession.snapshot()`／`save()`／`fromSnapshot()` 保留 stable `sessionId`、model、system prompt 與 transcript，running session 不可 snapshot，snapshot version／identity／JSON/storage failure 均明確回報。`src/core/persistence.test.ts` 覆蓋 memory reload、local storage、identity mismatch、running session 與 event session filter。另加入 `WorkspaceStore`／`LocalStorageWorkspaceStore`，UI 會保存 tabs、active tab、draft、transcript 與 session snapshot，reload 後還原 identity；browser smoke 已驗證三個 tabs 與未送出 draft 可恢復，且 workspace snapshot 不承載 provider key。`LocalStorageSessionEventStore` 與 `inspectSessionRecovery()` 會保留可 replay 的 lifecycle metadata，reload 時只顯示 interrupted／outcome-unknown review notice，不自動重送工具副作用。`MemorySkillLoader`、`loadSkills()` 與 `composeSystemPrompt()` 提供按需、去重、大小受限的 deterministic skills 組合；`src/core/workspace-store.test.ts`、`src/core/session-recovery.test.ts` 與 `src/core/skills.test.ts` 覆蓋主要失敗路徑。Groq 三任務 live runner 已加入 `src/acceptance/groq-live.test.ts`／`npm run test:groq`，但本環境未提供 key，因此沒有虛構 PASS 結果。
 
-交付 JS loader、iframe bridge、SDK 入口與範例。純 HTML 與另一個框架專案完成導入，驗證隔離、destroy/remount 與宿主工具。提供清楚的認證／部署說明。
+### M3：可嵌入版本（第一輪 bridge 實作）
+
+交付 JS loader、iframe bridge、SDK 入口與範例。目標使用方式是他人 HTML 以 `<script src=".../embed.js">` 載入，在宿主頁面 mount widget 或 popup；內部以 iframe 隔離 UI，再用 `postMessage` 傳遞 `ready`、`open`、`close`、`prompt`、`error` 等事件。純 HTML 與另一個框架專案完成導入，驗證隔離、destroy/remount 與宿主工具。提供清楚的認證／部署說明。
+
+第一輪 embed 實作已完成：`src/embed.ts` 產生可用 ES module loader，支援 script data attributes、`window.AgentGoRound.mount()`、popup／inline surface、`open()`、`close()`、`toggle()`、`postMessage()`、`registerTool()`、`destroy()` 與 `ready` bridge；`src/core/embed-bridge.ts` 固定 bridge v2 的 instance／session／tool-call／request identity、allow-list、parent-side schema validation、host approval round-trip、一次性參數綁定 approval token、AbortSignal cancellation、timeout 與 `outcome_unknown`。`public/embed-example.html` 可作為純 HTML host page，`examples/react-host` 提供獨立 React host，兩者都註冊 read-only host tool；`src/main.ts` 已把 host tool catalog 映射到 Pi `AgentSession`，工具結果只透過已驗證的 parent origin 回傳，prompt／error lifecycle 也帶有 session／run identity。Browser smoke 已驗證 production preview 的同源與不同 localhost origin iframe handshake、host tool catalog ack、protected host tool approval callback、popup open／close、React mount 與 destroy/remount 基本 lifecycle。Bridge v2 與 SDK `0.2.0` 以 centralized exact-match compatibility guard fail closed；`npm run verify:dist` 會在部署前檢查 app、loader 與 example artifacts。已用 `VITE_BASE_PATH=/agent-go-round/ npm run build` 驗證 `index.html` assets、`embed.js` 與 GitHub Pages project-site 路徑；loader 預設 app URL 也會從 `embed.js` 所在目錄解析。正式遠端部署仍需 push 後由 GitHub Actions 發布並再次驗證公開 URL。
 
 ### M4：按實際需求擴充
 
 評估 ChatGPT 訂閱 adapter、MCP discovery、context compaction 與 follow-up。模型可呼叫的跨 tab 詢問工具需沿用早期 router，加入授權、allow-list 與有限往返預算。Tree UI、steering、多模態、codemode、自動多代理編排及 voice 需有實際需求與獨立驗收後才加入。
 
-本次已完成 M0-B 視覺與互動第一版：Herdr-inspired sidebar、workspace tabs、獨立 agent pane、狀態標記、terminal-style prompt 與 provider drawer 已通過 browser smoke；Groq 真實額度驗收、跨 tab 訊息／回覆及後續里程碑仍未完成，不宣稱 Groq live compatibility 或完整產品驗收已通過。
+目前已完成 M0-B 視覺與互動第一版、M0-B.1 手機／popup 共用直式 surface 第一輪實作與 browser smoke、M1 typed tool boundary 第一輪 deterministic regression、M2 persistence／workspace／skills／recovery 第一輪 regression，以及 M3 embed loader／iframe bridge／host-tool 第一輪 regression：Herdr-inspired sidebar、workspace tabs、獨立 agent pane、provider dialog、responsive surface、focus／Escape、使用者觸發跨 tab route、Pi-owned tool loop、approval／limit policy、versioned event sink、outcome-unknown handling、memory/local snapshot store、workspace reload、recovery review notice、on-demand skills composition、script embed、iframe isolation、origin-checked postMessage handshake、allow-listed host tools、approval-token permission boundary、bridge v2／SDK 0.2.0 exact-match compatibility 與 widget lifecycle 已建立。Groq live tool acceptance、公開 URL 更新與使用者實際視覺／觸控接受度仍需外部驗證，不宣稱 Groq live compatibility 或完整產品驗收已通過。

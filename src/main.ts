@@ -1,7 +1,11 @@
 import "./styles.css";
+import type { TSchema } from "@earendil-works/pi-ai";
 import { createGroqRuntime, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL } from "./core/provider";
 import { createScriptedSession } from "./core/scripted";
-import { AgentSession, type SessionEvent } from "./core/session";
+import { AgentSession, inspectSessionRecovery, LocalStorageSessionEventStore, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
+import { TabRouter, type TabRouteEvent } from "./core/tab-router";
+import { LocalStorageWorkspaceStore, type WorkspaceSnapshot, type WorkspaceTabSnapshot } from "./core/workspace-store";
+import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
 type TabStatus = "working" | "idle" | "done" | "blocked" | "error";
 type TranscriptRole = "system" | "input" | "assistant";
@@ -24,6 +28,8 @@ type AgentTab = {
   activeLineId?: string;
   status: TabStatus;
   unread: number;
+  draft: string;
+  unregisterRoute: () => void;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -31,6 +37,7 @@ if (!app) throw new Error("Missing #app");
 
 const configuredBaseUrl = import.meta.env.VITE_GROQ_BASE_URL || DEFAULT_GROQ_BASE_URL;
 const configuredModel = import.meta.env.VITE_GROQ_MODEL || DEFAULT_GROQ_MODEL;
+const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
   apiKey: "agent-go-round.groq.api-key",
   baseUrl: "agent-go-round.groq.base-url",
@@ -39,7 +46,7 @@ const STORAGE_KEYS = {
 
 function readStored(key: string): string {
   try {
-    return localStorage.getItem(key) ?? "";
+    return browserStorage.getItem(key) ?? "";
   } catch {
     return "";
   }
@@ -55,6 +62,13 @@ const state = {
   provider: "scripted" as "scripted" | "groq",
   nextTabNumber: 3
 };
+const tabRouter = new TabRouter();
+const workspaceStore = new LocalStorageWorkspaceStore(browserStorage);
+const sessionEventStore = new LocalStorageSessionEventStore(browserStorage);
+const hostToolSpecs = new Map<string, HostToolSpec>();
+const pendingHostToolCalls = new Map<string, { resolve: (result: unknown) => void; reject: (error: unknown) => void; cleanup: () => void }>();
+const pendingHostApprovals = new Map<string, { resolve: (decision: HostToolApprovalDecision) => void; cleanup: () => void; sessionId: string; toolCallId: string; signal: AbortSignal }>();
+const approvedHostToolTokens = new Map<string, string>();
 
 app.innerHTML = `
   <div class="app-shell">
@@ -104,7 +118,7 @@ app.innerHTML = `
       <section class="pane" aria-label="Active agent pane">
         <header class="pane-header">
           <div class="pane-agent-title"><span id="pane-status-dot" class="status-dot idle">○</span><strong id="pane-title">main</strong><span class="agent-type">Pi agent</span></div>
-          <div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div>
+          <div class="pane-header-actions"><div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div><button id="route-tab" class="pane-action" type="button">ask another tab</button></div>
         </header>
 
         <div id="terminal" class="terminal" role="log" aria-live="polite"></div>
@@ -115,20 +129,38 @@ app.innerHTML = `
           <textarea id="prompt" rows="1" placeholder="Ask this agent to do something…" autocomplete="off" required></textarea>
           <div class="terminal-form-actions"><span id="run-status" class="run-status">idle</span><button id="stop" class="terminal-button stop-button" type="button" disabled>esc stop</button><button id="send" class="terminal-button send-button" type="submit">send</button></div>
         </form>
-        <footer class="terminal-footer"><span>enter send · shift+enter newline</span><span id="footer-model">scripted model · ~/agent-go-round · master</span></footer>
+        <footer class="terminal-footer"><span id="workspace-status" role="status" aria-live="polite">workspace · local</span><span id="footer-model">scripted model · ~/agent-go-round · master</span></footer>
       </section>
 
-      <aside id="settings-drawer" class="settings-drawer" aria-label="Provider settings" aria-hidden="true" hidden>
-        <div class="drawer-heading"><div><span class="drawer-kicker">RUNTIME</span><h2>Provider connection</h2></div><button id="close-settings" class="drawer-close" type="button" aria-label="Close settings">×</button></div>
-        <p class="drawer-copy">The key is saved in this browser's local storage when enabled. It is never added to a transcript.</p>
-        <form id="provider-form" class="provider-form">
-          <label>Base URL<input id="base-url" type="url" autocomplete="url" /></label>
-          <label>Model<input id="model" type="text" autocomplete="off" /></label>
-          <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
-          <div class="remember-row"><label class="remember-toggle"><input id="remember-key" type="checkbox" /> Remember this key in this browser</label><button id="clear-key" class="clear-key" type="button">clear saved key</button></div>
-          <div class="drawer-actions"><button id="use-scripted" class="drawer-button muted-button" type="button">Use demo</button><button class="drawer-button" type="submit">Connect Groq</button></div>
-        </form>
-        <p id="settings-status" class="settings-status" role="status"></p>
+      <div id="route-backdrop" class="route-backdrop" aria-hidden="true" hidden></div>
+      <aside id="route-dialog" class="route-dialog" role="dialog" aria-modal="true" aria-labelledby="route-title" aria-hidden="true" hidden>
+        <div class="surface-header"><div><span class="drawer-kicker">TAB ROUTE</span><h2 id="route-title">Ask another tab</h2></div><button id="close-route" class="drawer-close" type="button" aria-label="Close tab route">×</button></div>
+        <div class="surface-scroll">
+          <p class="drawer-copy">Send one explicit question to an idle tab. The receiving tab gets it as user input; the reply will return here without starting another run.</p>
+          <form id="route-form" class="provider-form">
+            <label>Target tab<select id="route-target" required></select></label>
+            <label>Question<textarea id="route-message" rows="5" placeholder="What should the other tab check?" required></textarea></label>
+            <p id="route-preview" class="route-preview" aria-live="polite"></p>
+            <p id="route-status" class="settings-status" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+        <div class="surface-actions"><button id="cancel-route" class="drawer-button muted-button" type="button">Cancel</button><button id="send-route" class="drawer-button" type="submit" form="route-form">Send to tab</button></div>
+      </aside>
+
+      <div id="settings-backdrop" class="settings-backdrop" aria-hidden="true" hidden></div>
+      <aside id="settings-drawer" class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-label="Provider settings" aria-hidden="true" hidden>
+        <div class="surface-header"><div><span class="drawer-kicker">RUNTIME</span><h2 id="settings-title">Provider connection</h2></div><button id="close-settings" class="drawer-close" type="button" aria-label="Close settings">×</button></div>
+        <div class="surface-scroll">
+          <p class="drawer-copy">The key is saved in this browser's local storage when enabled. It is never added to a transcript.</p>
+          <form id="provider-form" class="provider-form">
+            <label>Base URL<input id="base-url" type="url" autocomplete="url" /></label>
+            <label>Model<input id="model" type="text" autocomplete="off" /></label>
+            <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
+            <div class="remember-row"><label class="remember-toggle"><input id="remember-key" type="checkbox" /> Remember this key in this browser</label><button id="clear-key" class="clear-key" type="button">clear saved key</button></div>
+            <p id="settings-status" class="settings-status" role="status" aria-live="polite"></p>
+          </form>
+        </div>
+        <div class="surface-actions"><button id="use-scripted" class="drawer-button muted-button" type="button">Use demo</button><button class="drawer-button" type="submit" form="provider-form">Connect Groq</button></div>
       </aside>
     </main>
   </div>
@@ -143,14 +175,100 @@ const get = <T extends HTMLElement>(id: string): T => {
 get<HTMLInputElement>("base-url").value = storedBaseUrl || configuredBaseUrl;
 get<HTMLInputElement>("model").value = storedModel || configuredModel;
 get<HTMLInputElement>("api-key").value = storedApiKey;
-get<HTMLInputElement>("remember-key").checked = true;
+get<HTMLInputElement>("remember-key").checked = false;
 
 const terminal = get<HTMLDivElement>("terminal");
 const promptElement = get<HTMLTextAreaElement>("prompt");
 const sendButton = get<HTMLButtonElement>("send");
 const stopButton = get<HTMLButtonElement>("stop");
+const routeButton = get<HTMLButtonElement>("route-tab");
+const routeBackdrop = get<HTMLDivElement>("route-backdrop");
+const routeDialog = get<HTMLElement>("route-dialog");
+const routeTarget = get<HTMLSelectElement>("route-target");
+const routeMessage = get<HTMLTextAreaElement>("route-message");
+const routePreview = get<HTMLParagraphElement>("route-preview");
+const routeStatus = get<HTMLParagraphElement>("route-status");
+const sendRouteButton = get<HTMLButtonElement>("send-route");
 const settingsDrawer = get<HTMLElement>("settings-drawer");
+const settingsBackdrop = get<HTMLDivElement>("settings-backdrop");
 const settingsStatus = get<HTMLParagraphElement>("settings-status");
+const workspaceStatus = get<HTMLSpanElement>("workspace-status");
+let routeSourceTabId: string | null = null;
+let routeReturnFocus: HTMLElement | null = null;
+let settingsReturnFocus: HTMLElement | null = null;
+let workspaceSaveTimer: number | undefined;
+let workspaceSaveInFlight = false;
+let workspaceSaveQueued = false;
+
+function syncViewportHeight(): void {
+  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  document.documentElement.style.setProperty("--viewport-height", `${Math.round(viewportHeight)}px`);
+}
+
+syncViewportHeight();
+window.addEventListener("resize", syncViewportHeight);
+window.visualViewport?.addEventListener("resize", syncViewportHeight);
+window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+
+function setWorkspaceStatus(message: string): void {
+  workspaceStatus.textContent = message;
+}
+
+function workspaceTabSnapshot(tab: AgentTab): WorkspaceTabSnapshot {
+  return {
+    id: tab.id,
+    name: tab.name,
+    branch: tab.branch,
+    path: tab.path,
+    draft: tab.draft,
+    transcript: tab.transcript.map(({ id, role, text, streaming }) => ({ id, role, text, ...(streaming ? { streaming: true } : {}) })),
+    session: tab.session.snapshot()
+  };
+}
+
+function workspaceSnapshot(): WorkspaceSnapshot {
+  return {
+    version: 1,
+    activeTabId: state.activeTabId,
+    nextTabNumber: state.nextTabNumber,
+    provider: state.provider,
+    tabs: state.tabs.map(workspaceTabSnapshot),
+    savedAt: Date.now()
+  };
+}
+
+async function persistWorkspace(): Promise<void> {
+  if (workspaceSaveInFlight) {
+    workspaceSaveQueued = true;
+    return;
+  }
+  if (state.tabs.some((tab) => tab.session.isRunning)) {
+    setWorkspaceStatus("workspace · waiting for idle run");
+    return;
+  }
+  workspaceSaveInFlight = true;
+  setWorkspaceStatus("workspace · saving…");
+  try {
+    await workspaceStore.save(workspaceSnapshot());
+    setWorkspaceStatus("workspace · saved");
+  } catch (error) {
+    setWorkspaceStatus(`workspace · save failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    workspaceSaveInFlight = false;
+    if (workspaceSaveQueued) {
+      workspaceSaveQueued = false;
+      void persistWorkspace();
+    }
+  }
+}
+
+function scheduleWorkspaceSave(): void {
+  if (workspaceSaveTimer !== undefined) window.clearTimeout(workspaceSaveTimer);
+  workspaceSaveTimer = window.setTimeout(() => {
+    workspaceSaveTimer = undefined;
+    void persistWorkspace();
+  }, 180);
+}
 
 function persistProviderSettings(): void {
   const apiKey = get<HTMLInputElement>("api-key").value.trim();
@@ -158,10 +276,10 @@ function persistProviderSettings(): void {
   const model = get<HTMLInputElement>("model").value.trim();
   const remember = get<HTMLInputElement>("remember-key").checked;
   try {
-    if (remember && apiKey) localStorage.setItem(STORAGE_KEYS.apiKey, apiKey);
-    else localStorage.removeItem(STORAGE_KEYS.apiKey);
-    if (baseUrl) localStorage.setItem(STORAGE_KEYS.baseUrl, baseUrl);
-    if (model) localStorage.setItem(STORAGE_KEYS.model, model);
+    if (remember && apiKey) browserStorage.setItem(STORAGE_KEYS.apiKey, apiKey);
+    else browserStorage.removeItem(STORAGE_KEYS.apiKey);
+    if (baseUrl) browserStorage.setItem(STORAGE_KEYS.baseUrl, baseUrl);
+    if (model) browserStorage.setItem(STORAGE_KEYS.model, model);
   } catch {
     settingsStatus.textContent = "Browser storage is unavailable; the key will only live for this page.";
   }
@@ -173,7 +291,149 @@ function makeId(prefix: string): string {
 }
 
 function scriptedSession(tabId: string, responses: readonly string[]): AgentSession {
-  return createScriptedSession(responses, { sessionId: `session-${tabId}`, delayMs: 10 });
+  return createScriptedSession(responses, { sessionId: `session-${tabId}`, delayMs: 10, eventStore: sessionEventStore, approval: requestHostToolApproval });
+}
+
+function hostToolText(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function hostToolApprovalKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}:${toolCallId}`;
+}
+
+function requestHostTool(sessionId: string, toolCallId: string, toolName: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
+  if (!embedParentOrigin || !embedInstanceId) return Promise.reject(new Error("Host tool bridge is unavailable outside an embed"));
+  const requestId = makeId("host-request");
+  const approvalKey = hostToolApprovalKey(sessionId, toolCallId);
+  const approvalToken = approvedHostToolTokens.get(approvalKey);
+  approvedHostToolTokens.delete(approvalKey);
+  return new Promise((resolve, reject) => {
+    let cleanup = (): void => undefined;
+    const onAbort = (): void => {
+      pendingHostToolCalls.delete(requestId);
+      cleanup();
+      postEmbedMessage("host_tool_cancel", { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, requestId });
+      reject(new Error("Host tool request aborted"));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    cleanup = () => signal?.removeEventListener("abort", onAbort);
+    pendingHostToolCalls.set(requestId, { resolve, reject, cleanup });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    postEmbedMessage("host_tool_call", {
+      version: EMBED_BRIDGE_VERSION,
+      instanceId: embedInstanceId,
+      requestId,
+      sessionId,
+      toolCallId,
+      toolName,
+      args,
+      ...(approvalToken ? { approvalToken } : {})
+    });
+  });
+}
+
+function requestHostToolApproval(request: ToolApprovalRequest): Promise<boolean> {
+  if (!embedParentOrigin || !embedInstanceId) return Promise.resolve(false);
+  const instanceId = embedInstanceId;
+  const requestId = makeId("host-approval");
+  return new Promise((resolve) => {
+    let cleanup = (): void => undefined;
+    const deny = (): void => {
+      pendingHostApprovals.delete(requestId);
+      cleanup();
+      postEmbedMessage("host_tool_approval_cancel", { version: EMBED_BRIDGE_VERSION, instanceId, requestId });
+      resolve(false);
+    };
+    if (request.signal.aborted) {
+      deny();
+      return;
+    }
+    cleanup = () => request.signal.removeEventListener("abort", deny);
+    pendingHostApprovals.set(requestId, { resolve: (decision) => resolve(decision.approved), cleanup, sessionId: request.sessionId, toolCallId: request.toolCallId, signal: request.signal });
+    request.signal.addEventListener("abort", deny, { once: true });
+    const payload: HostToolApprovalRequest = {
+      instanceId,
+      requestId,
+      sessionId: request.sessionId,
+      runId: request.runId,
+      toolCallId: request.toolCallId,
+      toolName: request.toolName,
+      args: request.args
+    };
+    postEmbedMessage("host_tool_approval_request", payload);
+  });
+}
+
+function hostTool(spec: HostToolSpec, sessionId: string): SessionTool {
+  return {
+    name: spec.name,
+    label: spec.label,
+    description: spec.description,
+    parameters: (spec.parameters ?? { type: "object", additionalProperties: true }) as TSchema,
+    ...(spec.requiresApproval ? { requiresApproval: true } : {}),
+    execute: async (toolCallId, args, signal) => {
+      const result = await requestHostTool(sessionId, toolCallId, spec.name, args, signal);
+      return { content: [{ type: "text", text: hostToolText(result) }], details: result };
+    }
+  };
+}
+
+function currentHostTools(sessionId = "pending-session"): SessionTool[] {
+  return [...hostToolSpecs.values()].map((spec) => hostTool(spec, sessionId));
+}
+
+function syncHostTools(): void {
+  for (const tab of state.tabs) {
+    if (!tab.session.isRunning) {
+      try {
+        tab.session.setTools(currentHostTools(tab.session.sessionId));
+      } catch {
+        // A concurrently finishing run will pick up the catalog on run_finished.
+      }
+    }
+  }
+}
+
+function resolveHostToolResult(payload: unknown): void {
+  if (!payload || typeof payload !== "object") return;
+  const result = payload as Partial<HostToolResult>;
+  if (!isSupportedEmbedBridgeVersion(result.version) || result.instanceId !== embedInstanceId || typeof result.requestId !== "string") return;
+  const pending = pendingHostToolCalls.get(result.requestId);
+  if (!pending) return;
+  pendingHostToolCalls.delete(result.requestId);
+  pending.cleanup();
+  if (result.status === "success") pending.resolve(result.result);
+  else if (result.status === "outcome_unknown") pending.reject(new ToolOutcomeUnknownError(result.error || "Host tool outcome is unknown"));
+  else pending.reject(new Error(result.error || `Host tool ${result.status}`));
+}
+
+function resolveHostToolApproval(payload: unknown): void {
+  if (!payload || typeof payload !== "object") return;
+  const result = payload as { version?: unknown; instanceId?: unknown; requestId?: unknown; approved?: unknown; approvalToken?: unknown; reason?: unknown };
+  if (!isSupportedEmbedBridgeVersion(result.version) || result.instanceId !== embedInstanceId || typeof result.requestId !== "string" || typeof result.approved !== "boolean") return;
+  const pending = pendingHostApprovals.get(result.requestId);
+  if (!pending) return;
+  pendingHostApprovals.delete(result.requestId);
+  pending.cleanup();
+  const hasApprovalToken = typeof result.approvalToken === "string" && result.approvalToken.length > 0;
+  const canUseApproval = result.approved && hasApprovalToken && !pending.signal.aborted;
+  if (canUseApproval) {
+    approvedHostToolTokens.set(hostToolApprovalKey(pending.sessionId, pending.toolCallId), result.approvalToken as string);
+  }
+  pending.resolve({
+    approved: canUseApproval,
+    ...(canUseApproval ? { approvalToken: result.approvalToken as string } : {}),
+    ...(typeof result.reason === "string" ? { reason: result.reason } : {})
+  });
 }
 
 function createTab(id: string, name: string, responses: readonly string[], branch = "master", path = "~/agent-go-round"): AgentTab {
@@ -189,9 +449,26 @@ function createTab(id: string, name: string, responses: readonly string[], branc
       { id: makeId("boot"), role: "system", text: "Pi agent core 0.84.4 · text stream · no persistence" }
     ],
     status: "idle",
-    unread: 0
+    unread: 0,
+    draft: "",
+    unregisterRoute: () => undefined
   };
+  tab.session.setTools(currentHostTools(tab.session.sessionId));
   attachSession(tab, tab.session);
+  tab.unregisterRoute = tabRouter.register(tab.id, {
+    isBusy: () => tab.session.isRunning,
+    receiveQuestion: async (message) => {
+      const source = state.tabs.find((candidate) => candidate.id === message.sourceTabId);
+      const sourceName = source?.name ?? message.sourceTabId;
+      tab.transcript.push({ id: makeId("route"), role: "system", text: `incoming question from ${sourceName} · ${message.text}` });
+      tab.transcript.push({ id: makeId("route-input"), role: "input", text: message.text });
+      if (tab.id !== state.activeTabId) tab.unread += 1;
+      render();
+      const result = await tab.session.prompt(message.text);
+      render();
+      return result;
+    }
+  });
   return tab;
 }
 
@@ -208,10 +485,12 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
     tab.activeLineId = line.id;
     tab.transcript.push(line);
     if (tab.id !== state.activeTabId) tab.unread += 1;
+    postEmbedMessage("prompt", { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, sessionId: tab.session.sessionId, runId: event.runId, phase: "started", input: event.input });
   }
   if (event.type === "text_delta") {
     const line = tab.transcript.find((candidate) => candidate.id === tab.activeLineId);
     if (line) line.text += event.delta;
+    postEmbedMessage("prompt", { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, sessionId: tab.session.sessionId, runId: event.runId, phase: "delta", delta: event.delta });
   }
   if (event.type === "run_finished") {
     const line = tab.transcript.find((candidate) => candidate.id === tab.activeLineId);
@@ -221,9 +500,76 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
     }
     tab.activeLineId = undefined;
     tab.status = event.status === "success" ? "done" : event.status === "aborted" ? "idle" : "error";
+    syncHostTools();
+    const payload = { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, sessionId: tab.session.sessionId, runId: event.runId, phase: "finished", status: event.status, text: event.text, ...(event.error ? { error: event.error } : {}) };
+    postEmbedMessage("prompt", payload);
+    if (event.status !== "success" && event.status !== "aborted") postEmbedMessage("error", payload);
+    scheduleWorkspaceSave();
   }
   render();
 }
+
+function tabDisplayName(tabId: string): string {
+  return state.tabs.find((tab) => tab.id === tabId)?.name ?? tabId;
+}
+
+function routeRejectText(reason: Extract<TabRouteEvent, { type: "route_rejected" }>["reason"]): string {
+  if (reason === "busy") return "The target tab is busy; no queue was created.";
+  if (reason === "target_closed") return "The target tab is closed.";
+  if (reason === "source_closed") return "The source tab is closed.";
+  if (reason === "duplicate") return "This question was already delivered.";
+  return "The question could not be routed.";
+}
+
+function handleRouteEvent(event: TabRouteEvent): void {
+  if (event.type === "route_accepted") {
+    const source = state.tabs.find((tab) => tab.id === event.message.sourceTabId);
+    if (source) {
+      source.transcript.push({
+        id: makeId("route-sent"),
+        role: "system",
+        text: `question delivered to ${tabDisplayName(event.message.targetTabId)} · ${event.message.text}`
+      });
+    }
+  }
+  if (event.type === "route_rejected") {
+    const source = event.message ? state.tabs.find((tab) => tab.id === event.message?.sourceTabId) : undefined;
+    if (source && event.message) {
+      source.transcript.push({
+        id: makeId("route-rejected"),
+        role: "system",
+        text: `question to ${tabDisplayName(event.message.targetTabId)} · ${routeRejectText(event.reason)}`
+      });
+    }
+    if (event.message?.sourceTabId === routeSourceTabId && !routeDialog.hidden) {
+      routeStatus.textContent = routeRejectText(event.reason);
+    }
+  }
+  if (event.type === "route_reply") {
+    const source = state.tabs.find((tab) => tab.id === event.message.sourceTabId);
+    if (source) {
+      const targetName = tabDisplayName(event.message.targetTabId);
+      source.transcript.push({ id: makeId("route-reply-status"), role: "system", text: `reply from ${targetName} · ${event.reply.status}` });
+      source.transcript.push({
+        id: makeId("route-reply"),
+        role: "assistant",
+        text: event.reply.text || event.reply.error || (event.reply.status === "aborted" ? "The target stopped before completing the answer." : "The target returned no text.")
+      });
+      if (source.id !== state.activeTabId) source.unread += 1;
+    }
+  }
+  if (event.type === "route_failed") {
+    const source = state.tabs.find((tab) => tab.id === event.message.sourceTabId);
+    if (source) {
+      source.transcript.push({ id: makeId("route-failed"), role: "system", text: `reply from ${tabDisplayName(event.message.targetTabId)} failed · target tab closed` });
+      if (source.id !== state.activeTabId) source.unread += 1;
+    }
+  }
+  scheduleWorkspaceSave();
+  render();
+}
+
+tabRouter.subscribe(handleRouteEvent);
 
 function activeTab(): AgentTab {
   const tab = state.tabs.find((candidate) => candidate.id === state.activeTabId);
@@ -347,9 +693,14 @@ function renderPane(tab: AgentTab): void {
   statusDot.textContent = statusGlyph(tab.status);
   get<HTMLSpanElement>("run-status").textContent = statusLabel(tab.status);
   const running = tab.session.isRunning;
+  if (promptElement.dataset.tabId !== tab.id) {
+    promptElement.value = tab.draft;
+    promptElement.dataset.tabId = tab.id;
+  }
   sendButton.disabled = running;
   stopButton.disabled = !running;
   promptElement.disabled = running;
+  routeButton.disabled = state.tabs.length < 2;
   renderTerminal(tab);
 }
 
@@ -367,6 +718,7 @@ function selectTab(id: string): void {
   state.activeTabId = id;
   tab.unread = 0;
   render();
+  scheduleWorkspaceSave();
   promptElement.focus();
 }
 
@@ -375,10 +727,12 @@ function closeTab(id: string): void {
   const index = state.tabs.findIndex((tab) => tab.id === id);
   if (index < 0) return;
   const [removed] = state.tabs.splice(index, 1);
-  removed.session.stop();
-  removed.detach();
   if (state.activeTabId === id) state.activeTabId = state.tabs[Math.max(0, index - 1)].id;
+  removed.unregisterRoute();
+  removed.detach();
+  removed.session.stop();
   render();
+  scheduleWorkspaceSave();
 }
 
 function addTab(): void {
@@ -388,25 +742,109 @@ function addTab(): void {
   state.tabs.push(tab);
   state.activeTabId = id;
   render();
+  scheduleWorkspaceSave();
   promptElement.focus();
+}
+
+function restoreTab(snapshot: WorkspaceTabSnapshot, restoreSession: boolean): AgentTab {
+  const tab = createTab(snapshot.id, snapshot.name, ["Restored workspace tab."], snapshot.branch, snapshot.path);
+  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming }) => ({ id, role, text, ...(streaming ? { streaming: true } : {}) }));
+  tab.draft = snapshot.draft;
+  if (restoreSession) {
+    const fallback = scriptedSession(tab.id, ["Restored scripted runtime response."]);
+    attachSession(tab, AgentSession.fromSnapshot(snapshot.session, { streamFn: fallback.agent.streamFunction, tools: currentHostTools(snapshot.session.sessionId), eventStore: sessionEventStore, approval: requestHostToolApproval }));
+  } else {
+    tab.transcript.push({ id: makeId("restore"), role: "system", text: "Groq runtime was not auto-reconnected; reconnect the provider before continuing." });
+  }
+  try {
+    const recovery = restoreSession
+      ? tab.session.recovery()
+      : inspectSessionRecovery(sessionEventStore.list(snapshot.session.sessionId), snapshot.session.sessionId);
+    if (recovery.unfinishedRuns.length > 0) {
+      const hasUnknown = recovery.unfinishedRuns.some((run) => run.status === "outcome_unknown");
+      tab.transcript.push({
+        id: makeId("recovery"),
+        role: "system",
+        text: hasUnknown
+          ? "Recovery notice · a tool outcome is unknown; no side effect was replayed. Review before continuing."
+          : "Recovery notice · an unfinished run was found; no model or tool was replayed. Review before continuing."
+      });
+    }
+  } catch {
+    tab.transcript.push({ id: makeId("recovery"), role: "system", text: "Recovery notice · saved runtime events could not be inspected." });
+  }
+  return tab;
+}
+
+async function restoreWorkspace(): Promise<void> {
+  let saved: WorkspaceSnapshot | undefined;
+  try {
+    saved = await workspaceStore.load();
+  } catch (error) {
+    setWorkspaceStatus(`workspace · restore failed: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (!saved) {
+    scheduleWorkspaceSave();
+    return;
+  }
+
+  for (const tab of state.tabs) {
+    tab.unregisterRoute();
+    tab.detach();
+    tab.session.stop();
+  }
+  state.tabs = [];
+  state.nextTabNumber = saved.nextTabNumber;
+  state.provider = saved.provider === "scripted" ? "scripted" : "scripted";
+  const restoreSession = saved.provider === "scripted";
+  try {
+    for (const tabSnapshot of saved.tabs) state.tabs.push(restoreTab(tabSnapshot, restoreSession));
+  } catch (error) {
+    setWorkspaceStatus(`workspace · restore failed: ${error instanceof Error ? error.message : String(error)}`);
+    for (const tab of state.tabs) {
+      tab.unregisterRoute();
+      tab.detach();
+      tab.session.stop();
+    }
+    state.tabs = [];
+  }
+  if (state.tabs.length === 0) {
+    state.nextTabNumber = 3;
+    state.tabs.push(createTab("main", "main", ["The pane is ready. This is a Pi-backed scripted stream.", "The main session keeps its own transcript."]));
+    state.tabs.push(createTab("review", "review", ["Review pane ready. It is isolated from main."]));
+  }
+  state.activeTabId = state.tabs.some((tab) => tab.id === saved?.activeTabId) ? saved.activeTabId : state.tabs[0].id;
+  promptElement.dataset.tabId = "";
+  render();
+  setWorkspaceStatus(saved.provider === "groq" ? "workspace · restored · reconnect Groq" : "workspace · restored");
+  scheduleWorkspaceSave();
 }
 
 state.tabs.push(createTab("main", "main", ["The pane is ready. This is a Pi-backed scripted stream.", "The main session keeps its own transcript."]));
 state.tabs.push(createTab("review", "review", ["Review pane ready. It is isolated from main."]));
 render();
+void restoreWorkspace();
 
 get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const tab = activeTab();
   const input = promptElement.value.trim();
   if (!input || tab.session.isRunning) return;
+  tab.draft = "";
   promptElement.value = "";
   tab.status = "working";
   tab.transcript.push({ id: makeId("input"), role: "input", text: input });
   render();
   await tab.session.prompt(input);
   render();
+  scheduleWorkspaceSave();
   promptElement.focus();
+});
+
+promptElement.addEventListener("input", () => {
+  activeTab().draft = promptElement.value;
+  scheduleWorkspaceSave();
 });
 
 promptElement.addEventListener("keydown", (event) => {
@@ -418,13 +856,37 @@ promptElement.addEventListener("keydown", (event) => {
 
 stopButton.addEventListener("click", () => activeTab().session.stop());
 get<HTMLButtonElement>("add-tab").addEventListener("click", addTab);
-get<HTMLButtonElement>("add-space").addEventListener("click", () => openSettings("Spaces are visual for now; session routing comes with the workspace store."));
-get<HTMLButtonElement>("command-hint").addEventListener("click", () => openSettings());
-get<HTMLButtonElement>("provider-toggle").addEventListener("click", () => openSettings());
+routeButton.addEventListener("click", (event) => openRouteDialog(event.currentTarget as HTMLElement));
+get<HTMLButtonElement>("close-route").addEventListener("click", closeRouteDialog);
+get<HTMLButtonElement>("cancel-route").addEventListener("click", closeRouteDialog);
+routeBackdrop.addEventListener("click", closeRouteDialog);
+routeTarget.addEventListener("change", renderRoutePreview);
+routeMessage.addEventListener("input", renderRoutePreview);
+get<HTMLFormElement>("route-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const sourceTabId = routeSourceTabId;
+  const targetTabId = routeTarget.value;
+  const text = routeMessage.value.trim();
+  if (!sourceTabId || !targetTabId || !text) {
+    routeStatus.textContent = "Choose a target and enter a question first.";
+    renderRoutePreview();
+    return;
+  }
+  const receipt = tabRouter.sendQuestion(sourceTabId, targetTabId, text);
+  if (receipt.status === "accepted") {
+    closeRouteDialog();
+  } else {
+    routeStatus.textContent = routeRejectText(receipt.reason);
+  }
+});
+get<HTMLButtonElement>("add-space").addEventListener("click", (event) => openSettings("Spaces are visual for now; session routing comes with the workspace store.", event.currentTarget as HTMLElement));
+get<HTMLButtonElement>("command-hint").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
+get<HTMLButtonElement>("provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("close-settings").addEventListener("click", closeSettings);
+settingsBackdrop.addEventListener("click", closeSettings);
 get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
   try {
-    localStorage.removeItem(STORAGE_KEYS.apiKey);
+    browserStorage.removeItem(STORAGE_KEYS.apiKey);
   } catch {
     // Private browsing may deny storage access; clearing the field still helps.
   }
@@ -433,26 +895,190 @@ get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
   settingsStatus.textContent = "Saved API key cleared from this browser.";
 });
 
-function openSettings(message = ""): void {
+function renderRoutePreview(): void {
+  const source = routeSourceTabId ? tabDisplayName(routeSourceTabId) : "current tab";
+  const target = routeTarget.selectedOptions[0]?.textContent || "no target";
+  const text = routeMessage.value.trim() || "(enter a question)";
+  routePreview.textContent = `Preview · ${source} → ${target}: ${text}`;
+  sendRouteButton.disabled = routeTarget.value === "" || routeMessage.value.trim() === "";
+}
+
+function openRouteDialog(returnFocus: HTMLElement | null = document.activeElement as HTMLElement | null): void {
+  if (state.tabs.length < 2) return;
+  routeSourceTabId = activeTab().id;
+  routeReturnFocus = returnFocus;
+  routeTarget.replaceChildren();
+  for (const tab of state.tabs) {
+    if (tab.id === routeSourceTabId) continue;
+    const option = document.createElement("option");
+    option.value = tab.id;
+    option.textContent = `${tab.name} · ${statusLabel(tab.status)}`;
+    routeTarget.append(option);
+  }
+  routeMessage.value = promptElement.value.trim();
+  routeStatus.textContent = "Review the destination and message before sending.";
+  routeBackdrop.hidden = false;
+  routeDialog.hidden = false;
+  routeBackdrop.setAttribute("aria-hidden", "false");
+  routeDialog.setAttribute("aria-hidden", "false");
+  renderRoutePreview();
+  requestAnimationFrame(() => routeMessage.focus());
+}
+
+function closeRouteDialog(): void {
+  if (routeDialog.hidden) return;
+  routeBackdrop.hidden = true;
+  routeDialog.hidden = true;
+  routeBackdrop.setAttribute("aria-hidden", "true");
+  routeDialog.setAttribute("aria-hidden", "true");
+  routeSourceTabId = null;
+  const returnFocus = routeReturnFocus;
+  routeReturnFocus = null;
+  returnFocus?.focus();
+}
+
+function openSettings(message = "", returnFocus: HTMLElement | null = document.activeElement as HTMLElement | null): void {
+  settingsReturnFocus = returnFocus;
+  settingsBackdrop.hidden = false;
   settingsDrawer.hidden = false;
+  settingsBackdrop.setAttribute("aria-hidden", "false");
   settingsDrawer.setAttribute("aria-hidden", "false");
   settingsStatus.textContent = message;
-  get<HTMLInputElement>("api-key").focus();
+  requestAnimationFrame(() => get<HTMLInputElement>("api-key").focus());
 }
 
 function closeSettings(): void {
+  if (settingsDrawer.hidden) return;
+  settingsBackdrop.hidden = true;
   settingsDrawer.hidden = true;
+  settingsBackdrop.setAttribute("aria-hidden", "true");
   settingsDrawer.setAttribute("aria-hidden", "true");
+  const returnFocus = settingsReturnFocus;
+  settingsReturnFocus = null;
+  returnFocus?.focus();
 }
+
+document.addEventListener("keydown", (event) => {
+  if (settingsDrawer.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSettings();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(settingsDrawer.querySelectorAll<HTMLElement>("button, input, textarea, select, [href], [tabindex]:not([tabindex='-1'])")).filter((element) => !element.hasAttribute("disabled"));
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
+settingsDrawer.addEventListener("focusin", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  requestAnimationFrame(() => target.scrollIntoView({ block: "nearest", inline: "nearest" }));
+});
+
+document.addEventListener("keydown", (event) => {
+  if (routeDialog.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRouteDialog();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(routeDialog.querySelectorAll<HTMLElement>("button, input, textarea, select, [href], [tabindex]:not([tabindex='-1'])")).filter((element) => !element.hasAttribute("disabled"));
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+
+routeDialog.addEventListener("focusin", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  requestAnimationFrame(() => target.scrollIntoView({ block: "nearest", inline: "nearest" }));
+});
+
+const EMBED_SOURCE = "agent-go-round-embed";
+const APP_SOURCE = "agent-go-round";
+let embedParentOrigin: string | null = null;
+let embedInstanceId: string | null = null;
+
+function postEmbedMessage(type: string, payload?: unknown): void {
+  if (window.parent === window || !embedParentOrigin) return;
+  window.parent.postMessage({ source: APP_SOURCE, type, payload }, embedParentOrigin);
+}
+
+window.addEventListener("message", (event: MessageEvent<{ source?: string; type?: string; payload?: unknown }>) => {
+  if (window.parent === window || event.source !== window.parent) return;
+  if (!event.data || event.data.source !== EMBED_SOURCE) return;
+  if (event.data.type === "hello") {
+    const payload = event.data.payload;
+    if (!payload || typeof payload !== "object" || !("version" in payload) || !isSupportedEmbedBridgeVersion(payload.version) || !("embedVersion" in payload) || !isSupportedEmbedSdkVersion(payload.embedVersion) || !("instanceId" in payload) || typeof payload.instanceId !== "string") return;
+    if (embedInstanceId && payload.instanceId !== embedInstanceId) return;
+    embedParentOrigin = event.origin;
+    embedInstanceId = payload.instanceId;
+    postEmbedMessage("ready", { version: EMBED_SDK_VERSION, bridgeVersion: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId });
+    return;
+  }
+  if (!embedParentOrigin || event.origin !== embedParentOrigin) return;
+  if (event.data.type === "host_tools") {
+    const payload = event.data.payload;
+    if (!payload || typeof payload !== "object" || !("version" in payload) || !isSupportedEmbedBridgeVersion(payload.version) || !('instanceId' in payload) || payload.instanceId !== embedInstanceId || !('tools' in payload) || !Array.isArray(payload.tools)) return;
+    hostToolSpecs.clear();
+    for (const candidate of payload.tools) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const spec = candidate as Partial<HostToolSpec>;
+      if (typeof spec.name !== "string" || typeof spec.label !== "string" || typeof spec.description !== "string") continue;
+      hostToolSpecs.set(spec.name, {
+        name: spec.name,
+        label: spec.label,
+        description: spec.description,
+        parameters: spec.parameters ?? { type: "object", additionalProperties: true },
+        ...(spec.requiresApproval ? { requiresApproval: true } : {}),
+        ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {})
+      });
+    }
+    syncHostTools();
+    postEmbedMessage("host_tools_ack", { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, toolNames: [...hostToolSpecs.keys()] });
+    return;
+  }
+  if (event.data.type === "host_tool_result") {
+    resolveHostToolResult(event.data.payload);
+    return;
+  }
+  if (event.data.type === "host_tool_approval_result") {
+    resolveHostToolApproval(event.data.payload);
+    return;
+  }
+  if (event.data.type === "open-settings") openSettings("Opened by the embed host.");
+  if (event.data.type === "close-settings") closeSettings();
+});
 
 get<HTMLButtonElement>("use-scripted").addEventListener("click", () => {
   const tab = activeTab();
   if (tab.session.isRunning) return;
   tab.session.stop();
-  attachSession(tab, scriptedSession(tab.id, ["Demo runtime is active again.", "This session continues independently."]));
+  const nextSession = scriptedSession(tab.id, ["Demo runtime is active again.", "This session continues independently."]);
+  nextSession.setTools(currentHostTools(nextSession.sessionId));
+  attachSession(tab, nextSession);
   state.provider = "scripted";
   settingsStatus.textContent = "Using the deterministic scripted runtime.";
   render();
+  scheduleWorkspaceSave();
 });
 
 get<HTMLFormElement>("provider-form").addEventListener("submit", async (event) => {
@@ -473,10 +1099,12 @@ get<HTMLFormElement>("provider-form").addEventListener("submit", async (event) =
       model: get<HTMLInputElement>("model").value,
       apiKey: get<HTMLInputElement>("api-key").value
     });
-    attachSession(tab, new AgentSession({ sessionId: `groq-${tab.id}`, model: runtime.model, streamFn: runtime.streamFn }));
+    const nextSession = new AgentSession({ sessionId: `groq-${tab.id}`, model: runtime.model, streamFn: runtime.streamFn, tools: currentHostTools(`groq-${tab.id}`), eventStore: sessionEventStore, approval: requestHostToolApproval });
+    attachSession(tab, nextSession);
     state.provider = "groq";
     settingsStatus.textContent = "Groq runtime connected.";
     render();
+    scheduleWorkspaceSave();
     closeSettings();
   } catch (error) {
     settingsStatus.textContent = error instanceof Error ? error.message : String(error);

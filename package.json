@@ -1,6 +1,6 @@
 {
   "name": "agent-go-round",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,8 +11,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:groq": "vitest run src/acceptance/groq-live.test.ts --testTimeout=120000",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:dist": "node scripts/verify-dist.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",

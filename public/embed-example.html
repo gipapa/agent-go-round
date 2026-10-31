@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentGoRound embed example</title>
+    <style>
+      body { margin: 0; min-height: 100vh; color: #27232f; background: #f4f1f8; font: 16px/1.5 system-ui, sans-serif; }
+      main { width: min(720px, calc(100% - 40px)); margin: 0 auto; padding: 72px 0; }
+      code { padding: 2px 5px; border-radius: 4px; background: #e6dfef; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Host page</h1>
+      <p>This page loads AgentGoRound through <code>embed.js</code>. The widget is isolated in an iframe.</p>
+      <p>Use the button in the lower-right corner to open the popup.</p>
+    </main>
+
+    <script
+      type="module"
+      src="./embed.js"
+      data-target="body"
+      data-mode="popup"
+      data-title="AgentGoRound"
+      data-button-label="Open AgentGoRound"
+      defer
+    ></script>
+    <script defer>
+      window.addEventListener("DOMContentLoaded", () => {
+        const widget = window.AgentGoRound?.defaultWidget;
+        widget?.registerTool(
+          {
+            name: "read_host_context",
+            label: "Read host context",
+            description: "Read the small, explicitly approved context supplied by this host page.",
+            parameters: { type: "object", additionalProperties: false, properties: {} }
+          },
+          async ({ signal }) => {
+            if (signal.aborted) throw new Error("Host request was cancelled");
+            return { page: "embed-example", permission: "demo-read-only" };
+          }
+        );
+      });
+    </script>
+  </body>
+</html>

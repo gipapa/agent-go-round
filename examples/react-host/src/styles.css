@@ -1,0 +1,10 @@
+:root { color: #282334; background: #f4f1f8; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; }
+.host-shell { width: min(720px, calc(100% - 40px)); margin: 0 auto; padding: 72px 0; }
+.eyebrow { color: #76579b; font: 700 12px/1 monospace; letter-spacing: .14em; }
+h1 { max-width: 18ch; font-size: clamp(2rem, 6vw, 4rem); line-height: 1; }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+button { border: 1px solid #76579b; border-radius: 6px; padding: 10px 14px; color: white; background: #493365; cursor: pointer; }
+button:hover, button:focus-visible { background: #65458a; }
+.hint { max-width: 56ch; color: #665f70; }
+code { padding: 2px 5px; background: #e7deef; }

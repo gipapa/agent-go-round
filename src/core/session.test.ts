@@ -36,4 +36,40 @@ describe("AgentSession", () => {
     const second = await session.prompt("try again");
     expect(second).toMatchObject({ status: "success", text: "reused" });
   });
+
+  it("aborts a slow run at its wall-clock deadline and records a deadline outcome", async () => {
+    const session = createScriptedSession(["this response is too slow"], { delayMs: 5, deadlineMs: 12 });
+    const finished: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "run_finished") finished.push(event.status);
+    });
+
+    const result = await session.prompt("finish before the deadline");
+
+    expect(result).toMatchObject({ status: "deadline", error: "Run deadline exceeded" });
+    expect(finished).toEqual(["deadline"]);
+    expect(session.isRunning).toBe(false);
+  });
+
+  it("rejects a non-positive deadline", () => {
+    expect(() => createScriptedSession(["response"], { deadlineMs: 0 })).toThrow("deadlineMs must be a positive integer");
+  });
+
+  it("truncates streamed text and ends with an output-limit outcome", async () => {
+    const session = createScriptedSession(["abcdef"], { maxOutputCharacters: 3 });
+    const deltas: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "text_delta") deltas.push(event.delta);
+    });
+
+    const result = await session.prompt("keep output short");
+
+    expect(result).toMatchObject({ status: "output_limit", text: "abc", error: "Output character limit exceeded" });
+    expect(deltas.join("")).toBe("abc");
+    expect(session.isRunning).toBe(false);
+  });
+
+  it("rejects a negative output limit", () => {
+    expect(() => createScriptedSession(["response"], { maxOutputCharacters: -1 })).toThrow("maxOutputCharacters must be a non-negative integer");
+  });
 });
