@@ -1,0 +1,22 @@
+# Dependencies and build artifacts
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# Local credentials and test configuration
+.env
+.env.*
+!.env.example
+*.local.json
+*.local.yaml
+*.local.yml
+.agent-browser-home/
+
+# Local tooling and logs
+.DS_Store
+*.log
+.cache/
+.vite/
