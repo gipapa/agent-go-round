@@ -31,6 +31,23 @@ if (!app) throw new Error("Missing #app");
 
 const configuredBaseUrl = import.meta.env.VITE_GROQ_BASE_URL || DEFAULT_GROQ_BASE_URL;
 const configuredModel = import.meta.env.VITE_GROQ_MODEL || DEFAULT_GROQ_MODEL;
+const STORAGE_KEYS = {
+  apiKey: "agent-go-round.groq.api-key",
+  baseUrl: "agent-go-round.groq.base-url",
+  model: "agent-go-round.groq.model"
+} as const;
+
+function readStored(key: string): string {
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+const storedApiKey = readStored(STORAGE_KEYS.apiKey);
+const storedBaseUrl = readStored(STORAGE_KEYS.baseUrl);
+const storedModel = readStored(STORAGE_KEYS.model);
 
 const state = {
   tabs: [] as AgentTab[],
@@ -103,11 +120,12 @@ app.innerHTML = `
 
       <aside id="settings-drawer" class="settings-drawer" aria-label="Provider settings" aria-hidden="true" hidden>
         <div class="drawer-heading"><div><span class="drawer-kicker">RUNTIME</span><h2>Provider connection</h2></div><button id="close-settings" class="drawer-close" type="button" aria-label="Close settings">×</button></div>
-        <p class="drawer-copy">The key stays in this page memory and is never added to a transcript.</p>
+        <p class="drawer-copy">The key is saved in this browser's local storage when enabled. It is never added to a transcript.</p>
         <form id="provider-form" class="provider-form">
           <label>Base URL<input id="base-url" type="url" autocomplete="url" /></label>
           <label>Model<input id="model" type="text" autocomplete="off" /></label>
           <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
+          <div class="remember-row"><label class="remember-toggle"><input id="remember-key" type="checkbox" /> Remember this key in this browser</label><button id="clear-key" class="clear-key" type="button">clear saved key</button></div>
           <div class="drawer-actions"><button id="use-scripted" class="drawer-button muted-button" type="button">Use demo</button><button class="drawer-button" type="submit">Connect Groq</button></div>
         </form>
         <p id="settings-status" class="settings-status" role="status"></p>
@@ -122,8 +140,10 @@ const get = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 
-get<HTMLInputElement>("base-url").value = configuredBaseUrl;
-get<HTMLInputElement>("model").value = configuredModel;
+get<HTMLInputElement>("base-url").value = storedBaseUrl || configuredBaseUrl;
+get<HTMLInputElement>("model").value = storedModel || configuredModel;
+get<HTMLInputElement>("api-key").value = storedApiKey;
+get<HTMLInputElement>("remember-key").checked = Boolean(storedApiKey);
 
 const terminal = get<HTMLDivElement>("terminal");
 const promptElement = get<HTMLTextAreaElement>("prompt");
@@ -131,6 +151,21 @@ const sendButton = get<HTMLButtonElement>("send");
 const stopButton = get<HTMLButtonElement>("stop");
 const settingsDrawer = get<HTMLElement>("settings-drawer");
 const settingsStatus = get<HTMLParagraphElement>("settings-status");
+
+function persistProviderSettings(): void {
+  const apiKey = get<HTMLInputElement>("api-key").value.trim();
+  const baseUrl = get<HTMLInputElement>("base-url").value.trim();
+  const model = get<HTMLInputElement>("model").value.trim();
+  const remember = get<HTMLInputElement>("remember-key").checked;
+  try {
+    if (remember && apiKey) localStorage.setItem(STORAGE_KEYS.apiKey, apiKey);
+    else localStorage.removeItem(STORAGE_KEYS.apiKey);
+    if (baseUrl) localStorage.setItem(STORAGE_KEYS.baseUrl, baseUrl);
+    if (model) localStorage.setItem(STORAGE_KEYS.model, model);
+  } catch {
+    settingsStatus.textContent = "Browser storage is unavailable; the key will only live for this page.";
+  }
+}
 
 function makeId(prefix: string): string {
   const uuid = globalThis.crypto?.randomUUID?.();
@@ -387,6 +422,16 @@ get<HTMLButtonElement>("add-space").addEventListener("click", () => openSettings
 get<HTMLButtonElement>("command-hint").addEventListener("click", () => openSettings());
 get<HTMLButtonElement>("provider-toggle").addEventListener("click", () => openSettings());
 get<HTMLButtonElement>("close-settings").addEventListener("click", closeSettings);
+get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.apiKey);
+  } catch {
+    // Private browsing may deny storage access; clearing the field still helps.
+  }
+  get<HTMLInputElement>("api-key").value = "";
+  get<HTMLInputElement>("remember-key").checked = false;
+  settingsStatus.textContent = "Saved API key cleared from this browser.";
+});
 
 function openSettings(message = ""): void {
   settingsDrawer.hidden = false;
@@ -420,6 +465,7 @@ get<HTMLFormElement>("provider-form").addEventListener("submit", async (event) =
   const form = event.currentTarget as HTMLFormElement;
   const submit = form.querySelector<HTMLButtonElement>("button[type=submit]");
   if (submit) submit.disabled = true;
+  persistProviderSettings();
   settingsStatus.textContent = "Creating Groq runtime…";
   try {
     const runtime = await createGroqRuntime({

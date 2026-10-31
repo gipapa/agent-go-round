@@ -23,7 +23,7 @@ npm install
 npm run dev
 ```
 
-開啟 Vite 顯示的網址即可使用 scripted demo；在頁面輸入 Groq API key 可切換到 Groq。API key 只保存在當次頁面記憶體，不會寫入 bundle 或 session。
+開啟 Vite 顯示的網址即可使用 scripted demo；在頁面輸入 Groq API key 可切換到 Groq。勾選記住 key 後會存到目前 origin 的 `localStorage`，不會寫入 bundle 或 session；provider drawer 提供清除操作。
 
 ```sh
 npm test

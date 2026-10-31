@@ -71,7 +71,7 @@ UI 與核心分離，簡潔文字介面、浮動 widget 與宿主自行製作的
 
 目標接口為 Chat Completions（`/chat/completions`），先完成多輪訊息、串流文字、停止與錯誤處理；工具 schema/call/result 在 M1 加入。相容性以實際測試為準，不宣稱所有 OpenAI 相容 provider 都已支援。
 
-開發用 key 透過本機未追蹤設定或使用者輸入提供，預設只在記憶體持有，不寫進 bundle、對話、trace 或跨 tab 訊息。初期 UI 只提供必要的 model/key 設定，不恢復大型 credential/LB 面板。
+開發用 key 透過本機未追蹤設定或使用者輸入提供；使用者明確勾選後可保存到目前 origin 的 `localStorage`，否則只在記憶體持有。無論是否保存，都不寫進 bundle、對話、trace 或跨 tab 訊息；provider drawer 提供清除操作。
 
 先驗證瀏覽器連線與 production build 的實際行為；若需要本機 relay，記錄它的用途與限制，不把本機成功視為公開嵌入部署已可用。
 
