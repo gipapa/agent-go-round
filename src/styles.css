@@ -88,8 +88,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .terminal-line.streaming .line-marker { color: #e3a1b2; }
 .terminal-line.streaming .line-content::after { display: inline-block; width: 6px; height: 14px; margin-left: 5px; vertical-align: -2px; background: #c5a4f1; content: ""; animation: blink 1s steps(2, start) infinite; }
 .terminal-form { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: end; border-top: 1px solid #2d2c38; background: #15151d; padding: 13px 15px 10px; }
-.terminal-prompt { color: #e1b77a; font-size: 14px; line-height: 32px; }
-.terminal-form textarea { min-height: 32px; max-height: 120px; resize: vertical; border: 0; outline: 0; color: #f2eff8; background: transparent; padding: 7px 0; font-size: 12px; }
+.terminal-prompt { color: #e1b77a; font-size: 14px; line-height: 28px; }
+.terminal-form textarea { min-height: 28px; max-height: 100px; resize: vertical; border: 0; outline: 0; color: #f2eff8; background: transparent; padding: 4px 0; font-size: 12px; }
 .terminal-form textarea::placeholder { color: #666370; }
 .terminal-form textarea:focus { box-shadow: none; }
 .terminal-form-actions { align-items: center; }

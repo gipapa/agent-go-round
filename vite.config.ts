@@ -41,6 +41,6 @@ export default defineConfig({
   test: {
     environment: "happy-dom",
     include: ["src/**/*.test.ts"],
-    exclude: ["src/acceptance/groq-live.test.ts"]
+    exclude: process.env.AGENT_GO_ROUND_RUN_GROQ === "1" ? [] : ["src/acceptance/groq-live.test.ts"]
   }
 });

@@ -11,7 +11,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:groq": "vitest run src/acceptance/groq-live.test.ts --testTimeout=120000",
+    "test:groq": "AGENT_GO_ROUND_RUN_GROQ=1 vitest run src/acceptance/groq-live.test.ts --testTimeout=120000",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "verify:dist": "node scripts/verify-dist.mjs"
