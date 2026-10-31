@@ -33,4 +33,6 @@ npm run build
 
 目前已固定使用 `@earendil-works/pi-agent-core` / `pi-ai` `0.84.4`。Groq 的真實額度驗收尚未在此環境執行，日常回歸使用 scripted model。
 
+push 到 `master` 會由 GitHub Actions 執行測試、build，成功後部署到 [GitHub Pages](https://gipapa.github.io/agent-go-round/)。
+
 採用 [MIT License](LICENSE)。
