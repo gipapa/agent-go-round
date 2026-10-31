@@ -1,4 +1,4 @@
-import type { SessionSnapshot } from "./persistence";
+import { validateSessionSnapshot, type SessionSnapshot } from "./persistence";
 
 export const WORKSPACE_SNAPSHOT_VERSION = 1 as const;
 
@@ -7,6 +7,7 @@ export type WorkspaceTranscriptLine = {
   role: "system" | "input" | "assistant";
   text: string;
   streaming?: boolean;
+  toolCallId?: string;
 };
 
 export type WorkspaceTabSnapshot = {
@@ -17,6 +18,13 @@ export type WorkspaceTabSnapshot = {
   draft: string;
   transcript: WorkspaceTranscriptLine[];
   session: SessionSnapshot;
+  mode?: "shell" | "agent" | "editor" | "preview";
+  preview?: { entry: string; surfaceId: string };
+  cwd?: string;
+  agentCwd?: string;
+  provider?: "scripted" | "groq";
+  pendingContext?: string[];
+  editor?: { path: string; content: string; revision: number };
 };
 
 export type WorkspaceSnapshot = {
@@ -47,7 +55,7 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function validate(snapshot: unknown): WorkspaceSnapshot {
+export function validateWorkspaceSnapshot(snapshot: unknown): WorkspaceSnapshot {
   if (!snapshot || typeof snapshot !== "object") throw new WorkspacePersistenceError("Workspace snapshot is not an object");
   const value = snapshot as Partial<WorkspaceSnapshot>;
   if (value.version !== WORKSPACE_SNAPSHOT_VERSION) throw new WorkspacePersistenceError(`Unsupported workspace snapshot version: ${String(value.version)}`);
@@ -61,11 +69,19 @@ function validate(snapshot: unknown): WorkspaceSnapshot {
     if (!tab || typeof tab.id !== "string" || !tab.id || typeof tab.name !== "string" || typeof tab.branch !== "string" || typeof tab.path !== "string" || typeof tab.draft !== "string" || !Array.isArray(tab.transcript) || !tab.session) {
       throw new WorkspacePersistenceError("Workspace snapshot contains an invalid tab");
     }
+    if (tab.mode !== undefined && !["shell", "agent", "editor", "preview"].includes(tab.mode)) throw new WorkspacePersistenceError("Invalid tab mode");
+    if (tab.preview && (typeof tab.preview.entry !== "string" || !tab.preview.entry.startsWith("/home/user/") || typeof tab.preview.surfaceId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(tab.preview.surfaceId))) throw new WorkspacePersistenceError("Invalid preview configuration");
+    if (tab.mode === "preview" && !tab.preview) throw new WorkspacePersistenceError("Missing preview configuration");
+    for (const cwd of [tab.cwd, tab.agentCwd]) if (cwd !== undefined && (typeof cwd !== "string" || (cwd !== "/home/user" && !cwd.startsWith("/home/user/")))) throw new WorkspacePersistenceError("Invalid cwd");
+    if (tab.provider !== undefined && tab.provider !== "scripted" && tab.provider !== "groq") throw new WorkspacePersistenceError("Invalid tab provider");
+    if (tab.pendingContext !== undefined && (!Array.isArray(tab.pendingContext) || tab.pendingContext.some((entry) => typeof entry !== "string"))) throw new WorkspacePersistenceError("Invalid pending context");
+    if (tab.editor && (typeof tab.editor.path !== "string" || typeof tab.editor.content !== "string" || !Number.isInteger(tab.editor.revision))) throw new WorkspacePersistenceError("Invalid editor draft");
     if (tabIds.has(tab.id)) throw new WorkspacePersistenceError(`Workspace contains duplicate tab id: ${tab.id}`);
     tabIds.add(tab.id);
     if (tab.session.version !== 1 || typeof tab.session.sessionId !== "string" || !tab.session.sessionId || !Array.isArray(tab.session.messages)) {
       throw new WorkspacePersistenceError(`Workspace tab ${tab.id} contains an invalid session snapshot`);
     }
+    validateSessionSnapshot(tab.session);
   }
   return value as WorkspaceSnapshot;
 }
@@ -78,7 +94,7 @@ export class MemoryWorkspaceStore implements WorkspaceStore {
   }
 
   async save(snapshot: WorkspaceSnapshot): Promise<void> {
-    this.snapshot = clone(validate(snapshot));
+    this.snapshot = clone(validateWorkspaceSnapshot(snapshot));
   }
 
   async remove(): Promise<void> {
@@ -98,7 +114,7 @@ export class LocalStorageWorkspaceStore implements WorkspaceStore {
     }
     if (raw === null) return undefined;
     try {
-      return clone(validate(JSON.parse(raw)));
+      return clone(validateWorkspaceSnapshot(JSON.parse(raw)));
     } catch (error) {
       if (error instanceof WorkspacePersistenceError) throw error;
       throw new WorkspacePersistenceError("Stored workspace snapshot is not valid JSON", { cause: error });
@@ -106,7 +122,7 @@ export class LocalStorageWorkspaceStore implements WorkspaceStore {
   }
 
   async save(snapshot: WorkspaceSnapshot): Promise<void> {
-    const valid = validate(snapshot);
+    const valid = validateWorkspaceSnapshot(snapshot);
     try {
       this.storage.setItem(this.key, JSON.stringify(valid));
     } catch (error) {

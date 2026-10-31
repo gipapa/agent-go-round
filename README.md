@@ -2,21 +2,21 @@
 
 一個以穩定、簡單與高度客製化為目標的前端 agent harness，參考 Pi 的小核心與擴充方式，讓其他專案能加入自己的模型、工具與上下文。
 
-目前 `master` 已有 M0-A 的最小可執行 browser harness，以及 M0-B 的 Herdr-inspired tab shell 與第一版跨 tab 訊息／關聯回覆。跨 tab 路由目前是同一頁面內、使用者明確觸發的操作；跨瀏覽器分頁與模型自動 delegation 不在範圍內。
+目前工作樹提供 IndexedDB 虛擬檔案系統、shell／文字編輯器／Pi 共用 tabs、可擴充的 `~/bin` JS 工具，以及從檔案載入 AGENTS.md 與 skills。Groq 對話可在 reload、重連或關閉重開後接續。跨 tab 路由為同頁面、使用者明確觸發的操作；不包含模型自動 delegation。
 
 - [設計與實作規劃](docs/plan.md)
 - 完整舊版保存在 `v2` 分支，封存起點為 `73285d6`；舊版未完成的驗收紀錄亦保留在該分支。
 - 更早版本保存在 `v1`、`v1.5` 分支。
 
-第一個驗收版本以 Groq 的 OpenAI 相容 Chat Completions 接口完成基本多輪串流對話，提供 Herdr 風格的 tab 視窗、獨立 session、停止，以及明確觸發的跨 tab 訊息與回覆。先實際驗收對話視窗，再擴充工具、skills 與 session 恢復。
-
-之後提供 JavaScript loader、彈出式聊天視窗；核心從早期即以公開 module/SDK 入口供獨立範例使用。
+模型採 Groq 的 OpenAI 相容 Chat Completions 接口，Pi 擁有唯一工具循環。JS loader、iframe popup 與 VFS `main.html` 主頁預覽已實作；popup 可以修改同一個 workspace 的頁面檔案。
 
 公開 SDK entry 位於 `src/index.ts`，除了 core runtime、storage、skills、router 與 bridge types，也安全 export `mount()`；非瀏覽器環境可以 import 這個 entry 而不會自動碰 DOM，呼叫 `mount()` 時才要求 browser document。
 
 日常驗證以不消耗模型額度的回歸測試為主，Groq 作為第一個真實對話與工具驗收 provider。ChatGPT 訂閱整合延後，不阻擋基本對話、視窗與嵌入開發。
 
 ## 開發
+
+新 tab 先進入 `~` 的 shell，可輸入 `help`、`ls ~/bin`、`write demo.md "hello"`、`read demo.md`；`pi` 進入 agent，`/exit` 返回 shell。預設提供 read、write、edit、grep、find、ls 和 skill_load，新增工具以 `.js` 與 `.tool.json` 放入 `~/bin` 後執行 `rehash`。完整參數、隔離執行與擴充方式見 [bin 工具說明](docs/bin-tools.md)。`preview ~/main.html` 開啟頁面預覽，缺少檔案時可明確建立範本；右下角 Pi 可讀寫相同 VFS。操作、page view 和 embed binding 見 [主頁預覽](docs/page-preview.md)。
 
 需要 Node.js 22 或更新版本：
 
@@ -34,7 +34,9 @@ npm run build
 npm run verify:dist
 ```
 
-目前已固定使用 `@earendil-works/pi-agent-core` / `pi-ai` `0.84.4`。Groq 的真實額度驗收尚未在此環境執行，日常回歸使用 scripted model。
+目前固定使用 `@earendil-works/pi-agent-core` / `pi-ai` `0.84.4`。日常回歸使用 scripted model；檔案式 skill 的 Groq 三任務驗收已執行，完整狀態與重跑方式見 [笑話驗收](docs/joke-acceptance.md)。
+
+快速體驗：在 shell 輸入 `demo jokes`，建立不覆寫既有檔案的中文 AGENTS.md、joke-master skill、評分參考與五個笑話。連接 Groq 後執行 `pi`，使用英文請它讀取、評分並選出最好笑的笑話。`edit PATH` 開啟文字編輯器；`history` 與 `pi --resume SESSION_ID` 可重開對話，`pi --new` 開始新對話。
 
 Groq live tool acceptance 是明確 opt-in：設定 `AGENT_GO_ROUND_GROQ_API_KEY` 後執行 `npm run test:groq`，會跑 read、mutation/read-back、tool-error correction 三個短任務，輸出 provider/model、工具呼叫與 `harness`／`provider`／`quota`／`network`／`model_decision` 失敗分類；可用 `AGENT_GO_ROUND_GROQ_REPORT` 另外保存 JSON report。一般 `npm test` 不會觸發網路或消耗額度。
 
@@ -44,7 +46,7 @@ Session transcript 可透過 `MemorySessionStore` 或注入的 `LocalStorageSess
 
 `MemorySessionEventStore` 與 `LocalStorageSessionEventStore` 保存 versioned run/tool lifecycle，`inspectSessionRecovery()` 只重建 interrupted／outcome-unknown metadata，不會在 reload 時自動重送模型或工具副作用；UI 會將需要人工 review 的 recovery notice 寫入對應 tab。
 
-Workspace UI 會以 `LocalStorageWorkspaceStore` 保存 tab identity、active tab、draft、transcript 與 session snapshot；reload 後會恢復 tabs 與未送出的輸入，snapshot 不包含 provider API key。Groq workspace 只恢復安全的 UI/session metadata，重新載入後需由使用者重新連接 provider。`MemorySkillLoader`、`loadSkills()` 與 `composeSystemPrompt()` 提供按需載入、去重、大小限制與 deterministic system-prompt 組合，skills body 不會因 metadata listing 被提前暴露。
+Workspace UI 使用 `IndexedDbConversationStore` 保存 tabs、草稿、editor draft 與完整 session transcript，並將 session 歷史獨立於開啟的 tabs 保存。首次從既有 localStorage workspace 遷移，保留原資料。`IndexedDbSessionEventStore` 保存 lifecycle 與讀檔來源／版本，不保存逐字 text delta。Groq reload 後須重新連線，重連保留原 messages 和 active skill；不自動重送模型或工具。`prepareFileContext()` 從 home 到 cwd 載入 AGENTS.md／agents.md，`VfsSkillLoader` 只先提供 skill metadata，`~/bin/skill_load.js` 按需載入正文；active skill 在下一輪從檔案刷新。SDK 仍保留 memory／localStorage store 與最小 MemorySkillLoader 供獨立宿主使用。
 
 ## Embed spike
 

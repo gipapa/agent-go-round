@@ -14,14 +14,20 @@
     "test:groq": "AGENT_GO_ROUND_RUN_GROQ=1 vitest run src/acceptance/groq-live.test.ts --testTimeout=120000",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "verify:dist": "node scripts/verify-dist.mjs"
+    "verify:dist": "node scripts/verify-dist.mjs",
+    "test:jokes": "AGENT_GO_ROUND_RUN_JOKES=1 vitest run src/acceptance/jokes-live.test.ts --testTimeout=600000",
+    "test:jokes:browser": "node --experimental-strip-types scripts/verify-jokes-browser.mjs",
+    "test:preview:browser": "node scripts/verify-preview-browser.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",
-    "@earendil-works/pi-ai": "0.84.4"
+    "@earendil-works/pi-ai": "0.84.4",
+    "parse5": "^8.0.1",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "fake-indexeddb": "^6.2.7",
     "happy-dom": "^20.0.0",
     "typescript": "^5.8.0",
     "vite": "^6.3.0",

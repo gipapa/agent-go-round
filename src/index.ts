@@ -33,3 +33,17 @@ export type {
 } from "./core/tab-router";
 export { mount } from "./embed";
 export type { AgentGoRoundGlobal, AgentGoRoundWidget, EmbedEvent, EmbedHostTool, EmbedMessage, EmbedMode, EmbedOptions } from "./embed";
+
+export { IndexedDbFileSystem, MemoryFileSystem, FileSystemError, VFS_HOME, resolvePath, displayPath } from "./core/fs";
+export type { VirtualFileSystem, FileNode, WriteOptions } from "./core/fs";
+export { BinRegistry } from "./core/bin";
+export { DEFAULT_BIN_TOOLS, BIN_DIRECTORY, installDefaultBin } from "./core/bin-defaults";
+export type { BinManifest, BinDefinition, FileMethod } from "./core/bin-defaults";
+export { SandboxedBinExecutor } from "./core/bin-sandbox";
+export type { BinExecutor, FileRpc } from "./core/bin-sandbox";
+export { executeShell, shellWords } from "./core/shell";
+export { configureFileAgent, prepareFileContext, VfsSkillLoader } from "./core/file-context";
+export type { FileSkill, FileContext } from "./core/file-context";
+export { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
+export { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
+export type { ContextSource } from "./core/session";

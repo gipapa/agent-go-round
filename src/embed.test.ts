@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { mount } from "./embed";
 
 describe("AgentGoRound embed loader", () => {
+  it("binds a popup to an explicit workspace and restorable surface", () => {
+    const widget = mount({ appUrl: "https://example.com/app/", workspaceId: "workspace-a", surfaceId: "popup-main" });
+    expect(widget.iframe.src).toBe("https://example.com/app/?workspace=workspace-a&surface=popup-main");
+    widget.destroy();
+    expect(() => mount({ workspaceId: "../bad" })).toThrow("Invalid workspace");
+  });
   it("mounts a popup and manages its lifecycle", () => {
     const target = document.createElement("div");
     document.body.append(target);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createScriptedSession } from "./scripted";
 import { SessionBusyError } from "./session";
+import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 
 describe("AgentSession", () => {
   it("streams text and gives each run one terminal event", async () => {
@@ -71,5 +72,19 @@ describe("AgentSession", () => {
 
   it("rejects a negative output limit", () => {
     expect(() => createScriptedSession(["response"], { maxOutputCharacters: -1 })).toThrow("maxOutputCharacters must be a non-negative integer");
+  });
+
+  it("reports empty and token-truncated final responses as failures", async () => {
+    const empty = createScriptedSession([""]);
+    expect(await empty.prompt("respond")).toMatchObject({ status: "error", error: "Model returned an empty final response" });
+    const truncated = createScriptedSession(["seed"]);
+    await truncated.prompt("seed");
+    const seed = truncated.agent.state.messages.find((message) => message.role === "assistant") as AssistantMessage;
+    truncated.agent.streamFunction = () => {
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = { ...seed, content: [{ type: "text", text: "unfinished" }], stopReason: "length" };
+      stream.push({ type: "done", reason: "length", message }); stream.end(message); return stream;
+    };
+    expect(await truncated.prompt("continue")).toMatchObject({ status: "output_limit", error: "Model response reached its output token limit" });
   });
 });

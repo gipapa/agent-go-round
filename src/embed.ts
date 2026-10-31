@@ -17,6 +17,8 @@ export type EmbedOptions = {
   width?: number | string;
   height?: number | string;
   initiallyOpen?: boolean;
+  workspaceId?: string;
+  surfaceId?: string;
 };
 
 export type EmbedMessage = {
@@ -159,7 +161,13 @@ export function mount(options: EmbedOptions = {}): AgentGoRoundWidget {
   const mode = options.mode === "inline" ? "inline" : "popup";
   const title = options.title || "AgentGoRound";
   const buttonLabel = options.buttonLabel || "Open AgentGoRound";
-  const appUrl = new URL(options.appUrl || defaultAppUrl, document.baseURI).href;
+  const appLocation = new URL(options.appUrl || defaultAppUrl, document.baseURI);
+  for (const [name, value] of [["workspace", options.workspaceId], ["surface", options.surfaceId]]) {
+    if (value === undefined) continue;
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(value)) throw new Error(`Invalid ${name} identity`);
+    appLocation.searchParams.set(name!, value);
+  }
+  const appUrl = appLocation.href;
   const appOrigin = new URL(appUrl).origin;
   const instanceId = makeId("widget");
   const host = document.createElement("div");
@@ -236,6 +244,10 @@ export function mount(options: EmbedOptions = {}): AgentGoRoundWidget {
       const payload = event.data.payload;
       if (!payload || typeof payload !== "object" || !("bridgeVersion" in payload) || !isSupportedEmbedBridgeVersion(payload.bridgeVersion) || !("version" in payload) || !isSupportedEmbedSdkVersion(payload.version)) {
         emit("error", new Error("AgentGoRound embed protocol version mismatch"));
+        return;
+      }
+      if ((options.workspaceId && (!("workspaceId" in payload) || payload.workspaceId !== options.workspaceId)) || (options.surfaceId && (!("surfaceId" in payload) || payload.surfaceId !== options.surfaceId))) {
+        emit("error", new Error("AgentGoRound workspace binding mismatch"));
         return;
       }
       emit("ready", payload);
@@ -371,7 +383,9 @@ if (typeof window !== "undefined") {
         buttonLabel: loaderScript.dataset.buttonLabel || undefined,
         width: loaderScript.dataset.width || undefined,
         height: loaderScript.dataset.height || undefined,
-        initiallyOpen: loaderScript.dataset.initiallyOpen === "true"
+        initiallyOpen: loaderScript.dataset.initiallyOpen === "true",
+        workspaceId: loaderScript.dataset.workspace || undefined,
+        surfaceId: loaderScript.dataset.surface || undefined
       });
     } catch (error) {
       const normalized = dispatchError(error);

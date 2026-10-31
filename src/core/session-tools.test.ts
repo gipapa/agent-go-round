@@ -129,6 +129,7 @@ describe("AgentSession tools", () => {
       "tool_approval_requested",
       "tool_approval_resolved",
       "tool_finished",
+      "tool_result_ready",
       "text_delta",
       "run_finished"
     ]);

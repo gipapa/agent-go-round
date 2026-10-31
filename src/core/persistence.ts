@@ -10,6 +10,7 @@ export type SessionSnapshot = {
   systemPrompt: string;
   messages: AgentMessage[];
   savedAt: number;
+  activeSkill?: string;
 };
 
 export class SessionPersistenceError extends Error {
@@ -31,7 +32,7 @@ function cloneSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as SessionSnapshot;
 }
 
-function validateSnapshot(value: unknown, expectedSessionId?: string): SessionSnapshot {
+export function validateSessionSnapshot(value: unknown, expectedSessionId?: string): SessionSnapshot {
   if (!value || typeof value !== "object") throw new SessionPersistenceError("Session snapshot is not an object");
   const snapshot = value as Partial<SessionSnapshot>;
   if (snapshot.version !== SESSION_SNAPSHOT_VERSION) {
@@ -49,6 +50,8 @@ function validateSnapshot(value: unknown, expectedSessionId?: string): SessionSn
   if (typeof snapshot.systemPrompt !== "string" || !Array.isArray(snapshot.messages)) {
     throw new SessionPersistenceError("Session snapshot has invalid transcript data");
   }
+  if (typeof snapshot.savedAt !== "number" || !Number.isFinite(snapshot.savedAt)) throw new SessionPersistenceError("Session snapshot is missing savedAt");
+  if (snapshot.activeSkill !== undefined && typeof snapshot.activeSkill !== "string") throw new SessionPersistenceError("Invalid active skill");
   return snapshot as SessionSnapshot;
 }
 
@@ -61,7 +64,7 @@ export class MemorySessionStore implements SessionStore {
   }
 
   async save(snapshot: SessionSnapshot): Promise<void> {
-    const valid = validateSnapshot(snapshot);
+    const valid = validateSessionSnapshot(snapshot);
     this.snapshots.set(valid.sessionId, cloneSnapshot(valid));
   }
 
@@ -82,7 +85,7 @@ export class LocalStorageSessionStore implements SessionStore {
     }
     if (raw === null) return undefined;
     try {
-      return validateSnapshot(JSON.parse(raw), sessionId);
+      return validateSessionSnapshot(JSON.parse(raw), sessionId);
     } catch (error) {
       if (error instanceof SessionPersistenceError) throw error;
       throw new SessionPersistenceError("Stored session snapshot is not valid JSON", { cause: error });
@@ -90,7 +93,7 @@ export class LocalStorageSessionStore implements SessionStore {
   }
 
   async save(snapshot: SessionSnapshot): Promise<void> {
-    const valid = validateSnapshot(snapshot);
+    const valid = validateSessionSnapshot(snapshot);
     try {
       this.storage.setItem(this.key(valid.sessionId), JSON.stringify(valid));
     } catch (error) {

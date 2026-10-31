@@ -5,8 +5,12 @@ import { SessionPersistenceError, type SessionSnapshot, type SessionStore } from
 export type RunStatus = "success" | "aborted" | "deadline" | "error" | "outcome_unknown" | "output_limit";
 
 export const SESSION_EVENT_VERSION = 1 as const;
+export type ContextSource = { kind: "agents" | "skill"; path: string; revision: number };
 
 type SessionEventPayload =
+  | { type: "context_loaded"; runId: string; source: ContextSource; toolCallId?: string }
+  | { type: "file_access"; runId: string; toolCallId: string; method: string; path: string; revision?: number }
+  | { type: "tool_result_ready"; runId: string; toolCallId: string }
   | { type: "run_started"; runId: string; input: string }
   | { type: "text_delta"; runId: string; delta: string }
   | { type: "run_finished"; runId: string; status: RunStatus; text: string; error?: string }
@@ -200,6 +204,7 @@ export type AgentSessionOptions = {
   maxOutputCharacters?: number;
   eventStore?: SessionEventStore;
   initialMessages?: readonly AgentMessage[];
+  activeSkill?: string;
 };
 
 function makeId(prefix: string): string {
@@ -223,6 +228,7 @@ function textFromAssistant(message: AssistantMessage | undefined): string {
 export class AgentSession {
   readonly sessionId: string;
   readonly agent: Agent;
+  activeSkill?: string;
   private activeRun?: { runId: string; toolCallCount: number; unknownOutcome: boolean; unknownToolCalls: Set<string>; deadlineExceeded: boolean; outputLimitExceeded: boolean; outputCharacters: number; deadlineTimer?: ReturnType<typeof setTimeout> };
   private readonly listeners = new Set<(event: SessionEvent) => void>();
   private toolsByName: ReadonlyMap<string, SessionTool>;
@@ -231,9 +237,11 @@ export class AgentSession {
   private readonly deadlineMs?: number;
   private readonly maxOutputCharacters?: number;
   private readonly eventStore?: SessionEventStore;
+  private contextSources: ContextSource[] = [];
 
   constructor(options: AgentSessionOptions) {
     this.sessionId = options.sessionId;
+    this.activeSkill = options.activeSkill;
     if (options.maxToolCalls !== undefined && (!Number.isInteger(options.maxToolCalls) || options.maxToolCalls < 0)) {
       throw new Error("maxToolCalls must be a non-negative integer");
     }
@@ -261,7 +269,7 @@ export class AgentSession {
       sessionId: options.sessionId,
       streamFn: options.streamFn,
       toolExecution: "sequential",
-      maxRetryDelayMs: 5_000,
+      maxRetryDelayMs: 60_000,
       beforeToolCall: (context, signal) => this.beforeToolCall(context, signal),
       afterToolCall: (context, signal) => this.afterToolCall(context, signal),
       shouldStopAfterTurn: () => this.activeRun?.unknownOutcome === true
@@ -282,6 +290,25 @@ export class AgentSession {
     const prepared = this.prepareTools(tools);
     this.toolsByName = new Map(prepared.map((tool) => [tool.name, tool]));
     this.agent.state.tools = prepared;
+  }
+
+  setSystemPrompt(prompt: string, sources: readonly ContextSource[] = []): void {
+    if (this.isRunning) throw new SessionBusyError(this.sessionId);
+    this.agent.state.systemPrompt = prompt;
+    this.contextSources = sources.map((source) => ({ ...source }));
+  }
+
+  addContextMessage(text: string): void {
+    if (this.isRunning) throw new SessionBusyError(this.sessionId);
+    this.agent.state.messages = [...this.agent.state.messages, { role: "user", content: text, timestamp: Date.now() }];
+  }
+
+  recordContextSource(source: ContextSource, toolCallId?: string): void {
+    if (this.activeRun) this.emit({ type: "context_loaded", runId: this.activeRun.runId, source, ...(toolCallId ? { toolCallId } : {}) });
+  }
+
+  recordFileAccess(toolCallId: string, method: string, path: string, revision?: number): void {
+    if (this.activeRun) this.emit({ type: "file_access", runId: this.activeRun.runId, toolCallId, method, path, ...(revision !== undefined ? { revision } : {}) });
   }
 
   subscribe(listener: (event: SessionEvent) => void): () => void {
@@ -305,6 +332,7 @@ export class AgentSession {
       }, this.deadlineMs);
     }
     this.emit({ type: "run_started", runId, input: cleanInput });
+    for (const source of this.contextSources) this.recordContextSource(source);
 
     let finalAssistant: AssistantMessage | undefined;
     const detach = this.agent.subscribe((event: AgentEvent) => {
@@ -327,6 +355,9 @@ export class AgentSession {
       if (event.type === "message_end" && event.message.role === "assistant") {
         finalAssistant = event.message;
       }
+      if (event.type === "message_end" && event.message.role === "toolResult") {
+        this.emit({ type: "tool_result_ready", runId, toolCallId: event.message.toolCallId });
+      }
       if (event.type === "tool_execution_start") {
         this.emit({ type: "tool_started", runId, toolCallId: event.toolCallId, toolName: event.toolName });
       }
@@ -338,16 +369,17 @@ export class AgentSession {
     try {
       await this.agent.prompt(cleanInput);
       const fullText = textFromAssistant(finalAssistant);
+      const emptyFinal = finalAssistant?.stopReason === "stop" && !fullText.trim();
       const text = this.maxOutputCharacters === undefined ? fullText : fullText.slice(0, this.maxOutputCharacters);
       const status: RunStatus = this.activeRun?.unknownOutcome
         ? "outcome_unknown"
         : this.activeRun?.deadlineExceeded
         ? "deadline"
-        : this.activeRun?.outputLimitExceeded
+        : this.activeRun?.outputLimitExceeded || finalAssistant?.stopReason === "length"
         ? "output_limit"
         : finalAssistant?.stopReason === "aborted" || this.agent.signal?.aborted
         ? "aborted"
-        : finalAssistant?.stopReason === "error" || this.agent.state.errorMessage
+        : finalAssistant?.stopReason === "error" || this.agent.state.errorMessage || emptyFinal
           ? "error"
           : "success";
       const error = this.activeRun?.unknownOutcome
@@ -356,7 +388,9 @@ export class AgentSession {
         ? "Run deadline exceeded"
         : this.activeRun?.outputLimitExceeded
         ? "Output character limit exceeded"
-        : finalAssistant?.errorMessage ?? this.agent.state.errorMessage;
+        : finalAssistant?.stopReason === "length"
+        ? "Model response reached its output token limit"
+        : finalAssistant?.errorMessage ?? this.agent.state.errorMessage ?? (emptyFinal ? "Model returned an empty final response" : undefined);
       const result: RunResult = {
         runId,
         status,
@@ -400,7 +434,8 @@ export class AgentSession {
       model: this.agent.state.model,
       systemPrompt: this.agent.state.systemPrompt,
       messages: [...this.agent.state.messages],
-      savedAt: Date.now()
+      savedAt: Date.now(),
+      ...(this.activeSkill ? { activeSkill: this.activeSkill } : {})
     };
   }
 
@@ -417,7 +452,8 @@ export class AgentSession {
       sessionId: snapshot.sessionId,
       model: snapshot.model,
       systemPrompt: snapshot.systemPrompt,
-      initialMessages: snapshot.messages
+      initialMessages: snapshot.messages,
+      activeSkill: snapshot.activeSkill
     });
   }
 

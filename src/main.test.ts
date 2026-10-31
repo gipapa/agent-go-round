@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { IDBFactory } from "fake-indexeddb";
+
+beforeEach(() => { vi.stubGlobal("indexedDB", new IDBFactory()); });
 
 let testStorage: Storage;
 
@@ -35,7 +39,8 @@ async function loadApp(): Promise<void> {
   vi.resetModules();
   document.body.innerHTML = '<main id="app"></main>';
   await import("./main");
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  await vi.waitFor(() => expect(document.querySelector("#send")?.hasAttribute("disabled")).toBe(false));
+  await new Promise<void>((resolve) => setTimeout(resolve, 40));
 }
 
 afterEach(() => {
@@ -126,6 +131,9 @@ describe("main workspace UI", () => {
     await loadApp();
     const restoredPrompt = document.querySelector<HTMLTextAreaElement>("#prompt");
     expect(restoredPrompt?.value).toBe("unfinished local draft");
-    expect(window.localStorage.getItem("agent-go-round.workspace")).not.toContain("gsk_");
+    expect(window.localStorage.getItem("agent-go-round.workspace")).toBeNull();
+    const { IndexedDbConversationStore, IndexedWorkspaceRecords } = await import("./core/conversations");
+    const saved = await new IndexedDbConversationStore(new IndexedWorkspaceRecords(window.indexedDB)).load();
+    expect(JSON.stringify(saved)).not.toContain("gsk_");
   });
 });
