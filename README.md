@@ -76,6 +76,21 @@ production build 會另外產生 `embed.js`，可由宿主 HTML 以 script 載�
 
 GitHub Pages 使用 project-site 子路徑 `/agent-go-round/`；loader 會依照 `embed.js` 所在位置找到 iframe app，因此宿主頁面不需要自行設定 app URL。若宿主網站有 CSP，需允許從 `https://gipapa.github.io` 載入 script 與 iframe。loader 不包含 Groq API key；目前真實 Groq 對話仍需使用者在 popup 輸入自己的 key，不能把擁有者 key 放進公開 bundle。
 
+localhost 的 host page 也可以直接使用 GitHub Pages 的 production loader。若要測 production 版本，請使用絕對 URL；`src="./embed.js"` 則會改載入 localhost 自己提供的 loader：
+
+```html
+<script
+  type="module"
+  src="https://gipapa.github.io/agent-go-round/embed.js"
+  data-target="body"
+  data-mode="popup"
+  data-button-label="Open AgentGoRound"
+  defer
+></script>
+```
+
+Loader 會從自身的 GitHub Pages URL 推導 iframe app URL；localhost host 需要能連網，且若有 CSP 需允許載入 `https://gipapa.github.io` 的 script 與 iframe。
+
 Loader 也會提供 `window.AgentGoRound.mount()`，widget instance 目前支援 `open()`、`close()`、`toggle()`、`postMessage()` 與 `destroy()`。iframe bridge 使用 `postMessage`，目前支援 `hello`、`ready`、`prompt`、`error`、`host_tools`、`host_tool_call`／`host_tool_result`／`host_tool_cancel`、`open-settings` 與 `close-settings`；provider 認證與跨 tab routing 尚未納入 embed API。
 
 宿主可在 mount 後以 `widget.registerTool({ name, label, description, parameters, requiresApproval, timeoutMs }, handler, approval?)` 明確註冊 allow-listed tool。每次呼叫都帶有 instance、session、tool-call、request identity；parent bridge 會再次驗證 JSON schema，handler 可使用 `AbortSignal`。`requiresApproval` tool 必須先取得由宿主核發、綁定精確參數與 tool-call、60 秒後過期且只能使用一次的 approval token，直接繞過 approval 的 `host_tool_call` 會被拒絕。bridge 會處理 cancel、timeout 與 `outcome_unknown`，不會讓 iframe 直接讀取宿主 DOM、cookies 或 storage。因本版加入 tool-call identity 與 approval token，wire protocol 已 bump 為 v2、SDK 為 `0.2.0`，目前採明確 exact-match；不支援的版本會 fail closed。`public/embed-example.html` 內含一個 read-only host tool 範例。
