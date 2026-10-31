@@ -71,7 +71,7 @@ UI 與核心分離，簡潔文字介面、浮動 widget 與宿主自行製作的
 
 目標接口為 Chat Completions（`/chat/completions`），先完成多輪訊息、串流文字、停止與錯誤處理；工具 schema/call/result 在 M1 加入。相容性以實際測試為準，不宣稱所有 OpenAI 相容 provider 都已支援。
 
-開發用 key 透過本機未追蹤設定或使用者輸入提供；使用者明確勾選後可保存到目前 origin 的 `localStorage`，否則只在記憶體持有。無論是否保存，都不寫進 bundle、對話、trace 或跨 tab 訊息；provider drawer 提供清除操作。
+開發用 key 透過本機未追蹤設定或使用者輸入提供；provider drawer 預設勾選保存到目前 origin 的 `localStorage`，使用者取消勾選時只在記憶體持有。無論是否保存，都不寫進 bundle、對話、trace 或跨 tab 訊息；provider drawer 提供清除操作。
 
 先驗證瀏覽器連線與 production build 的實際行為；若需要本機 relay，記錄它的用途與限制，不把本機成功視為公開嵌入部署已可用。
 
@@ -201,10 +201,10 @@ Groq 是第一個真實 provider 與早期對話驗收目標；日常回歸仍�
 
 完成紀錄（2026-10-31）：
 
-- `src/main.ts` 已加入 provider surface 的 dialog 語意、遮罩點擊關閉、Escape、focus trap、關閉後 focus 回復與 visual viewport 高度同步；popup 開關不改變 active tab。
+- `src/main.ts` 已加入 provider surface 的 dialog 語意、遮罩點擊關閉、Escape、focus trap、關閉後 focus 回復，以及 visual viewport 高度／位移同步與鍵盤出現後的 focused-control 自動捲動；popup 開關不改變 active tab。
 - `src/styles.css` 已加入共用單欄 surface：desktop anchored overlay、mobile full-screen、固定標題／底部操作列、獨立捲動、safe-area、窄寬度防水平溢出與鍵盤可用高度處理。
-- Browser smoke 已檢查 1280×800 desktop、360×740 mobile、360×400 keyboard-height viewport；確認 document 無水平捲動、mobile popup 寬高跟隨 viewport、Connect 操作仍在可視範圍、Escape 後 focus 回到 provider 按鈕且 tab 不變。
-- `npm test`（目前 51 tests）、`npm run typecheck`、`npm run build` 均通過。
+- Browser smoke 已檢查 1280×800 desktop、360×740 mobile、360×300 keyboard-height viewport；確認 document 無水平捲動、mobile popup 寬高跟隨 viewport、API key 欄位與 Connect 操作仍在可視範圍、Escape 後 focus 回到 provider 按鈕且 tab 不變。
+- `npm test`（目前 52 tests）、`npm run typecheck`、`npm run build` 均通過。
 - Smoke 中發現並修正 `[hidden]` 被 flex layout 覆蓋的問題；popup 關閉狀態現已明確維持 `display: none`。
 
 尚待確認：使用者在實際手機／瀏覽器上的視覺、觸控、長訊息捲動與軟鍵盤體驗；跨 tab 的 scripted/browser 第一輪已完成，但仍未宣稱 Groq live compatibility 或完整產品驗收通過。

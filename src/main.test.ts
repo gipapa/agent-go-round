@@ -50,7 +50,7 @@ describe("main workspace UI", () => {
     const drawer = document.querySelector<HTMLElement>("#settings-drawer");
     const remember = document.querySelector<HTMLInputElement>("#remember-key");
     if (!providerButton || !drawer || !remember) throw new Error("Expected provider controls");
-    expect(remember.checked).toBe(false);
+    expect(remember.checked).toBe(true);
 
     providerButton.focus();
     providerButton.click();
@@ -61,6 +61,37 @@ describe("main workspace UI", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(drawer.hidden).toBe(true);
     expect(document.activeElement).toBe(providerButton);
+  });
+
+  it("keeps the app aligned with a keyboard-shrunken visual viewport", async () => {
+    const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    const listeners: Record<string, () => void> = {};
+    const visualViewportState = {
+      height: 400,
+      offsetTop: 120,
+      addEventListener(type: string, listener: () => void) {
+        listeners[type] = listener;
+      },
+      removeEventListener() {}
+    };
+    const visualViewport = visualViewportState as unknown as VisualViewport;
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: visualViewport });
+
+    try {
+      await loadApp();
+      expect(document.documentElement.style.getPropertyValue("--viewport-height")).toBe("400px");
+      expect(document.documentElement.style.getPropertyValue("--viewport-offset-top")).toBe("120px");
+
+      visualViewportState.height = 300;
+      visualViewportState.offsetTop = 200;
+      listeners.resize?.();
+
+      expect(document.documentElement.style.getPropertyValue("--viewport-height")).toBe("300px");
+      expect(document.documentElement.style.getPropertyValue("--viewport-offset-top")).toBe("200px");
+    } finally {
+      if (originalVisualViewport) Object.defineProperty(window, "visualViewport", originalVisualViewport);
+      else Reflect.deleteProperty(window, "visualViewport");
+    }
   });
 
   it("routes an explicit question to the other tab without creating a queue", async () => {

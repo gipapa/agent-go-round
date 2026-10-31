@@ -156,7 +156,7 @@ app.innerHTML = `
             <label>Base URL<input id="base-url" type="url" autocomplete="url" /></label>
             <label>Model<input id="model" type="text" autocomplete="off" /></label>
             <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
-            <div class="remember-row"><label class="remember-toggle"><input id="remember-key" type="checkbox" /> Remember this key in this browser</label><button id="clear-key" class="clear-key" type="button">clear saved key</button></div>
+            <div class="remember-row"><label class="remember-toggle"><input id="remember-key" type="checkbox" checked /> Remember this key in this browser</label><button id="clear-key" class="clear-key" type="button">clear saved key</button></div>
             <p id="settings-status" class="settings-status" role="status" aria-live="polite"></p>
           </form>
         </div>
@@ -175,7 +175,7 @@ const get = <T extends HTMLElement>(id: string): T => {
 get<HTMLInputElement>("base-url").value = storedBaseUrl || configuredBaseUrl;
 get<HTMLInputElement>("model").value = storedModel || configuredModel;
 get<HTMLInputElement>("api-key").value = storedApiKey;
-get<HTMLInputElement>("remember-key").checked = false;
+get<HTMLInputElement>("remember-key").checked = true;
 
 const terminal = get<HTMLDivElement>("terminal");
 const promptElement = get<HTMLTextAreaElement>("prompt");
@@ -201,8 +201,24 @@ let workspaceSaveInFlight = false;
 let workspaceSaveQueued = false;
 
 function syncViewportHeight(): void {
-  const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+  const visualViewport = window.visualViewport;
+  const viewportHeight = visualViewport?.height ?? window.innerHeight;
+  const viewportOffsetTop = visualViewport?.offsetTop ?? 0;
   document.documentElement.style.setProperty("--viewport-height", `${Math.round(viewportHeight)}px`);
+  document.documentElement.style.setProperty("--viewport-offset-top", `${Math.round(viewportOffsetTop)}px`);
+  requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
+}
+
+function scrollFocusedSurfaceControlIntoView(): void {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement)) return;
+  const surface = active.closest<HTMLElement>(".surface-scroll");
+  if (!surface) return;
+  const activeRect = active.getBoundingClientRect();
+  const surfaceRect = surface.getBoundingClientRect();
+  if (activeRect.top < surfaceRect.top || activeRect.bottom > surfaceRect.bottom) {
+    active.scrollIntoView({ block: "center", inline: "nearest" });
+  }
 }
 
 syncViewportHeight();
@@ -982,7 +998,7 @@ document.addEventListener("keydown", (event) => {
 settingsDrawer.addEventListener("focusin", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  requestAnimationFrame(() => target.scrollIntoView({ block: "nearest", inline: "nearest" }));
+  requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
 });
 
 document.addEventListener("keydown", (event) => {
@@ -1009,7 +1025,7 @@ document.addEventListener("keydown", (event) => {
 routeDialog.addEventListener("focusin", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  requestAnimationFrame(() => target.scrollIntoView({ block: "nearest", inline: "nearest" }));
+  requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
 });
 
 const EMBED_SOURCE = "agent-go-round-embed";

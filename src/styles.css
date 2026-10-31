@@ -2,6 +2,7 @@
   color: #e8e7ee;
   background: #111116;
   --viewport-height: 100dvh;
+  --viewport-offset-top: 0px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-synthesis: none;
   line-height: 1.45;
@@ -14,7 +15,7 @@ button, input, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 
-.app-shell { display: flex; width: 100%; height: var(--viewport-height); min-width: 0; min-height: 0; background: #111116; }
+.app-shell { position: fixed; top: var(--viewport-offset-top); right: 0; left: 0; display: flex; width: 100%; height: var(--viewport-height); min-width: 0; min-height: 0; background: #111116; }
 .sidebar { display: flex; width: 238px; min-width: 238px; flex-direction: column; border-right: 1px solid #2d2c35; background: #15151b; color: #aaa8b5; }
 .brand-row { display: flex; height: 54px; align-items: center; gap: 10px; border-bottom: 1px solid #2d2c35; padding: 0 17px; }
 .brand-mark { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #76689a; color: #c4a7f3; font-size: 16px; }
@@ -100,7 +101,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .terminal-footer { justify-content: space-between; border-top: 1px solid #272631; color: #656270; background: #111116; padding: 7px 15px; font-size: 9px; }
 .terminal-footer span:last-child { color: #777283; }
 
-.settings-backdrop, .route-backdrop { position: fixed; z-index: 4; inset: 0; background: rgba(8, 8, 12, .58); }
+.settings-backdrop, .route-backdrop { position: fixed; z-index: 4; top: var(--viewport-offset-top); right: 0; left: 0; height: var(--viewport-height); background: rgba(8, 8, 12, .58); }
 .settings-drawer, .route-dialog { position: absolute; z-index: 5; top: 53px; right: 16px; display: flex; width: min(390px, calc(100% - 32px)); max-height: calc(100% - 69px); flex-direction: column; overflow: hidden; border: 1px solid #57506c; background: #1b1925; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
 .route-dialog { top: 111px; }
 .settings-backdrop[hidden], .settings-drawer[hidden], .route-backdrop[hidden], .route-dialog[hidden] { display: none; }
@@ -165,7 +166,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .terminal-form-actions { grid-column: 2; justify-content: flex-end; flex-wrap: wrap; }
   .terminal-footer span:last-child { display: none; }
 
-  .settings-drawer, .route-dialog { position: fixed; inset: 0; width: 100%; max-height: none; border: 0; box-shadow: none; height: var(--viewport-height); }
+  .settings-drawer, .route-dialog { position: fixed; top: var(--viewport-offset-top); right: 0; bottom: auto; left: 0; width: 100%; max-height: none; border: 0; box-shadow: none; height: var(--viewport-height); }
   .surface-header { padding-top: max(14px, env(safe-area-inset-top)); padding-left: max(18px, env(safe-area-inset-left)); padding-right: max(18px, env(safe-area-inset-right)); }
   .surface-scroll { padding-left: max(18px, env(safe-area-inset-left)); padding-right: max(18px, env(safe-area-inset-right)); }
   .surface-actions { padding-left: max(18px, env(safe-area-inset-left)); padding-right: max(18px, env(safe-area-inset-right)); }

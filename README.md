@@ -25,7 +25,7 @@ npm install
 npm run dev
 ```
 
-開啟 Vite 顯示的網址即可使用 scripted demo；在頁面輸入 Groq API key 可切換到 Groq。設定 drawer 使用 password field，`Remember this key in this browser` 預設關閉；保持關閉時 key 只存在目前頁面的 in-memory provider runtime，勾選後才會保存到目前 origin 的 `localStorage`，並提供清除操作。key 不會寫入 bundle、session 或 embed bridge。不要把 API key 貼到聊天或 commit。
+開啟 Vite 顯示的網址即可使用 scripted demo；在頁面輸入 Groq API key 可切換到 Groq。設定 drawer 使用 password field，`Remember this key in this browser` 預設開啟；取消勾選時 key 只存在目前頁面的 in-memory provider runtime，保持勾選才會保存到目前 origin 的 `localStorage`，並提供清除操作。key 不會寫入 bundle、session 或 embed bridge。不要把 API key 貼到聊天或 commit。
 
 ```sh
 npm test
