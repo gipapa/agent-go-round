@@ -71,6 +71,9 @@ try {
   report.compact = compact; check("360px visible viewport keeps composer visible and transcript scrollable");
   await call("screenshot", "test-results/mobile-keyboard-simulated.png");
   await send("AI"); assert(await evaluate("document.querySelector('#pane-type').textContent==='AI agent'"), "ai did not enter agent mode");
+  const mobileStatusBar = await evaluate("(() => {const footer=document.querySelector('.terminal-footer'),model=document.querySelector('#footer-model'),footerBox=footer.getBoundingClientRect(),modelBox=model.getBoundingClientRect();return {text:model.textContent,height:footerBox.height,modelHeight:modelBox.height,modelWidth:modelBox.width,modelScrollWidth:model.scrollWidth,modelClientWidth:model.clientWidth};})()");
+  assert(mobileStatusBar.text.includes("context") && mobileStatusBar.text.includes("compact") && mobileStatusBar.modelHeight > 12 && mobileStatusBar.modelScrollWidth === mobileStatusBar.modelClientWidth, "Mobile AI status bar clipped context usage");
+  check("mobile AI status bar wraps model and context usage instead of clipping it");
   const mobileEnter = await evaluate("(() => {const prompt=document.querySelector('#prompt');prompt.value='line';const event=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});prompt.dispatchEvent(event);return {defaultPrevented:event.defaultPrevented,pane:document.querySelector('#pane-type').textContent};})()");
   assert(!mobileEnter.defaultPrevented && mobileEnter.pane === "AI agent", "mobile AI Enter should insert a newline instead of submitting");
   check("mobile AI composer keeps Enter for newlines");
