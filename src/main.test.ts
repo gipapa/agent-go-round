@@ -146,6 +146,21 @@ describe("main workspace UI", () => {
     }
   });
 
+  it("keeps Enter as a newline in the mobile AI composer", async () => {
+    await loadApp();
+    const prompt = document.querySelector<HTMLTextAreaElement>("#prompt")!;
+    const form = document.querySelector<HTMLFormElement>("#terminal-form")!;
+    prompt.value = "ai"; form.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("#pane-type")?.textContent).toBe("AI agent"));
+    document.documentElement.classList.add("keyboard-open");
+    prompt.value = "first line";
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    prompt.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(false);
+    expect(document.querySelector("#pane-type")?.textContent).toBe("AI agent");
+    document.documentElement.classList.remove("keyboard-open");
+  });
+
   it("routes an explicit question to the other tab without creating a queue", async () => {
     await loadApp();
     document.querySelector<HTMLButtonElement>("#add-tab")!.click();

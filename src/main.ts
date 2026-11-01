@@ -264,6 +264,13 @@ function syncViewportHeight(): void {
   requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
 }
 
+function keepsAgentEnterAsNewline(): boolean {
+  if (activeTab().mode !== "agent") return false;
+  if (document.documentElement.classList.contains("keyboard-open")) return true;
+  if (typeof window.matchMedia !== "function") return false;
+  return window.matchMedia("(max-width: 760px)").matches || window.matchMedia("(pointer: coarse)").matches;
+}
+
 function scrollFocusedSurfaceControlIntoView(): void {
   const active = document.activeElement;
   if (!(active instanceof HTMLElement)) return;
@@ -1183,7 +1190,7 @@ promptElement.addEventListener("input", () => {
 });
 
 promptElement.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (event.key === "Enter" && !event.shiftKey && !keepsAgentEnterAsNewline()) {
     event.preventDefault();
     get<HTMLFormElement>("terminal-form").requestSubmit();
   }
