@@ -13,6 +13,7 @@
   <body>
     <main>
       <h1>Host page</h1>
+      <p>這一頁的作者是gipapa</p>
       <p>This page loads AgentGoRound through <code>embed.js</code>. The widget is isolated in an iframe.</p>
       <p>Use the button in the lower-right corner to open the popup.</p>
     </main>
@@ -26,22 +27,5 @@
       data-button-label="Open AgentGoRound"
       defer
     ></script>
-    <script defer>
-      window.addEventListener("DOMContentLoaded", () => {
-        const widget = window.AgentGoRound?.defaultWidget;
-        widget?.registerTool(
-          {
-            name: "read_host_context",
-            label: "Read host context",
-            description: "Read the small, explicitly approved context supplied by this host page.",
-            parameters: { type: "object", additionalProperties: false, properties: {} }
-          },
-          async ({ signal }) => {
-            if (signal.aborted) throw new Error("Host request was cancelled");
-            return { page: "embed-example", permission: "demo-read-only" };
-          }
-        );
-      });
-    </script>
   </body>
 </html>

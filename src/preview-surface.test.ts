@@ -25,6 +25,20 @@ describe("preview and popup lifecycle", () => {
       expect(surface.frame.srcdoc).toContain("After"); expect(surface.frame.srcdoc).toContain("color:blue");
       expect(surface.widget.iframe).toBe(popup); expect(popup.src).toBe(original);
       expect(surface.widget.element.shadowRoot!.querySelector(".overlay")!.getAttribute("data-open")).toBe("true");
+      const messages = vi.spyOn(popup.contentWindow!, "postMessage").mockImplementation(() => {});
+      try {
+        popup.dispatchEvent(new Event("load"));
+        const hello = messages.mock.calls.map(([message]) => message).find(message => message.type === "hello");
+        window.dispatchEvent(new MessageEvent("message", {
+          source: popup.contentWindow, origin: new URL(popup.src).origin,
+          data: { source: "agent-go-round", type: "host_tool_call", payload: {
+            version: 2, instanceId: hello.payload.instanceId, requestId: "read-preview", sessionId: "test", toolCallId: "read-host", toolName: "read_host_page", args: {}
+          } }
+        }));
+        await vi.waitFor(() => expect(messages.mock.calls.map(([message]) => message).find(message => message.type === "host_tool_result")?.payload).toMatchObject({
+          status: "success", result: { path: "/home/user/main.html", revision: 2, html: expect.stringContaining("After") }
+        }));
+      } finally { messages.mockRestore(); }
     } finally { surface.destroy(); }
     expect(surface.element.isConnected).toBe(false);
   });

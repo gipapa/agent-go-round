@@ -33,7 +33,7 @@ Terminal 會列出簡易 bash 支援的內建指令及 ~/bin 檔案工具。指�
 
 手機與觸控裝置的輸入欄位採 16px。鍵盤縮小可視區時，保留直式 tab 列並暫時隱藏額外標題，把 composer 收成一列，保留可捲動的 terminal。App 和 popup 同時跟隨 visual viewport 的高度、寬度與位移；popup iframe 只調整尺寸，保留草稿和對話。鍵盤收起時恢復原版面。
 
-`npm run test:mobile:browser` 不需 API key；透過真實 Chrome 模擬縮小至 360px 高的 visual viewport，十一項檢查涵蓋桌面／手機單一 tab 列與新增／關閉／切換、ls／cat／help、混合大小寫指令、composer、捲動、設定表單、popup 草稿保留及水平位移。回歸測試目前共 108 項通過；瀏覽器結果為 `test-results/mobile-browser.json`，截圖為 `mobile-*-simulated.png`。這是可視區幾何回歸，未取代 iPhone Safari 實體鍵盤驗收。
+`npm run test:mobile:browser` 不需 API key；透過真實 Chrome 模擬縮小至 360px 高的 visual viewport，十一項檢查涵蓋桌面／手機單一 tab 列與新增／關閉／切換、ls／cat／help、混合大小寫指令、composer、捲動、設定表單、popup 草稿保留及水平位移。回歸測試目前共 110 項通過；瀏覽器結果為 `test-results/mobile-browser.json`，截圖為 `mobile-*-simulated.png`。這是可視區幾何回歸，未取代 iPhone Safari 實體鍵盤驗收。
 
 ## 頁面與資源範圍
 
@@ -58,7 +58,11 @@ const widget = window.AgentGoRound.mount({
 });
 ```
 
-Script auto-mount 對應 `data-workspace="my-space"`、`data-surface="support-popup"`。Identity 僅接受 1–64 個英數字、底線或連字號。`ready` handshake 回報實際 workspaceId／surfaceId；指定的 binding 不符時 loader 回報錯誤。預設工作區仍為 default，原本沒有傳 binding 的 embed 保持相容。
+Script auto-mount 對應 `data-workspace="my-space"`、`data-surface="support-popup"`。Identity 僅接受 1–64 個英數字、底線或連字號。`ready` handshake 回報實際 workspaceId／surfaceId；指定的 binding 不符時 loader 回報錯誤。直接開啟 app 的預設工作區為 default。
+
+外部 popup 未指定 `workspaceId` 或 app URL 的 `workspace` 時，現在自動取得自己的 `popup-*` 工作區，與直接開 app 的 `default` 隔離。宿主 sessionStorage 依 URL／掛載順序記錄身份，重新整理可恢復。VFS 預覽明確傳入原 workspaceId，因此繼續共用檔案。Popup 內的 `read_host_page` 可讀實際宿主 HTML，排除 widget、script／style 與表單控制項，支援分頁；HTML 是外部資料而非 instructions。外部 Host page demo 已加入「這一頁的作者是gipapa」供真實模型驗收。
+
+VFS 預覽的 `read_host_page` 由可信任 runtime 綁定目前 entry，回傳原始 HTML 與檔案 path／revision，避免讀到編輯器外框。外部 demo 的 production browser 驗收已通過：真實 Groq GPT-OSS 20B 實際讀取 HTML 並回答 gipapa，另驗證 workspace 隔離、錯誤 instance 拒絕與 reload 檔案保存；證據在 `test-results/host-browser.json`。
 
 檔案、歷史和 writer leases 按 workspace 共用；editor、page view 與 popup 的 layout 分開保存。若從另一 surface 手動恢復同一個 session，既有 revision／lease 檢查仍會拒絕同時寫入。不同 workspace 的檔案不共用。
 

@@ -1,7 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { mount } from "./embed";
+import { mount, readHostPage } from "./embed";
 
 describe("AgentGoRound embed loader", () => {
+  it("isolates default popup workspaces and preserves explicit workspace bindings", () => {
+    const first = mount({ appUrl: "https://example.com/app/" });
+    const second = mount({ appUrl: "https://example.com/app/" });
+    const explicit = mount({ appUrl: "https://example.com/app/?workspace=shared" });
+    try {
+      const a = new URL(first.iframe.src).searchParams.get("workspace");
+      const b = new URL(second.iframe.src).searchParams.get("workspace");
+      expect(a).toMatch(/^popup-/);
+      expect(b).not.toBe(a);
+      expect(a).not.toBe("default");
+      expect(new URL(explicit.iframe.src).searchParams.get("workspace")).toBe("shared");
+    } finally { first.destroy(); second.destroy(); explicit.destroy(); }
+  });
+
+  it("reads actual host HTML with pagination while excluding widget UI and form values", () => {
+    const content = document.createElement("main");
+    content.innerHTML = '<p>這一頁的作者是gipapa</p><input value="private-value"><script>private-script</script>';
+    document.body.append(content);
+    const widget = mount({ appUrl: "about:blank" });
+    try {
+      const result = readHostPage();
+      expect(result.html).toContain("這一頁的作者是gipapa");
+      expect(result.html).not.toContain("private-value");
+      expect(result.html).not.toContain("private-script");
+      expect(result.html).not.toContain("data-agent-go-round-widget");
+      const first = readHostPage(0, 12);
+      expect(first.nextOffset).toBe(12);
+      expect(first.html + readHostPage(12).html).toBe(result.html);
+      content.querySelector("p")!.textContent = "updated author";
+      expect(readHostPage().html).toContain("updated author");
+    } finally { widget.destroy(); content.remove(); }
+  });
   it("resizes a popup with its host visual viewport and removes observers on destroy", () => {
     const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
     const viewport = Object.assign(new EventTarget(), { width: 390, height: 844, offsetTop: 0, offsetLeft: 0 });

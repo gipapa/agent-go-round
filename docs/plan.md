@@ -16,21 +16,26 @@
 | F5：主頁與 popup | main.html／相對 CSS／SVG 預覽、獨立 page view、workspace／surface binding、agent 改頁面後刷新 | Groq GPT-OSS 20B 的七項整合檢查通過；刷新與切 tab 保留 popup，reload 可續聊 |
 | 指令操作補齊 | 啟動關鍵字統一為 `ai`；內建與自訂工具名稱、AI options、固定子命令不分大小寫 | `LS`、`Read`、`AI --NEW`、`DeMo JoKeS` 等可用；路徑、內容、JSON、session ID 保留大小寫 |
 | 手機鍵盤修正 | 16px 輸入、可視區寬高與位移同步、精簡 composer／chrome；popup 保留草稿 | 瀏覽器模擬通過；iPhone Safari 原生鍵盤與觸控仍待實機驗收 |
+| Popup 工作區隔離 | 未指定 workspace 的外部 popup 各自使用 `popup-*`；直接開 app 使用 `default`；宿主 reload 可恢復 | 明確 workspace binding 仍可共享；身份依宿主 sessionStorage、頁面 URL 與掛載順序保存，無法存取 sessionStorage 時只保留目前 instance |
+| 呼叫頁面 HTML 讀取 | Popup 提供唯讀 `read_host_page`，支援分頁；VFS 預覽綁定 entry 與 revision | 外部頁面排除 widget、script／style、表單控制項；Groq 實際讀取 demo HTML 並回答作者 gipapa |
 
 Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動多代理編排或隱藏補做迴圈。跨 tab 回覆由使用者明確觸發，保留來源並在下一輪帶入，回傳不自動啟動來源模型。
 
 手機與 popup 現僅保留直式 tab 列（含新增／切換／關閉），桌面僅保留橫式列；鍵盤開啟仍保留 tab 操作。Shell 的 ls／cat／grep／find 改為一般文字輸出，常用參數與每指令 --help 已補齊，AI 可呼叫 help 工具查閱；JSON 工具契約保留。
 
+外部 popup 未指定 workspace 時自動建立獨立工作區，與直接開 app 的 default 隔離；宿主頁 reload 依 sessionStorage 恢復。`read_host_page` 提供呼叫頁面 HTML，demo 已加入專屬作者資訊；真實 Groq 已讀取並辨識 gipapa。明確綁定 workspace 的 VFS 預覽沿用共享檔案契約。
+
 ## 目前驗證基線
 
-- 本次本機回歸為 23 個檔案、108 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI 為前次交付紀錄，本次修改尚未提交部署。
+- 本次本機回歸為 23 個檔案、110 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI／部署結果於 push 後另行確認。
 - `npm run test:mobile:browser` 的十一項檢查通過，涵蓋桌面／手機單一 tab 列與操作、ls／cat／help、混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
+- `npm run test:host:browser` 的四項檢查通過：popup 檔案與其他 popup／default 隔離、錯誤 instance 拒絕、真實 Groq GPT-OSS 20B 透過 bridge 讀取 HTML 並辨識 gipapa、宿主 reload 保留 workspace 與檔案。報告為 `test-results/host-browser.json`，畫面為 `test-results/host-popup.png`；無 key 時 live 任務明列 skipped。
 - [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md) 分別記錄真實模型、任務、限制與重跑方式。報告由 runner 寫入本機 `test-results/`，不納入 Git。
 - Harness／provider、模型決策、網路與 quota 失敗分別記錄。額度失敗不列為 PASS，既有 SDK 與 browser 的模型／儲存／執行器差異保留於報告。
 
 ## 後續工作順序（待排期）
 
-下列為後續順序；P0 的 tab 版面與 shell 操作修正已實作，原生裝置驗收仍待完成，其餘 P1–P4 尚待排期。
+下列為後續順序；P0 的 tab 版面與 shell 操作修正、外部 popup 隔離與呼叫頁面讀取已交付，原生裝置驗收仍待完成，其餘 P1–P4 尚待排期。
 
 | 順序 | 工作 | 完成條件 |
 |---|---|---|

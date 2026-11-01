@@ -115,7 +115,7 @@ Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入
 
 UI 使用 IndexedDB 保存檔案、tabs、editor draft、session transcript、歷史與 lifecycle／來源版本紀錄，首次會遷移舊 localStorage workspace 並保留原資料。關閉 tab 保留對話歷史；reload 後重連 Groq 會接續原 messages 與 active skill。
 
-URL 可用 `?workspace=NAME` 隔離檔案與歷史。相同 workspace 的 editor、page view 與 popup 共用檔案及歷史，各自保存 layout；revision／writer lease 檢查避免同一 session 被同時覆寫。Identity 接受 1–64 個英數字、底線或連字號。
+URL 可用 `?workspace=NAME` 隔離檔案與歷史。一般外部 popup 在未指定 workspace 時自動建立獨立 workspace，與直接開啟的 `default` 工作區及其他 popup 隔離。同一宿主瀏覽器分頁重新整理時，依頁面 URL 與掛載順序恢復原 workspace；sessionStorage 不可用時僅在目前 instance 保留身份。相同 workspace 的 editor、page view 與明確綁定的 popup 共用檔案及歷史，各自保存 layout；revision／writer lease 檢查避免同一 session 被同時覆寫。Identity 接受 1–64 個英數字、底線或連字號。
 
 IndexedDB 資料屬於目前瀏覽器與 app origin，不是雲端同步，也不會因部署到 GitHub Pages 就讓其他訪客取得你的自訂檔案。
 
@@ -128,13 +128,14 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 108 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽及 popup。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 110 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離與 host HTML 讀取。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
 | 指令 | 驗證範圍與需求 |
 |---|---|
 | `npm run test:mobile:browser` | 混合大小寫工具、模擬鍵盤、捲動、設定表單與 popup 草稿；先啟動 production preview，不需 API key |
+| `npm run test:host:browser` | Popup workspace 隔離、reload 保存與真實模型讀取 Host page 作者；先啟動 production preview，有 `.env.local` key 時執行 live 任務 |
 | `npm run test:jokes` | 真實 Groq 的五檔評分、歷史恢復、建立五檔並讀回；使用 `.env.local` 的 key |
 | `npm run test:jokes:browser` | 真正瀏覽器 UI／IndexedDB／Worker 的笑話驗收；先啟動 dev server，使用 `.env.local` 的 key，Node 需支援 TypeScript stripping |
 | `npm run test:preview:browser` | 真實 Groq 修改頁面、刷新、歷史、工作區隔離；先啟動 production preview，使用 `.env.local` 的 key |
@@ -175,7 +176,9 @@ const widget = window.AgentGoRound.mount({
 
 Widget 提供 `open()`、`close()`、`toggle()`、`postMessage()`、`on()`、`registerTool()`、`destroy()`；`mode: "inline"` 可直接嵌入容器。Workspace／surface binding 會由 ready handshake 核對；provider 認證與跨 tab routing 尚未提供 embed API。
 
-宿主可用 `registerTool(spec, handler, approval?)` 註冊工具。Bridge 驗證 schema、instance／session／tool-call／request identity，處理取消、deadline 與 outcome unknown；需批准的工具使用綁定精確參數、只能使用一次的 approval token。Bridge 不提供任意讀取宿主 DOM、cookies 或 storage 的介面。目前 wire protocol 為 v2、SDK 為 `0.2.0`，不支援的版本會被拒絕。
+Popup 預設提供唯讀 `read_host_page` 工具，AI 可讀取實際呼叫頁面的 HTML（移除 widget UI、script、style 及表單控制項），並以 `offset`／`limit` 分頁。HTML 視為外部資料；不會自動成為 system instructions 或寫入 VFS。Demo Host page 包含「這一頁的作者是gipapa」，可在 popup 連接 Groq、輸入 `ai`，再問「這一頁的作者是誰？」驗證工具讀取。
+
+宿主可用 `registerTool(spec, handler, approval?)` 註冊額外工具。Bridge 驗證 schema、instance／session／tool-call／request identity，處理取消、deadline 與 outcome unknown；需批准的工具使用綁定精確參數、只能使用一次的 approval token。Bridge 不提供任意讀取宿主 cookies 或 storage 的介面。目前 wire protocol 為 v2、SDK 為 `0.2.0`，不支援的版本會被拒絕。
 
 純 HTML 範例為 [public/embed-example.html](public/embed-example.html)，可在本機 build／preview 後開啟 `/embed-example.html`，或查看 [線上 embed example](https://gipapa.github.io/agent-go-round/embed-example.html)。React 範例在 [examples/react-host](examples/react-host)：在該目錄執行 `npm install`，再以 `VITE_AGENT_APP_URL=http://127.0.0.1:4173/ npm run dev` 啟動；unmount 時會 destroy widget。
 

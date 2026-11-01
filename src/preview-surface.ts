@@ -39,7 +39,14 @@ export class PreviewSurface {
     this.frame.title = `預覽 ${displayPath(config.entry)}`;
     this.frame.setAttribute("sandbox", ""); this.frame.setAttribute("referrerpolicy", "no-referrer");
     this.element.append(toolbar, this.frame);
-    this.widget = mount({ target: this.element, appUrl: workspaceUrl.href, workspaceId, surfaceId: config.surfaceId, title: "Pi · 頁面工作區", buttonLabel: "開啟 Pi", width: 700, height: 800 });
+    this.widget = mount({ target: this.element, appUrl: workspaceUrl.href, workspaceId, surfaceId: config.surfaceId, title: "Pi · 頁面工作區", buttonLabel: "開啟 Pi", width: 700, height: 800,
+      hostPageReader: async (offset, limit) => {
+        const file = await this.fs.readFile(this.config.entry);
+        if (offset > file.content.length) throw new Error("Host page offset exceeds HTML length");
+        const end = Math.min(offset + limit, file.content.length);
+        return { url: `vfs:${file.path}`, path: file.path, revision: file.revision, title: displayPath(file.path), html: file.content.slice(offset, end), offset, totalCharacters: file.content.length, ...(end < file.content.length ? { nextOffset: end } : {}) };
+      }
+    });
     this.widget.on("error", error => { if (!this.disposed) this.status.textContent = error instanceof Error ? error.message : String(error); });
     this.unsubscribe = this.widget.on("message", message => {
       const event = message as { type?: string; payload?: { phase?: string } };
