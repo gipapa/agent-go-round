@@ -110,6 +110,8 @@ describe("main workspace UI", () => {
     const footer = document.querySelector("#footer-model")!.textContent ?? "";
     expect(footer).toContain("context");
     expect(footer).toContain("compact 40%");
+    expect(document.querySelector(".terminal-footer")?.getAttribute("aria-label")).toBe("Status bar");
+    expect(document.querySelector("#footer-run-status")?.textContent).toBe("idle");
 
     const setting = document.querySelector<HTMLInputElement>("#auto-compact-percent")!;
     setting.value = "55";
@@ -140,6 +142,7 @@ describe("main workspace UI", () => {
       expect(document.documentElement.style.getPropertyValue("--viewport-width")).toBe("390px");
       expect(document.documentElement.style.getPropertyValue("--viewport-offset-left")).toBe("18px");
       expect(document.documentElement.classList.contains("keyboard-open")).toBe(true);
+      expect(document.querySelector(".terminal-footer")?.getAttribute("aria-label")).toBe("Status bar");
 
       visualViewportState.height = 300;
       visualViewportState.offsetTop = 200;
@@ -151,6 +154,7 @@ describe("main workspace UI", () => {
       expect(document.documentElement.style.getPropertyValue("--viewport-offset-top")).toBe("200px");
       expect(document.documentElement.style.getPropertyValue("--viewport-width")).toBe("360px");
       expect(document.documentElement.style.getPropertyValue("--viewport-offset-left")).toBe("27px");
+      expect(document.querySelector(".terminal-footer")?.getAttribute("aria-label")).toBe("Status bar");
       visualViewportState.height = 844;
       visualViewportState.offsetTop = 0;
       visualViewportState.offsetLeft = 0;

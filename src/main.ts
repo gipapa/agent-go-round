@@ -187,7 +187,16 @@ app.innerHTML = `
           <textarea id="prompt" rows="1" placeholder="Ask this agent to do something…" autocomplete="off" required></textarea>
           <div class="terminal-form-actions"><span id="run-status" class="run-status">idle</span><button id="stop" class="terminal-button stop-button" type="button" disabled>esc stop</button><button id="send" class="terminal-button send-button" type="submit">send</button></div>
         </form>
-        <footer class="terminal-footer"><span id="workspace-status" role="status" aria-live="polite">workspace · local</span><span id="footer-model">scripted model · ~/agent-go-round · master</span></footer>
+        <footer class="terminal-footer" aria-label="Status bar">
+          <div class="status-bar-group">
+            <span class="status-bar-label">STATUS</span>
+            <span id="footer-status-dot" class="status-dot idle" aria-hidden="true">○</span>
+            <span id="footer-run-status" role="status" aria-live="polite">idle</span>
+            <span class="status-bar-separator" aria-hidden="true">·</span>
+            <span id="workspace-status" role="status" aria-live="polite">workspace · local</span>
+          </div>
+          <span id="footer-model" title="scripted model · ~/agent-go-round · master">scripted model · ~/agent-go-round · master</span>
+        </footer>
       </section>
 
       <div id="route-backdrop" class="route-backdrop" aria-hidden="true" hidden></div>
@@ -1102,7 +1111,13 @@ function renderPane(tab: AgentTab): void {
   const statusDot = get<HTMLSpanElement>("pane-status-dot");
   statusDot.className = `status-dot ${statusClass(tab.status)}`;
   statusDot.textContent = statusGlyph(tab.status);
-  get<HTMLSpanElement>("run-status").textContent = statusLabel(tab.status);
+  const statusText = statusLabel(tab.status);
+  get<HTMLSpanElement>("run-status").textContent = statusText;
+  const footerStatusDot = get<HTMLSpanElement>("footer-status-dot");
+  footerStatusDot.className = `status-dot ${statusClass(tab.status)}`;
+  footerStatusDot.textContent = statusGlyph(tab.status);
+  footerStatusDot.title = statusText;
+  get<HTMLSpanElement>("footer-run-status").textContent = statusText;
   const running = tab.session.isRunning || !!tab.commandAbort;
   const modelLabel = tab.session.agent.state.model.name;
   const context = tab.session.contextUsage();
@@ -1110,7 +1125,9 @@ function renderPane(tab: AgentTab): void {
     ? ` · context ${context.percent}% (${context.usedTokens.toLocaleString()}/${context.contextWindow.toLocaleString()}) · compact ${context.autoCompactPercent}%`
     : "";
   get<HTMLSpanElement>("pane-model").textContent = tab.mode === "shell" ? "virtual shell" : modelLabel;
-  get<HTMLSpanElement>("footer-model").textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${contextLabel}${!tab.connected ? " · reconnect required" : ""}`;
+  const footerModel = get<HTMLSpanElement>("footer-model");
+  footerModel.textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${contextLabel}${!tab.connected ? " · reconnect required" : ""}`;
+  footerModel.title = footerModel.textContent;
   promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $ help | ai` : "Ask AI to work with your files…";
   if (promptElement.dataset.tabId !== tab.id) {
     promptElement.value = tab.draft;
