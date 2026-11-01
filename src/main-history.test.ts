@@ -112,6 +112,7 @@ describe("UI history at the real provider request boundary", () => {
     expect(requests[2].messages.filter((message) => message.content === "Remember pineapple-42")).toHaveLength(1);
     expect(requests[2].messages.some((message) => message.content === "ai")).toBe(false);
     await saved();
+    document.querySelector<HTMLButtonElement>("#add-tab")!.click();
     document.querySelector<HTMLElement>('[aria-label="Close main"]')!.click();
     await vi.waitFor(() => expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(1));
     await send(`ai --resume ${id}`);

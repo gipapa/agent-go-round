@@ -51,6 +51,8 @@ afterEach(() => {
 describe("main workspace UI", () => {
   it("scrolls to the newest shell output and streamed reply after the user scrolls up", async () => {
     await loadApp();
+    expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(1);
+    expect(document.querySelector("#tab-list .tab")?.textContent).toContain("main");
     const terminal = document.querySelector<HTMLElement>("#terminal")!;
     Object.defineProperty(terminal, "scrollHeight", { configurable: true, value: 1000 });
     Object.defineProperty(terminal, "clientHeight", { configurable: true, value: 200 });
@@ -136,6 +138,7 @@ describe("main workspace UI", () => {
 
   it("routes an explicit question to the other tab without creating a queue", async () => {
     await loadApp();
+    document.querySelector<HTMLButtonElement>("#add-tab")!.click();
     const routeButton = document.querySelector<HTMLButtonElement>("#route-tab");
     const routeDialog = document.querySelector<HTMLElement>("#route-dialog");
     const routeTarget = document.querySelector<HTMLSelectElement>("#route-target");

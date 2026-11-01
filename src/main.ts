@@ -93,7 +93,7 @@ const storedModel = readStored(STORAGE_KEYS.model);
 const state = {
   tabs: [] as AgentTab[],
   activeTabId: "main",
-  nextTabNumber: 3
+  nextTabNumber: 2
 };
 const tabRouter = new TabRouter();
 const legacyWorkspaceStore = new LocalStorageWorkspaceStore(browserStorage);
@@ -1116,9 +1116,8 @@ async function restoreWorkspace(): Promise<void> {
     state.tabs = [];
   }
   if (state.tabs.length === 0) {
-    state.nextTabNumber = 3;
+    state.nextTabNumber = 2;
     state.tabs.push(createTab("main", "main", ["The pane is ready. This is a Pi-backed scripted stream.", "The main session keeps its own transcript."]));
-    state.tabs.push(createTab("review", "review", ["Review pane ready. It is isolated from main."]));
   }
   state.activeTabId = state.tabs.some((tab) => tab.id === saved?.activeTabId) ? saved.activeTabId : state.tabs[0].id;
   promptElement.dataset.tabId = "";
@@ -1128,7 +1127,6 @@ async function restoreWorkspace(): Promise<void> {
 }
 
 state.tabs.push(createTab("main", "main", ["The pane is ready. This is a Pi-backed scripted stream.", "The main session keeps its own transcript."]));
-state.tabs.push(createTab("review", "review", ["Review pane ready. It is isolated from main."]));
 render();
 const appReady = (async () => {
   await filesReady;
