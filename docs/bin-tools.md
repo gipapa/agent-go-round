@@ -2,7 +2,7 @@
 
 已實作：IndexedDB VFS、檔案工具與 skill_load 的 JS 執行、shell／文字編輯器／Pi、歷史恢復、AGENTS.md 與檔案式 skill discovery，以及 [HTML 主頁與 popup 預覽](page-preview.md)。
 
-新 tab 從 `~` 開始。`pi` 進入 agent，`/exit` 回 shell；demo provider 只提供 scripted 文字，真實模型使用工具需先在 settings 連接 Groq。檔案都在瀏覽器 IndexedDB，同一個 workspace 的 app tabs 共用檔案，各有自己的 cwd；預設 workspace 為 `default`。UI/session、檔案與 lifecycle 均保存到 IndexedDB；API key 與少量 provider 偏好維持獨立設定。URL 可帶 `?workspace=NAME` 使用不同工作區（英數字、底線或連字號），各自隔離檔案與歷史。
+新 tab 從 `~` 開始。`ai` 進入 agent，`/exit` 回 shell；demo provider 只提供 scripted 文字，真實模型使用工具需先在 settings 連接 Groq。檔案都在瀏覽器 IndexedDB，同一個 workspace 的 app tabs 共用檔案，各有自己的 cwd；預設 workspace 為 `default`。UI/session、檔案與 lifecycle 均保存到 IndexedDB；API key 與少量 provider 偏好維持獨立設定。URL 可帶 `?workspace=NAME` 使用不同工作區（英數字、底線或連字號），各自隔離檔案與歷史。
 
 ## 預設工具
 

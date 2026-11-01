@@ -15,17 +15,17 @@
 ~/bin/read.js、write.js、edit.js、grep.js、find.js、ls.js、skill_load.js
 ```
 
-3. 在 provider settings 連接 Groq，執行 `pi`，用英文詢問：
+3. 在 provider settings 連接 Groq，執行 `ai`，用英文詢問：
 
 ```text
 Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.
 ```
 
 4. 查看中文答案、五筆評分與冠軍原文。介面列出本輪 AGENTS.md／skill／讀檔來源及 revision；工具結果可展開檢閱參數與原始內容。
-5. `/exit` → `edit ~/jokes/笑話1.md` → 修改並 Save → Cancel 返回 shell → reload → reconnect → `pi`。英文要求重新讀取五個檔案並評分，必須讀到新 revision。
-6. `/exit` → `pi --new`，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`read` 檢閱實際檔案。
+5. `/exit` → `edit ~/jokes/笑話1.md` → 修改並 Save → Cancel 返回 shell → reload → reconnect → `ai`。英文要求重新讀取五個檔案並評分，必須讀到新 revision。
+6. `/exit` → `ai --new`，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`read` 檢閱實際檔案。
 
-`history` 列出持久化對話，`pi --resume SESSION_ID` 重開，`pi --new` 明確另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
+`history` 列出持久化對話，`ai --resume SESSION_ID` 重開，`ai --new` 明確另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
 
 ## 重跑指令
 

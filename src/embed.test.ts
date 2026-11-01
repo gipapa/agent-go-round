@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 import { mount } from "./embed";
 
 describe("AgentGoRound embed loader", () => {
+  it("resizes a popup with its host visual viewport and removes observers on destroy", () => {
+    const original = Object.getOwnPropertyDescriptor(window, "visualViewport");
+    const viewport = Object.assign(new EventTarget(), { width: 390, height: 844, offsetTop: 0, offsetLeft: 0 });
+    Object.defineProperty(window, "visualViewport", { configurable: true, value: viewport });
+    const widget = mount({ appUrl: "about:blank" });
+    try {
+      const root = widget.element.shadowRoot!.querySelector<HTMLElement>(".widget-root")!;
+      viewport.height = 320; viewport.offsetTop = 90; viewport.width = 360; viewport.offsetLeft = 15;
+      viewport.dispatchEvent(new Event("resize"));
+      expect(root.style.getPropertyValue("--agr-viewport-height")).toBe("320px");
+      expect(root.style.getPropertyValue("--agr-viewport-width")).toBe("360px");
+      expect(root.style.getPropertyValue("--agr-viewport-top")).toBe("90px");
+      expect(root.style.getPropertyValue("--agr-viewport-left")).toBe("15px");
+      widget.destroy();
+      viewport.height = 844; viewport.dispatchEvent(new Event("resize"));
+      expect(root.style.getPropertyValue("--agr-viewport-height")).toBe("320px");
+    } finally {
+      widget.destroy();
+      if (original) Object.defineProperty(window, "visualViewport", original); else Reflect.deleteProperty(window, "visualViewport");
+    }
+  });
   it("binds a popup to an explicit workspace and restorable surface", () => {
     const widget = mount({ appUrl: "https://example.com/app/", workspaceId: "workspace-a", surfaceId: "popup-main" });
     expect(widget.iframe.src).toBe("https://example.com/app/?workspace=workspace-a&surface=popup-main");

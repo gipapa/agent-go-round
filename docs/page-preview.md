@@ -13,7 +13,7 @@ edit ~/main.html
 preview ~/main.html
 ```
 
-預覽右下角的「開啟 Pi」沿用現有 popup。連接 Groq、執行 `pi`，即可要求 agent 讀取或修改同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。Popup 有獨立對話版面，`/exit`、`history`、`pi --resume` 和工作區一樣可用。
+預覽右下角的「開啟 Pi」沿用現有 popup。連接 Groq、執行 `ai`，即可要求 agent 讀取或修改同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。Popup 有獨立對話版面，`/exit`、`history`、`ai --resume` 和工作區一樣可用。
 
 檔案更新後，預覽會顯示「檔案有更新」，按「重新載入預覽」才套用新內容。重新載入只替換頁面 iframe，不重建 popup；切換工作區 tabs 也保留 popup。整頁 reload 後會恢復預覽 entry、popup surface 與對話，Groq 需要重新連接。沒有自動重送模型或重做工具。
 
@@ -24,6 +24,14 @@ preview ~/main.html
 ```
 
 Page view 同樣有 Pi launcher。「工作區」連結可另開 shell/editor。URL 的 workspace 決定檔案與歷史範圍；surface 決定持久化版面。Popup 的 surface identity 隨預覽 tab 保存，reload 不會隨機換成另一段對話。
+
+## 手機鍵盤與簡易 bash
+
+Terminal 會列出簡易 bash 支援的內建指令及 ~/bin 檔案工具。啟動 agent 使用 `ai`，另開／恢復對話使用 `ai --new`、`ai --resume ID`；`/exit` 返回 shell。技能仍放在 `~/.pi/skills`。
+
+手機與觸控裝置的輸入欄位採 16px。鍵盤縮小可視區時，暫時隱藏側欄及額外標題，把 composer 收成一列，保留可捲動的 terminal。App 和 popup 同時跟隨 visual viewport 的高度、寬度與位移；popup iframe 只調整尺寸，保留草稿和對話。鍵盤收起時恢復原版面。
+
+`npm run test:mobile:browser` 不需 API key；透過真實 Chrome 模擬縮小至 360px 高的 visual viewport，驗證 composer、捲動、設定表單、popup 草稿保留及水平位移。六項檢查與 91 項回歸測試通過，證據為 `test-results/mobile-browser.json` 和 `mobile-*-simulated.png`。這是可視區幾何回歸，未取代 iPhone Safari 實體鍵盤驗收。
 
 ## 頁面與資源範圍
 

@@ -144,7 +144,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await executeShell('cat "space name.md"', fs, bin, "/home/user")).toMatchObject({ text: expect.stringContaining("hello\\nworld") });
     await executeShell("mkdir jokes", fs, bin, "/home/user");
     expect(await executeShell("cd jokes", fs, bin, "/home/user")).toMatchObject({ cwd: "/home/user/jokes" });
-    expect(await executeShell("pi", fs, bin, "/home/user")).toMatchObject({ mode: "agent" });
+    expect(await executeShell("ai", fs, bin, "/home/user")).toMatchObject({ mode: "agent" });
     await expect(executeShell("missing", fs, bin, "/home/user")).rejects.toThrow(/not found/);
     expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "ls", "read", "skill_load", "write"]);
   });

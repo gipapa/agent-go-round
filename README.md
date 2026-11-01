@@ -16,7 +16,7 @@
 
 ## 開發
 
-新 tab 先進入 `~` 的 shell，可輸入 `help`、`ls ~/bin`、`write demo.md "hello"`、`read demo.md`；`pi` 進入 agent，`/exit` 返回 shell。預設提供 read、write、edit、grep、find、ls 和 skill_load，新增工具以 `.js` 與 `.tool.json` 放入 `~/bin` 後執行 `rehash`。完整參數、隔離執行與擴充方式見 [bin 工具說明](docs/bin-tools.md)。`preview ~/main.html` 開啟頁面預覽，缺少檔案時可明確建立範本；右下角 Pi 可讀寫相同 VFS。操作、page view 和 embed binding 見 [主頁預覽](docs/page-preview.md)。
+新 tab 先進入 `~` 的 shell，可輸入 `help`、`ls ~/bin`、`write demo.md "hello"`、`read demo.md`；`ai` 進入 agent，`/exit` 返回 shell。預設提供 read、write、edit、grep、find、ls 和 skill_load，新增工具以 `.js` 與 `.tool.json` 放入 `~/bin` 後執行 `rehash`。完整參數、隔離執行與擴充方式見 [bin 工具說明](docs/bin-tools.md)。`preview ~/main.html` 開啟頁面預覽，缺少檔案時可明確建立範本；右下角 Pi 可讀寫相同 VFS。操作、page view 和 embed binding 見 [主頁預覽](docs/page-preview.md)。
 
 需要 Node.js 22 或更新版本：
 
@@ -34,9 +34,11 @@ npm run build
 npm run verify:dist
 ```
 
+手機輸入與 popup 可用 `npm run test:mobile:browser` 驗證（需 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定路徑，不消耗模型額度）。測試會模擬鍵盤縮小可視區，檢查 composer、捲動、設定表單與 popup 草稿保留；實際 iPhone Safari 鍵盤仍需裝置驗證。
+
 目前固定使用 `@earendil-works/pi-agent-core` / `pi-ai` `0.84.4`。日常回歸使用 scripted model；檔案式 skill 的 Groq 三任務驗收已執行，完整狀態與重跑方式見 [笑話驗收](docs/joke-acceptance.md)。
 
-快速體驗：在 shell 輸入 `demo jokes`，建立不覆寫既有檔案的中文 AGENTS.md、joke-master skill、評分參考與五個笑話。連接 Groq 後執行 `pi`，使用英文請它讀取、評分並選出最好笑的笑話。`edit PATH` 開啟文字編輯器；`history` 與 `pi --resume SESSION_ID` 可重開對話，`pi --new` 開始新對話。
+快速體驗：在 shell 輸入 `demo jokes`，建立不覆寫既有檔案的中文 AGENTS.md、joke-master skill、評分參考與五個笑話。連接 Groq 後執行 `ai`，使用英文請它讀取、評分並選出最好笑的笑話。`edit PATH` 開啟文字編輯器；`history` 與 `ai --resume SESSION_ID` 可重開對話，`ai --new` 開始新對話。
 
 Groq live tool acceptance 是明確 opt-in：設定 `AGENT_GO_ROUND_GROQ_API_KEY` 後執行 `npm run test:groq`，會跑 read、mutation/read-back、tool-error correction 三個短任務，輸出 provider/model、工具呼叫與 `harness`／`provider`／`quota`／`network`／`model_decision` 失敗分類；可用 `AGENT_GO_ROUND_GROQ_REPORT` 另外保存 JSON report。一般 `npm test` 不會觸發網路或消耗額度。
 

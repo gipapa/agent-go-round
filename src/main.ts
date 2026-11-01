@@ -4,7 +4,7 @@ import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath, FileSystemErro
 import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
-import { executeShell, shellWords } from "./core/shell";
+import { executeShell, shellWords, SHELL_NOTICE } from "./core/shell";
 import { configureFileAgent } from "./core/file-context";
 import { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
@@ -69,6 +69,7 @@ const surfaceId = locationParams.get("surface") || (pageView ? "page" : "workspa
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(surfaceId)) throw new Error("Invalid surface identity");
 document.body.classList.toggle("page-view", pageView);
 const previews = new Map<string, PreviewSurface>();
+const shellBootHint = "輸入 help 查看用法；ai 啟動 agent，/exit 返回簡易 bash。";
 const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
   apiKey: "agent-go-round.groq.api-key",
@@ -176,7 +177,7 @@ app.innerHTML = `
 
       <section class="pane" aria-label="Active agent pane">
         <header class="pane-header">
-          <div class="pane-agent-title"><span id="pane-status-dot" class="status-dot idle">○</span><strong id="pane-title">main</strong><span class="agent-type">Pi agent</span></div>
+          <div class="pane-agent-title"><span id="pane-status-dot" class="status-dot idle">○</span><strong id="pane-title">main</strong><span id="pane-type" class="agent-type">簡易 bash</span></div>
           <div class="pane-header-actions"><div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div><button id="route-tab" class="pane-action" type="button">ask another tab</button></div>
         </header>
 
@@ -264,12 +265,24 @@ let workspaceSaveTimer: number | undefined;
 let workspaceSaveInFlight = false;
 let workspaceSaveQueued = false;
 
+let fullViewportHeight = window.innerHeight;
+let viewportLayoutWidth = window.innerWidth;
 function syncViewportHeight(): void {
   const visualViewport = window.visualViewport;
   const viewportHeight = visualViewport?.height ?? window.innerHeight;
+  const viewportWidth = visualViewport?.width ?? window.innerWidth;
   const viewportOffsetTop = visualViewport?.offsetTop ?? 0;
+  const viewportOffsetLeft = visualViewport?.offsetLeft ?? 0;
+  if (Math.abs(window.innerWidth - viewportLayoutWidth) > 100) fullViewportHeight = window.innerHeight;
+  viewportLayoutWidth = window.innerWidth;
+  fullViewportHeight = Math.max(fullViewportHeight, window.innerHeight, viewportHeight);
+  const editing = document.activeElement?.matches('textarea, input:not([type="checkbox"]):not([type="button"]), select, [contenteditable="true"]') ?? false;
+  const keyboardOpen = fullViewportHeight - viewportHeight > 120 || (editing && viewportHeight < 500);
+  document.documentElement.classList.toggle("keyboard-open", keyboardOpen);
   document.documentElement.style.setProperty("--viewport-height", `${Math.round(viewportHeight)}px`);
+  document.documentElement.style.setProperty("--viewport-width", `${Math.round(viewportWidth)}px`);
   document.documentElement.style.setProperty("--viewport-offset-top", `${Math.round(viewportOffsetTop)}px`);
+  document.documentElement.style.setProperty("--viewport-offset-left", `${Math.round(viewportOffsetLeft)}px`);
   requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
 }
 
@@ -289,6 +302,8 @@ syncViewportHeight();
 window.addEventListener("resize", syncViewportHeight);
 window.visualViewport?.addEventListener("resize", syncViewportHeight);
 window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+document.addEventListener("focusin", syncViewportHeight);
+document.addEventListener("focusout", () => requestAnimationFrame(syncViewportHeight));
 
 function setWorkspaceStatus(message: string): void {
   workspaceStatus.textContent = message;
@@ -556,7 +571,7 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
   }
 }
 
-async function enterPi(tab: AgentTab, args: string[]): Promise<void> {
+async function enterAi(tab: AgentTab, args: string[]): Promise<void> {
   if (!args.length) { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; return; }
   if (args[0] === "--new" && args.length === 1) {
     await conversations().remember(workspaceTabSnapshot(tab));
@@ -586,7 +601,7 @@ async function enterPi(tab: AgentTab, args: string[]): Promise<void> {
     replacement.transcript.push({ id: makeId("resume"), role: "system", text: `Resumed ${saved.session.sessionId}` });
     return;
   }
-  throw new Error("Usage: pi | pi --new | pi --resume SESSION_ID");
+  throw new Error("Usage: ai | ai --new | ai --resume SESSION_ID");
 }
 
 async function openFileEditor(tab: AgentTab, path: string): Promise<void> {
@@ -639,7 +654,7 @@ function createTab(id: string, name: string, responses: readonly string[], branc
     detach: () => undefined,
     transcript: [
       { id: makeId("boot"), role: "system", text: `session ${name} · ${branch} · ready` },
-      { id: makeId("boot"), role: "system", text: "Virtual shell · IndexedDB files · type help, ls ~/bin, or pi" }
+      { id: makeId("boot"), role: "system", text: shellBootHint }
     ],
     status: "idle",
     unread: 0,
@@ -906,15 +921,22 @@ function renderTerminal(tab: AgentTab): void {
   logo.className = "terminal-logo";
   logo.textContent = "▐▛███▜▌";
   const label = document.createElement("span");
-  label.textContent = "AgentGoRound · Pi runtime";
+  label.textContent = tab.mode === "shell" ? "簡易 bash · 虛擬檔案系統" : "AgentGoRound · Pi runtime";
   intro.append(logo, label);
   terminal.append(intro);
+  if (tab.mode === "shell") {
+    const notice = document.createElement("p");
+    notice.className = "shell-notice";
+    notice.textContent = SHELL_NOTICE;
+    terminal.append(notice);
+  }
   for (const line of tab.transcript) appendTerminalLine(line, tab);
   terminal.scrollTop = follow ? terminal.scrollHeight : previousTop;
 }
 
 function renderPane(tab: AgentTab): void {
   get<HTMLSpanElement>("pane-title").textContent = tab.name;
+  get<HTMLSpanElement>("pane-type").textContent = tab.mode === "shell" ? "簡易 bash" : tab.mode === "editor" ? "檔案編輯" : tab.mode === "preview" ? "頁面預覽" : "AI agent";
   get<HTMLSpanElement>("pane-path").textContent = displayPath(tab.mode === "agent" ? tab.agentCwd ?? tab.cwd : tab.cwd);
   const statusDot = get<HTMLSpanElement>("pane-status-dot");
   statusDot.className = `status-dot ${statusClass(tab.status)}`;
@@ -924,7 +946,7 @@ function renderPane(tab: AgentTab): void {
   const modelLabel = tab.session.agent.state.model.name;
   get<HTMLSpanElement>("pane-model").textContent = tab.mode === "shell" ? "virtual shell" : modelLabel;
   get<HTMLSpanElement>("footer-model").textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${!tab.connected ? " · reconnect required" : ""}`;
-  promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $  help | ls ~/bin | pi` : "Ask Pi to work with your files…";
+  promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $ help | ai` : "Ask AI to work with your files…";
   if (promptElement.dataset.tabId !== tab.id) {
     promptElement.value = tab.draft;
     promptElement.dataset.tabId = tab.id;
@@ -1014,7 +1036,7 @@ function addTab(): void {
 
 function restoreTab(snapshot: WorkspaceTabSnapshot): AgentTab {
   const tab = createTab(snapshot.id, snapshot.name, ["Restored workspace tab."], snapshot.branch, snapshot.path);
-  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text: streaming ? `${text}\n[Interrupted by reload]` : text, ...(toolCallId ? { toolCallId } : {}) }));
+  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text: streaming ? `${text}\n[Interrupted by reload]` : role === "system" && text === "Virtual shell · IndexedDB files · type help, ls ~/bin, or pi" ? shellBootHint : text, ...(toolCallId ? { toolCallId } : {}) }));
   tab.draft = snapshot.draft;
   tab.mode = snapshot.mode ?? "shell";
   tab.cwd = snapshot.cwd ?? VFS_HOME;
@@ -1136,14 +1158,14 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
       if (words[0] === "preview") {
         if (words.length > 2) throw new Error("Usage: preview [PATH]");
         openPreview(resolvePath(words[1] || "~/main.html", tab.cwd));
-      } else if (words[0] === "pi") {
-        await enterPi(tab, words.slice(1));
+      } else if (words[0] === "ai") {
+        await enterAi(tab, words.slice(1));
       } else if (words[0] === "history") {
         const history = await conversations().history();
         tab.transcript.push({ id: makeId("history"), role: "system", text: history.map((entry) => `${entry.session.sessionId} · ${entry.name} · ${entry.provider ?? entry.session.model.provider} · ${new Date(entry.session.savedAt).toLocaleString()}`).join("\n") || "No saved conversations" });
       } else if (words[0] === "demo" && words[1] === "jokes") {
         const installed = await installJokeDemo(fileRuntime.fs);
-        tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} files created, ${installed.kept.length} existing files kept.\nRun pi, then ask:\n${JOKE_PROMPT}` });
+        tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} files created, ${installed.kept.length} existing files kept.\nRun ai, then ask:\n${JOKE_PROMPT}` });
       } else if (words[0] === "edit" && words.length === 2) {
         await openFileEditor(tab, words[1]);
       } else {

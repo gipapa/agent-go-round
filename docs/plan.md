@@ -4,7 +4,7 @@
 
 更新：2026-11-01。F0–F5 檔案式編輯器階段已完成，包含歷史、IndexedDB VFS、檔案工具／skills、笑話驗收，以及 [main.html 主頁與 Pi popup](page-preview.md)。目前實作狀態依連結中的驗收紀錄；下方 M0–M3 保留為歷史規劃。
 
-下一輪以 [Pi 檔案編輯器規劃](filesystem-editor-plan.md) 為準：修復歷史接續，建立 IndexedDB VFS，讓現有 tab 從 `~` 的 shell 執行 `pi`，並從檔案載入 AGENTS.md／skills，以五笑話任務驗收。[原始缺口盤點](poc-gap-plan.md) 保留參考。下列 M0–M3 為歷史實作紀錄，不代表新規劃的檔案編輯器、Groq reload／reconnect 歷史接續已完成；與新規劃不同之處依新規劃執行。
+下一輪以 [Pi 檔案編輯器規劃](filesystem-editor-plan.md) 為準：修復歷史接續，建立 IndexedDB VFS，讓現有 tab 從 `~` 的 shell 執行 `ai`，並從檔案載入 AGENTS.md／skills，以五笑話任務驗收。[原始缺口盤點](poc-gap-plan.md) 保留參考。下列 M0–M3 為歷史實作紀錄，不代表新規劃的檔案編輯器、Groq reload／reconnect 歷史接續已完成；與新規劃不同之處依新規劃執行。
 
 狀態：M0-A 已建立；最小 browser harness、Pi 0.84.4、scripted regression 與 Groq adapter 已建立。M0-B 的 Herdr-inspired tab shell 與第一版使用者觸發跨 tab 訊息／關聯回覆已建立；M0-B.1 的手機／popup 共用直式 surface 已完成第一輪實作與 browser smoke，待使用者實際視覺確認。M3 的 JS loader／iframe bridge 第一輪已完成，並以不同 localhost origin 驗證 iframe handshake／host tool catalog；完整嵌入驗收仍待補齊。
 

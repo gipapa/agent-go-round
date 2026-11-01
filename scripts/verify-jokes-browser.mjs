@@ -81,7 +81,7 @@ try {
   if (languageOnly) {
     const written = await command('write ' + JSON.stringify({ path: "~/AGENTS.md", content: "即使使用者使用英文提問，也必須使用繁體中文回答。" }));
     if (!written.last.includes("revision")) throw new Error("Failed to create language rule");
-    await connect(); await command("pi");
+    await connect(); await command("ai");
     const result = await command("Explain a virtual filesystem in one short sentence.");
     const state = await persisted();
     const last = state.events.filter(event => event.type === "run_finished").at(-1);
@@ -91,7 +91,7 @@ try {
     report.tasks.push({ id: "agents-only-english-to-chinese", status: "pass", model: state.tab.session.model.id, text: last.text, sources });
   } else {
   await command("demo jokes");
-  await connect(); await command("pi");
+  await connect(); await command("ai");
   const first = await command("Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.");
   report.tasks.push(await grade("browser-five-existing-jokes", first, "/home/user/jokes"));
   const previous = report.tasks[0];
@@ -102,7 +102,7 @@ try {
   if (!saved.includes("Saved")) throw new Error("Editor failed to save changed joke");
   await call("click", "#editor-cancel");
   await persisted(); await call("reload"); await waitReady();
-  await connect(); await command("pi");
+  await connect(); await command("ai");
   const next = await command("I edited a joke file. Use joke-master again, reread all five current files in ~/jokes, score each, and choose the funniest one.");
   const second = await grade("browser-reload-reconnect-rescore", next, "/home/user/jokes");
   if (second.sessionId !== previous.sessionId || second.messageCount <= previous.messageCount) throw new Error("Reload did not preserve conversation identity/history");
@@ -111,7 +111,7 @@ try {
   report.tasks.push(second);
   // History continuation is covered above. Start a distinct creation task so
   // free-tier per-request input-token limits do not conflate the two gates.
-  await command("/exit"); await command("pi --new");
+  await command("/exit"); await command("ai --new");
   const created = await command("Use joke-master. First create exactly five original short jokes as separate .md files in ~/new-jokes using write with createParents true, then actually read each file back, score all five, and select the funniest one.");
   report.tasks.push(await grade("browser-agent-create-read-back", created, "/home/user/new-jokes"));
   await command("/exit");

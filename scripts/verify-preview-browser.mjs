@@ -60,7 +60,7 @@ try {
   assert(await evaluate("document.querySelector('.preview-surface > iframe').srcdoc.includes('data:image/svg+xml;') && document.querySelector('.preview-surface > iframe').srcdoc.includes('rgb(17,34,51)')"), "VFS resources unresolved");
   check("HTML/CSS/SVG and sandbox isolation");
   await evaluate("(() => {document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.launcher').click();return true;})()");
-  await connect(); await send("pi", true);
+  await connect(); await send("ai", true);
   const task = 'Read ~/main.html, then use a file tool to change only the h1 text from "Original title" to "Updated by Pi". Preserve the stylesheet and image. Briefly report what you changed.';
   await evaluate(`(() => {${w}.__previewToken='preserve-popup';return true;})()`);
   await send(task, true, false);

@@ -78,7 +78,11 @@ const EMBED_STYLES = `
   .overlay {
     position: fixed;
     z-index: 2147483001;
-    inset: 0;
+    box-sizing: border-box;
+    top: var(--agr-viewport-top, 0px);
+    left: var(--agr-viewport-left, 0px);
+    width: var(--agr-viewport-width, 100vw);
+    height: var(--agr-viewport-height, 100dvh);
     display: none;
     align-items: flex-end;
     justify-content: flex-end;
@@ -88,8 +92,9 @@ const EMBED_STYLES = `
   .overlay[data-open="true"] { display: flex; }
   .panel {
     position: relative;
-    width: min(var(--agr-width), calc(100vw - 32px));
-    height: min(var(--agr-height), calc(100vh - 32px));
+    box-sizing: border-box;
+    width: min(var(--agr-width), 100%);
+    height: min(var(--agr-height), 100%);
     overflow: hidden;
     border: 1px solid #57506c;
     border-radius: 4px;
@@ -114,7 +119,7 @@ const EMBED_STYLES = `
   }
   .close:hover, .close:focus-visible { border-color: #c4a7f3; outline: none; }
   .widget-root[data-mode="inline"] .launcher { display: none; }
-  .widget-root[data-mode="inline"] .overlay { position: relative; inset: auto; display: flex; align-items: stretch; justify-content: stretch; padding: 0; background: transparent; }
+  .widget-root[data-mode="inline"] .overlay { position: relative; inset: auto; width: 100%; height: 100%; display: flex; align-items: stretch; justify-content: stretch; padding: 0; background: transparent; }
   .widget-root[data-mode="inline"] .panel { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
   .widget-root[data-mode="inline"] .close { display: none; }
   @media (max-width: 600px) {
@@ -220,6 +225,18 @@ export function mount(options: EmbedOptions = {}): AgentGoRoundWidget {
   const listeners = new Map<EmbedEvent, Set<(detail: unknown) => void>>();
   const toolBridge = new HostToolBridge(instanceId);
   let destroyed = false;
+  const syncWidgetViewport = (): void => {
+    if (destroyed || mode === "inline") return;
+    const viewport = window.visualViewport;
+    for (const [name, value] of Object.entries({
+      top: viewport?.offsetTop ?? 0, left: viewport?.offsetLeft ?? 0,
+      width: viewport?.width ?? window.innerWidth, height: viewport?.height ?? window.innerHeight
+    })) root.style.setProperty(`--agr-viewport-${name}`, `${Math.round(value)}px`);
+  };
+  syncWidgetViewport();
+  window.addEventListener("resize", syncWidgetViewport);
+  window.visualViewport?.addEventListener("resize", syncWidgetViewport);
+  window.visualViewport?.addEventListener("scroll", syncWidgetViewport);
 
   const emit = (event: EmbedEvent, detail: unknown = undefined): void => {
     for (const handler of listeners.get(event) ?? []) handler(detail);
@@ -290,6 +307,7 @@ export function mount(options: EmbedOptions = {}): AgentGoRoundWidget {
 
   const open = (): void => {
     if (destroyed) return;
+    syncWidgetViewport();
     overlay.dataset.open = "true";
     overlay.setAttribute("aria-hidden", "false");
     launcher.setAttribute("aria-expanded", "true");
@@ -357,6 +375,9 @@ export function mount(options: EmbedOptions = {}): AgentGoRoundWidget {
       destroyed = true;
       window.removeEventListener("keydown", handleKeydown);
       window.removeEventListener("message", handleMessage);
+      window.removeEventListener("resize", syncWidgetViewport);
+      window.visualViewport?.removeEventListener("resize", syncWidgetViewport);
+      window.visualViewport?.removeEventListener("scroll", syncWidgetViewport);
       iframe.removeEventListener("load", handleLoad);
       host.remove();
       listeners.clear();

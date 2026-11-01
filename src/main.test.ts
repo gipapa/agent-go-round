@@ -73,7 +73,9 @@ describe("main workspace UI", () => {
     const listeners: Record<string, () => void> = {};
     const visualViewportState = {
       height: 400,
+      width: 390,
       offsetTop: 120,
+      offsetLeft: 18,
       addEventListener(type: string, listener: () => void) {
         listeners[type] = listener;
       },
@@ -86,13 +88,25 @@ describe("main workspace UI", () => {
       await loadApp();
       expect(document.documentElement.style.getPropertyValue("--viewport-height")).toBe("400px");
       expect(document.documentElement.style.getPropertyValue("--viewport-offset-top")).toBe("120px");
+      expect(document.documentElement.style.getPropertyValue("--viewport-width")).toBe("390px");
+      expect(document.documentElement.style.getPropertyValue("--viewport-offset-left")).toBe("18px");
+      expect(document.documentElement.classList.contains("keyboard-open")).toBe(true);
 
       visualViewportState.height = 300;
       visualViewportState.offsetTop = 200;
+      visualViewportState.width = 360;
+      visualViewportState.offsetLeft = 27;
       listeners.resize?.();
 
       expect(document.documentElement.style.getPropertyValue("--viewport-height")).toBe("300px");
       expect(document.documentElement.style.getPropertyValue("--viewport-offset-top")).toBe("200px");
+      expect(document.documentElement.style.getPropertyValue("--viewport-width")).toBe("360px");
+      expect(document.documentElement.style.getPropertyValue("--viewport-offset-left")).toBe("27px");
+      visualViewportState.height = 844;
+      visualViewportState.offsetTop = 0;
+      visualViewportState.offsetLeft = 0;
+      listeners.scroll?.();
+      expect(document.documentElement.classList.contains("keyboard-open")).toBe(false);
     } finally {
       if (originalVisualViewport) Object.defineProperty(window, "visualViewport", originalVisualViewport);
       else Reflect.deleteProperty(window, "visualViewport");

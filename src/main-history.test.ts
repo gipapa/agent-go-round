@@ -43,6 +43,21 @@ async function saved() {
 }
 
 describe("UI history at the real provider request boundary", () => {
+  it("documents the limited shell and starts/replaces conversations with ai", async () => {
+    await loadApp();
+    expect(document.querySelector(".shell-notice")!.textContent).toContain("簡易 bash");
+    expect(document.querySelector(".shell-notice")!.textContent).toContain("read／cat、write、edit、grep、find、ls");
+    expect(document.querySelector<HTMLTextAreaElement>("#prompt")!.placeholder).toContain("ai");
+    await send("help");
+    expect(document.querySelector("#terminal")!.textContent).toContain("ai --resume ID");
+    await send("ai");
+    expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent");
+    await send("/exit");
+    const before = (await saved())!.tabs[0].session.sessionId;
+    await send("ai --new"); await send("/exit");
+    expect((await saved())!.tabs[0].session.sessionId).not.toBe(before);
+    expect(document.querySelector("#pane-type")!.textContent).toBe("簡易 bash");
+  });
   it("restores the preview entry and popup surface without changing workspace conversations", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
@@ -58,7 +73,7 @@ describe("UI history at the real provider request boundary", () => {
     expect((await saved())!.tabs.find(tab => tab.mode === "preview")!.preview).toEqual(preview);
   });
   it("preserves history across reload, reconnect, repeated Connect, close and resume", async () => {
-    await loadApp(); await connect(); await send("pi"); await send("Remember pineapple-42");
+    await loadApp(); await connect(); await send("ai"); await send("Remember pineapple-42");
     expect(requests).toHaveLength(1);
     const initial = await saved();
     const id = initial!.tabs[0].session.sessionId;
@@ -72,11 +87,11 @@ describe("UI history at the real provider request boundary", () => {
     expect(requests[1].messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: "Remember pineapple-42" }), expect.objectContaining({ role: "assistant", content: "好，已記住。" })]));
     await connect(); await send("Again, what was the code?");
     expect(requests[2].messages.filter((message) => message.content === "Remember pineapple-42")).toHaveLength(1);
-    expect(requests[2].messages.some((message) => message.content === "pi")).toBe(false);
+    expect(requests[2].messages.some((message) => message.content === "ai")).toBe(false);
     await saved();
     document.querySelector<HTMLElement>('[aria-label="Close main"]')!.click();
     await vi.waitFor(() => expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(1));
-    await send(`pi --resume ${id}`);
+    await send(`ai --resume ${id}`);
     await connect(); await send("Recall the original code after reopening");
     expect(requests.at(-1)!.messages).toContainEqual(expect.objectContaining({ content: "Remember pineapple-42" }));
   });
@@ -85,7 +100,7 @@ describe("UI history at the real provider request boundary", () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
     await fs.writeFile("~/AGENTS.md", "第一個規則：使用中文。");
-    await connect(); await send("pi"); await send("Hello from A");
+    await connect(); await send("ai"); await send("Hello from A");
     expect(requests[0].messages[0].content).toContain("第一個規則");
     await fs.writeFile("~/AGENTS.md", "第二個規則：使用繁體中文。");
     await send("Check new rules");
@@ -93,7 +108,7 @@ describe("UI history at the real provider request boundary", () => {
     expect(requests[1].messages[0].content).not.toContain("第一個規則");
     document.querySelector<HTMLButtonElement>("#add-tab")!.click();
     expect(document.querySelector("#provider-label")?.textContent).toBe("groq · live");
-    await send("pi"); await send("Hello only from B");
+    await send("ai"); await send("Hello only from B");
     expect(JSON.stringify(requests[2].messages)).not.toContain("Hello from A");
     expect(document.querySelector("#pane-model")?.textContent).toBe("openai/gpt-oss-120b");
   });

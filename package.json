@@ -17,7 +17,8 @@
     "verify:dist": "node scripts/verify-dist.mjs",
     "test:jokes": "AGENT_GO_ROUND_RUN_JOKES=1 vitest run src/acceptance/jokes-live.test.ts --testTimeout=600000",
     "test:jokes:browser": "node --experimental-strip-types scripts/verify-jokes-browser.mjs",
-    "test:preview:browser": "node scripts/verify-preview-browser.mjs"
+    "test:preview:browser": "node scripts/verify-preview-browser.mjs",
+    "test:mobile:browser": "node scripts/verify-mobile-browser.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",

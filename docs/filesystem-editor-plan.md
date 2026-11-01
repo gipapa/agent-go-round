@@ -2,7 +2,7 @@
 
 日期：2026-10-31；更新：2026-11-01。F0–F5 已完成：歷史接續與最小 history／resume、IndexedDB session／workspace／events migration、VFS／檔案工具、文字 editor、AGENTS.md／skills 與來源版本紀錄、SDK Groq／production browser 的三段笑話驗收，以及 main.html／相對 CSS／SVG 主頁預覽、可恢復且共享 workspace 的 Pi popup。操作與證據見 [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md)。
 
-本文件取代 [前一輪缺口規劃](poc-gap-plan.md) 的交付優先順序，保留其中的問題盤點。新目標是可處理檔案的純前端 Pi 編輯器：開啟 tab 先進入 `~` 的 shell，使用者可以瀏覽、建立與編輯檔案，執行 `pi` 後，agent 在同一個檔案系統中工作。
+本文件取代 [前一輪缺口規劃](poc-gap-plan.md) 的交付優先順序，保留其中的問題盤點。新目標是可處理檔案的純前端 Pi 編輯器：開啟 tab 先進入 `~` 的 shell，使用者可以瀏覽、建立與編輯檔案，執行 `ai` 後，agent 在同一個檔案系統中工作。
 
 ## 已確定的方向
 
@@ -28,7 +28,7 @@ IndexedDB 適合這個需求，因為它可保存結構化資料與檔案內容�
 
 ## 0. 修復歷史與 session identity
 
-交付：重新整理、重新連接 provider、離開再進入 `pi`，仍能接續相同對話。
+交付：重新整理、重新連接 provider、離開再進入 `ai`，仍能接續相同對話。
 
 - 將 tab identity、session identity、provider connection 分開；provider/model/status 改為每個 session 的資料，避免全域標記與實際 runtime 不符。
 - Groq reload 保留原 messages / system prompt，等待重新連線；重連補上 transport 與 credentials，不建立空 session 覆寫舊歷史。
@@ -82,21 +82,21 @@ AGENTS.md  documents/  jokes/
 ~ $ cd jokes
 ~/jokes $ ls
 笑話1.md  笑話2.md  笑話3.md  笑話4.md  笑話5.md
-~/jokes $ pi
+~/jokes $ ai
 [同一個 panel 進入 agent，working directory = ~/jokes]
 ```
 
-第一輪指令：`help`、`pwd`、`ls`、`cd`、`cat`、`mkdir`、`touch`、`edit`、`rm`、`mv`、`clear`、`pi`。採 bash 風格的內建指令解析，支援引號與空白路徑；指令只操作 VFS，不需要作業系統 shell。Pipes、程序執行、套件安裝與完整 bash 語法不在首輪範圍。
+第一輪指令：`help`、`pwd`、`ls`、`cd`、`cat`、`mkdir`、`touch`、`edit`、`rm`、`mv`、`clear`、`ai`。採 bash 風格的內建指令解析，支援引號與空白路徑；指令只操作 VFS，不需要作業系統 shell。Pipes、程序執行、套件安裝與完整 bash 語法不在首輪範圍。
 
 - `edit path` 在目前 panel 進入文字編輯模式，提供儲存／取消與返回 shell，顯示檔案路徑及未保存狀態。
-- `pi` 首次建立 session；同 tab 已有 session 時接續，`pi --new` 明確新建，`pi --resume <sessionId>` 重開歷史。
+- `ai` 首次建立 session；同 tab 已有 session 時接續，`ai --new` 明確新建，`ai --resume <sessionId>` 重開歷史。
 - Agent 中 `/exit` 返回 shell，保留對話；Esc / Stop 只停止目前 run。執行中返回 shell 前先完成取消與狀態收尾。
-- Session 記錄 agent cwd；重新接續時使用已保存 cwd，不默默套用另一個目錄。要在新目錄開始可用 `pi --new`。
+- Session 記錄 agent cwd；重新接續時使用已保存 cwd，不默默套用另一個目錄。要在新目錄開始可用 `ai --new`。
 - Agent 工具 `read`、`write`、`edit`、`grep`、`find`、`ls` 與 `skill_load` 從 `~/bin` 的 JS／manifest 載入，透過受控 API 呼叫同一 VFS；shell 另外提供 `mkdir`／`rm`。工具結果包含 canonical path、revision 與可判讀錯誤，並保存到正常 Pi transcript。
 - 使用者在另一個 tab 修改檔案後，agent 下一次讀取能得到新內容；每次讀取紀錄版本，寫入使用預期版本檢查。
 - 主 panel 顯示工具呼叫、讀取路徑與結果／錯誤；輸入或輸出更新不能把正在閱讀舊內容的使用者拉到底部。
 
-驗收：新 tab 在 `~` → 建檔／編輯 → `cd` / `ls` / `cat` → `pi` 讀寫 → `/exit` → `cat` 看見實際結果 → reload 後仍存在。另一 tab 看見相同檔案，但 cwd 與對話保持獨立。
+驗收：新 tab 在 `~` → 建檔／編輯 → `cd` / `ls` / `cat` → `ai` 讀寫 → `/exit` → `cat` 看見實際結果 → reload 後仍存在。另一 tab 看見相同檔案，但 cwd 與對話保持獨立。
 
 ## 2.1 VFS 主頁與 popup 預覽
 
@@ -147,7 +147,7 @@ IndexedDB 內容目前屬於該瀏覽器／origin 的本機工作區。供其他
 
 ### AGENTS.md
 
-- `pi` 啟動及每個 user run 前，沿 home 到 session cwd 的路徑收集 AGENTS.md，由上層到下層組合；同層只載入一次。
+- `ai` 啟動及每個 user run 前，沿 home 到 session cwd 的路徑收集 AGENTS.md，由上層到下層組合；同層只載入一次。
 - 標準檔名為 `AGENTS.md`，也接受使用者提到的 `agents.md`；同層兩者同時存在時回報歧義，不隨機選一個。
 - 將工作區規則作為具來源標記的 agent instructions 注入。普通 document / joke 檔案作為工具讀取資料，不能自動提升成工作區指示。
 - 每次 run 固定 instructions snapshot，保存來源路徑與 revision；檔案改動在下一個 user run 生效，畫面可檢閱本次載入來源。
@@ -213,7 +213,7 @@ description: 讀取笑話檔案，逐一評分並選出最好笑的笑話。
 ### 操作與通過條件
 
 1. 從 `~` 用 `ls` / `cat` / `edit` 檢閱、修改上述檔案；reload 後內容仍在。
-2. 在 `~` 執行 `pi`，用英文詢問：`Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.`
+2. 在 `~` 執行 `ai`，用英文詢問：`Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.`
 3. 實際 request 證明 AGENTS.md 規則已載入；trace 證明讀取 SKILL.md、scoring.md 及五個笑話的完整內容，然後才給出最終評分。
 4. 最終答案使用繁體中文，五個檔名各有一筆評分與理由，選出最高分之一，重現該檔案的笑話並說明原因。不固定笑話排名，分數屬模型判斷。
 5. `/exit` 後編輯其中一個笑話，重新進入同一 session，英文請它重新評分；新的讀檔結果包含新 revision，不能只引用舊對話中的版本。
@@ -232,7 +232,7 @@ description: 讀取笑話檔案，逐一評分並選出最好笑的笑話。
 |---|---|---|
 | F0 | Groq 歷史接續、每 session provider、最小歷史重開 | 現有 core / store |
 | F1 | IndexedDB VFS、session/workspace repositories、migration | F0 的 identity 契約 |
-| F2 | 新 tab 在 `~`、檔案指令與編輯、`pi` / `/exit`、agent 檔案工具 | F1 |
+| F2 | 新 tab 在 `~`、檔案指令與編輯、`ai` / `/exit`、agent 檔案工具 | F1 |
 | F3 | VFS AGENTS.md、skill catalog / load / references | F1 + F2 |
 | F4 | 五笑話英文問中文答、逐檔評分、agent 建檔讀回、reload 續聊 | F0–F3 |
 | F5 | VFS main.html／相對資源預覽、綁定 workspace 的 popup、agent 改頁面後刷新 | F1 + F2 + F3；保留 F4 驗收 |
