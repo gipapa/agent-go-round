@@ -37,7 +37,7 @@ export type { AgentGoRoundGlobal, AgentGoRoundWidget, EmbedEvent, EmbedHostTool,
 export { IndexedDbFileSystem, MemoryFileSystem, FileSystemError, VFS_HOME, resolvePath, displayPath } from "./core/fs";
 export type { VirtualFileSystem, FileNode, WriteOptions } from "./core/fs";
 export { BinRegistry } from "./core/bin";
-export { DEFAULT_BIN_TOOLS, BIN_DIRECTORY, installDefaultBin } from "./core/bin-defaults";
+export { DEFAULT_BIN_TOOLS, BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, installDefaultBin } from "./core/bin-defaults";
 export type { BinManifest, BinDefinition, FileMethod } from "./core/bin-defaults";
 export { SandboxedBinExecutor } from "./core/bin-sandbox";
 export type { BinExecutor, FileRpc } from "./core/bin-sandbox";

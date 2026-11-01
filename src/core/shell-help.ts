@@ -21,26 +21,29 @@ const HELP: Record<string, string> = {
   preview: 'preview [PATH]\n開啟 HTML/CSS/SVG 預覽，預設 ~/main.html，popup 共用同一工作區。頁面腳本與外部載入不執行。',
   history: 'history\n列出保存的 agent 對話與 session ID（不是 bash 指令歷史）。使用 ai --resume SESSION_ID 接回。',
   clear: 'clear\n清空目前 terminal 顯示，保留檔案與 agent 對話。',
-  rehash: 'rehash\n重新載入 ~/bin 的 JS 與 .tool.json；下一輪 agent 使用新版本。',
+  rehash: 'rehash\n重新載入 ~/bin 的 JS 與 ~/bin/manifests 的 .tool.json；自動搬移舊位置的 manifest，下一輪 agent 使用新版本。',
   'restore-bin': 'restore-bin NAME\n還原一個預設工具的 JS 與 manifest（含 skill_load）；會覆寫該工具的自訂內容。',
   demo: 'demo jokes\n建立規則、joke-master skill、評分參考與五個笑話；不覆寫既有檔案。',
   help: 'help [COMMAND] | COMMAND --help\n顯示指令語法、簡化範圍；自訂工具顯示 manifest 說明與 JSON schema。\nShell 不執行管線、重導向、指令替換、環境變數或路徑 glob 展開；請使用 find -name。\n引號／反斜線採 bash 基本規則；字串換行可直接輸入換行或使用 write JSON。'
 };
 
-export function commandHelp(command: string | undefined, bin: BinRegistry): string {
-  if (!command) return `${SHELL_NOTICE}\n\n${HELP.help}\n\n可用工具：${bin.list().map(tool => tool.name).join(", ")}`;
+type HelpTool = { name: string; description: string; parameters: unknown };
+export function commandHelp(command: string | undefined, bin: BinRegistry, extraTools: readonly HelpTool[] = []): string {
+  const local = bin.list();
+  const tools = [...local, ...extraTools.filter(extra => !local.some(tool => tool.name === extra.name))];
+  if (!command) return `${SHELL_NOTICE}\n\n${HELP.help}\n\n可用工具：${tools.map(tool => tool.name).join(", ")}`;
   const name = command.toLowerCase();
-  const tool = bin.list().find(tool => tool.name === name);
+  const tool = tools.find(tool => tool.name.toLowerCase() === name);
   if (!HELP[name] && !tool) throw new Error(`Command not found: ${command}; use help`);
   return [HELP[name], tool && `${tool.description}\nJSON arguments:\n${JSON.stringify(tool.parameters, null, 2)}`].filter(Boolean).join("\n\n");
 }
 
-export function requestedHelp(words: string[], bin: BinRegistry): string | undefined {
+export function requestedHelp(words: string[], bin: BinRegistry, extraTools: readonly HelpTool[] = []): string | undefined {
   const name = words[0]?.toLowerCase();
   if (name === "help") {
     if (words.length > 2) throw new Error("Usage: help [COMMAND]");
-    return commandHelp(/^(--help|—help|–help)$/i.test(words[1] ?? "") ? "help" : words[1], bin);
+    return commandHelp(/^(--help|—help|–help)$/i.test(words[1] ?? "") ? "help" : words[1], bin, extraTools);
   }
-  if (words.length === 2 && /^(--help|—help|–help)$/i.test(words[1])) return commandHelp(name, bin);
+  if (words.length === 2 && /^(--help|—help|–help)$/i.test(words[1])) return commandHelp(name, bin, extraTools);
   return undefined;
 }

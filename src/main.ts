@@ -2,7 +2,7 @@ import "./styles.css";
 import { PreviewSurface, type PreviewConfig } from "./preview-surface";
 import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath, FileSystemError } from "./core/fs";
 import { installDefaultBin } from "./core/bin-defaults";
-import { BinRegistry } from "./core/bin";
+import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
 import { executeShell, shellWords, SHELL_NOTICE, requestedHelp } from "./core/shell";
 import { configureFileAgent } from "./core/file-context";
@@ -120,7 +120,12 @@ const filesReady = (async () => {
     durableEvents = new IndexedDbSessionEventStore(records);
     await durableEvents.hydrate();
     const fs = new IndexedDbFileSystem(window.indexedDB, workspaceId);
-    const bin = new BinRegistry(fs, new SandboxedBinExecutor());
+    const bin = new BinRegistry(fs, new SandboxedBinExecutor(), {
+      readHostPage: async (args, signal, context) => {
+        if (!hostToolSpecs.has("read_host_page")) throw new Error(NO_HOST_PAGE);
+        return requestHostTool(context.sessionId ?? activeTab().session.sessionId, context.toolCallId ?? makeId("host-read"), "read_host_page", args, signal);
+      }
+    });
     fileRuntime = { fs, bin };
     await installDefaultBin(fs);
     await bin.reload();
@@ -475,7 +480,7 @@ function currentHostTools(sessionId = "pending-session", includeBin = true): Ses
   const cwd = () => findTab()?.agentCwd ?? findTab()?.cwd ?? VFS_HOME;
   const local = includeBin ? fileRuntime?.bin.sessionTools(cwd, (access, toolCallId) => findTab()?.session.recordFileAccess(toolCallId, access.method, access.path, access.revision)) ?? [] : [];
   const names = new Set(fileRuntime?.bin.list().map((tool) => tool.name) ?? []);
-  const host = [...hostToolSpecs.values()].map((spec) => {
+  const host = [...hostToolSpecs.values()].filter(spec => spec.name !== "read_host_page").map((spec) => {
     if (names.has(spec.name)) throw new Error(`Host tool conflicts with ~/bin: ${spec.name}`);
     return hostTool(spec, sessionId);
   });
@@ -909,9 +914,11 @@ function appendTerminalLine(line: TranscriptLine, tab: AgentTab): void {
   terminal.append(row);
 }
 
+let renderedTranscript: { id: string; text: string }[] = [];
 function renderTerminal(tab: AgentTab): void {
   const previousTop = terminal.scrollTop;
-  const follow = terminal.dataset.tabId !== tab.id || terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 40;
+  const follow = terminal.dataset.tabId !== tab.id || renderedTranscript.length !== tab.transcript.length || tab.transcript.some((line, index) => line.id !== renderedTranscript[index]?.id || line.text !== renderedTranscript[index]?.text);
+  renderedTranscript = tab.transcript.map(({ id, text }) => ({ id, text }));
   terminal.dataset.tabId = tab.id;
   terminal.replaceChildren();
   const intro = document.createElement("div");
@@ -931,6 +938,9 @@ function renderTerminal(tab: AgentTab): void {
   }
   for (const line of tab.transcript) appendTerminalLine(line, tab);
   terminal.scrollTop = follow ? terminal.scrollHeight : previousTop;
+  if (follow) requestAnimationFrame(() => {
+    if (terminal.isConnected && terminal.dataset.tabId === tab.id) terminal.scrollTop = terminal.scrollHeight;
+  });
 }
 
 function renderPane(tab: AgentTab): void {
@@ -1156,7 +1166,7 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
       const structured = /^\S+\s+\{/.test(input);
       const words = structured ? [input.split(/\s/, 1)[0], input.slice(input.search(/\s/) + 1)] : shellWords(input);
       const command = words[0]?.toLowerCase();
-      const help = structured ? undefined : requestedHelp(words, fileRuntime.bin);
+      const help = structured ? undefined : requestedHelp(words, fileRuntime.bin, [...hostToolSpecs.values()]);
       if (help !== undefined) {
         tab.transcript.push({ id: makeId("help"), role: "system", text: help });
       } else if (command === "preview") {

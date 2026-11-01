@@ -1,19 +1,25 @@
 import { validateToolArguments, type TSchema } from "@earendil-works/pi-ai";
-import { BIN_DIRECTORY, BIN_CAPABILITIES, type BinManifest, type FileMethod, type BinCapability } from "./bin-defaults";
+import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, migrateBinManifests, BIN_CAPABILITIES, type BinManifest, type FileMethod, type BinCapability } from "./bin-defaults";
 import { resolvePath, VFS_HOME, type VirtualFileSystem } from "./fs";
 import { ToolOutcomeUnknownError, type SessionTool } from "./session";
 import type { BinExecutor } from "./bin-sandbox";
+import { commandHelp } from "./shell-help";
 
 type LoadedBin = { manifest: BinManifest; source: string };
 export type BinFileAccess = { method: FileMethod; path: string; revision?: number };
+export const NO_HOST_PAGE = "目前沒有連接宿主頁，請從 Host page 開啟 popup。";
+export type BinHostContext = { sessionId?: string; toolCallId?: string };
 export class BinRegistry {
   private tools = new Map<string, LoadedBin>();
-  constructor(readonly fs: VirtualFileSystem, private readonly executor: BinExecutor) {}
+  constructor(readonly fs: VirtualFileSystem, private readonly executor: BinExecutor, private readonly services: {
+    readHostPage?: (args: { offset?: number; limit?: number }, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
+  } = {}) {}
 
   /** Load source + metadata once while idle; a running tool sees an immutable definition. */
   async reload(): Promise<void> {
+    await migrateBinManifests(this.fs);
     const next = new Map<string, LoadedBin>();
-    const files = await this.fs.listDirectory(BIN_DIRECTORY);
+    const files = await this.fs.listDirectory(BIN_MANIFEST_DIRECTORY);
     for (const file of files) {
       if (file.kind !== "file" || !file.path.endsWith(".tool.json")) continue;
       if (next.size >= 64) throw new Error("Bin catalog exceeds 64 tools");
@@ -38,7 +44,7 @@ export class BinRegistry {
     return this.executeDefinition(definition, args, cwd, signal);
   }
 
-  private async executeDefinition(definition: LoadedBin, args: unknown, cwd: string, signal?: AbortSignal, onAccess?: (access: BinFileAccess) => void, loadSkill?: (name: string, signal: AbortSignal) => Promise<unknown>): Promise<unknown> {
+  private async executeDefinition(definition: LoadedBin, args: unknown, cwd: string, signal?: AbortSignal, onAccess?: (access: BinFileAccess) => void, loadSkill?: (name: string, signal: AbortSignal) => Promise<unknown>, context: BinHostContext = {}): Promise<unknown> {
     const { manifest, source } = definition;
     const name = manifest.name;
     const validated = validateToolArguments({ name, description: manifest.description, parameters: manifest.parameters as TSchema }, { type: "toolCall", id: "bin", name, arguments: args as Record<string, unknown> });
@@ -51,6 +57,16 @@ export class BinRegistry {
     const rpc = async (method: BinCapability, values: unknown[]): Promise<unknown> => {
       if (!active || execution.signal.aborted) throw new Error("Tool cancelled");
       if (!manifest.capabilities.includes(method) || !BIN_CAPABILITIES.includes(method)) throw new Error(`Tool lacks filesystem capability: ${method}`);
+      if (method === "commandHelp") {
+        if (!Array.isArray(values) || values[0] !== undefined && typeof values[0] !== "string") throw new Error("Invalid help arguments");
+        return commandHelp(values[0] as string | undefined, this);
+      }
+      if (method === "readHostPage") {
+        const range = values?.[0] as { offset?: unknown; limit?: unknown } | undefined;
+        if (!range || typeof range !== "object" || Array.isArray(range) || Object.keys(range).some(key => key !== "offset" && key !== "limit") || range.offset !== undefined && (!Number.isInteger(range.offset) || (range.offset as number) < 0) || range.limit !== undefined && (!Number.isInteger(range.limit) || (range.limit as number) < 1 || (range.limit as number) > 64000)) throw new Error("Invalid host page range");
+        if (!this.services.readHostPage) throw new Error(NO_HOST_PAGE);
+        return this.services.readHostPage(range as { offset?: number; limit?: number }, execution.signal, context);
+      }
       if (method === "loadSkill") {
         if (!Array.isArray(values) || typeof values[0] !== "string" || !loadSkill) throw new Error("Skill runtime unavailable; enter Pi to load a catalog skill");
         return loadSkill(values[0], execution.signal);
@@ -104,13 +120,13 @@ export class BinRegistry {
     } finally { active = false; execution.abort(); signal?.removeEventListener("abort", abort); }
   }
 
-  sessionTools(cwd: string | (() => string) = VFS_HOME, onAccess?: (access: BinFileAccess, toolCallId: string) => void, loadSkill?: (name: string, toolCallId: string, signal: AbortSignal) => Promise<unknown>): SessionTool[] {
+  sessionTools(cwd: string | (() => string) = VFS_HOME, onAccess?: (access: BinFileAccess, toolCallId: string) => void, loadSkill?: (name: string, toolCallId: string, signal: AbortSignal) => Promise<unknown>, sessionId?: string): SessionTool[] {
     return [...this.tools.values()].map((definition) => {
       const { manifest } = definition;
       return {
       name: manifest.name, label: manifest.name, description: manifest.description, parameters: manifest.parameters,
       execute: async (id, args, signal) => {
-        const result = await this.executeDefinition(definition, args, typeof cwd === "function" ? cwd() : cwd, signal, (access) => onAccess?.(access, id), loadSkill ? (name, executionSignal) => loadSkill(name, id, executionSignal) : undefined);
+        const result = await this.executeDefinition(definition, args, typeof cwd === "function" ? cwd() : cwd, signal, (access) => onAccess?.(access, id), loadSkill ? (name, executionSignal) => loadSkill(name, id, executionSignal) : undefined, { sessionId, toolCallId: id });
         return { content: [{ type: "text", text: JSON.stringify(result) ?? "null" }], details: result };
       }
     }; });

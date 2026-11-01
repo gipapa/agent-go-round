@@ -1,5 +1,5 @@
 import type { BinRegistry } from "./bin";
-import { BIN_DIRECTORY, DEFAULT_BIN_TOOLS } from "./bin-defaults";
+import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, migrateBinManifests, DEFAULT_BIN_TOOLS } from "./bin-defaults";
 import { FileSystemError, VFS_HOME, resolvePath, type FileNode, type VirtualFileSystem } from "./fs";
 import { requestedHelp } from "./shell-help";
 export { SHELL_NOTICE, requestedHelp } from "./shell-help";
@@ -67,9 +67,9 @@ export async function executeShell(input: string, fs: VirtualFileSystem, bin: Bi
     const definition = DEFAULT_BIN_TOOLS.find(tool => tool.name === values[0].toLowerCase());
     if (!definition) throw new Error("Unknown default tool; use restore-bin --help");
     const { source, ...manifest } = definition;
-    await fs.mkdir(BIN_DIRECTORY, { recursive: true });
+    await migrateBinManifests(fs);
     await fs.writeFile(`${BIN_DIRECTORY}/${definition.name}.js`, source);
-    await fs.writeFile(`${BIN_DIRECTORY}/${definition.name}.tool.json`, JSON.stringify(manifest, null, 2));
+    await fs.writeFile(`${BIN_MANIFEST_DIRECTORY}/${definition.name}.tool.json`, JSON.stringify(manifest, null, 2));
     await bin.reload(); return { text: `Restored ${definition.name}` };
   }
   if (name === "cd") {

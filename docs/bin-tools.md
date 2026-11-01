@@ -8,13 +8,25 @@
 
 ```text
 ~/bin/
-  read.js       read.tool.json
-  write.js      write.tool.json
-  edit.js       edit.tool.json
-  grep.js       grep.tool.json
-  find.js       find.tool.json
-  ls.js         ls.tool.json
-  skill_load.js skill_load.tool.json
+  read.js
+  write.js
+  edit.js
+  grep.js
+  find.js
+  ls.js
+  skill_load.js
+  read_host_page.js
+  help.js
+  manifests/
+    read.tool.json
+    write.tool.json
+    edit.tool.json
+    grep.tool.json
+    find.tool.json
+    ls.tool.json
+    skill_load.tool.json
+    read_host_page.tool.json
+    help.tool.json
 ```
 
 | 工具 | 參數與行為 |
@@ -26,8 +38,12 @@
 | find | 選填 `path`、`name`（basename glob，支援 `*`、`?`）、`type`、`limit`；遞迴列出匹配路徑 |
 | ls | 選填 `path`；列出目錄的直接子項，包含隱藏檔與 revision |
 | skill_load | `name`；經由 `api.skills.load` 載入本輪 catalog 中的 SKILL.md，記錄來源與 active skill。與其他工具一樣從 ~/bin 載入 JS／manifest |
+| read_host_page | 選填 `offset`／`limit`；經 `api.host.readPage` 讀取呼叫頁面 HTML，無宿主時回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」；shell／AI 共用 bin JS |
+| help | 選填 `command`；經 `api.tools.help` 取得指令說明與 schema；AI 的 help 同樣從 bin JS 載入 |
 
 ## Shell 與 AI 工具的輸出
+
+工具說明／schema 集中於 `~/bin/manifests/`；`ls ~/bin` 只列指令 JS 與 manifests 目錄。安裝或 `rehash` 時，舊根目錄的 `.tool.json` 以原子 rename 搬移，自訂內容保留；新舊路徑同名時不覆寫，明確回報衝突。`restore-bin NAME` 亦使用新位置。
 
 Shell 的 `ls` 預設列出目前 cwd 的直接子項名稱，隱藏點檔；`ls -a` 包含隱藏檔、`ls -F` 為目錄加 `/`、`ls -l` 顯示 VFS 類型、UTF-8 bytes、revision 與時間，沒有虛構作業系統權限。`cat` 讀完整正文（支援多檔與 `-n`）；`read` 保留分頁 JSON。`grep -rin PATTERN PATH` 和 `find . -name "*.md" -type f` 顯示一般文字結果；工具呼叫及 shell 的 JSON 形式保留上表契約，`ls` 工具仍包含隱藏檔。
 
@@ -72,7 +88,7 @@ async function main(args, api) {
 }
 ```
 
-建立對應 `~/bin/hello.tool.json`：
+建立對應 `~/bin/manifests/hello.tool.json`：
 
 ```json
 {
@@ -95,11 +111,13 @@ async function main(args, api) {
 
 `api.skills.load(name)` 需要 manifest 的 `loadSkill` capability，並只在 Pi 配置過的本輪 skill catalog 中解析名稱。工具 JS 無法自行把任意文字當作工作區指示。
 
+`api.host.readPage({offset?,limit?})` 需要 `readHostPage` capability，經可信任 bridge 取得宿主資料；宿主不存在時明確報錯，參數由 trusted host 再驗證。`api.tools.help(command?)` 需要 `commandHelp` capability。修改這些工具的 JS／manifest 後同樣以 `rehash` 套用，沒有另外繞過 bin 的同名工具。
+
 執行器使用 opaque-origin sandbox iframe 內的 Worker，透過 MessageChannel 呼叫受控的 VFS API。工具不直接取得 app DOM、IndexedDB 或 provider credentials；CSP 阻擋網路與外部程式載入。因此 JS 格式目前是自足的函式，不支援 ESM imports、npm packages 或 Node API。
 
 單次執行預設 10 秒、最多 8192 次 filesystem RPC、結果最多 128000 字元；Worker 可被 Stop 中止。若寫入已開始但工具未完成，回報 `outcome_unknown`，需要先讀回，不能自動重做。每檔最多 512 KiB，workspace 最多 2048 個節點及 16 MiB 文字內容。
 
-預設安裝補缺檔，並且只對逐字符合舊版內建 JS 與 manifest 的工具做原子升級，不覆蓋使用者修改的工具。工具損壞時，可用內建 `restore-bin read`（或其他預設工具名稱）重設其 JS 與 manifest；自訂 manifest 損壞時可 `rm ~/bin/hello.tool.json` 後 `rehash`。這些恢復命令由 shell 本身提供，不依賴損壞的工具。
+預設安裝補缺檔，並且只對逐字符合舊版內建 JS 與 manifest 的工具做原子升級，不覆蓋使用者修改的工具。工具損壞時，可用內建 `restore-bin read`（或其他預設工具名稱）重設其 JS 與 manifest；自訂 manifest 損壞時可 `rm ~/bin/manifests/hello.tool.json` 後 `rehash`。這些恢復命令由 shell 本身提供，不依賴損壞的工具。
 
 ## 驗證紀錄
 

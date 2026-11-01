@@ -8,7 +8,7 @@
 
 - 啟動 agent 統一使用 `ai`，另提供 `ai --new`、`ai --resume ID` 和 `/exit`。Terminal 明列「簡易 bash」與支援指令，內建及自訂工具名稱不分大小寫；AI options、固定子命令與 agent 控制指令亦可混用大小寫。路徑、內容、搜尋文字、JSON 欄位、skill 名稱及 session ID 不改寫。
 - 手機與觸控輸入採 16px；手機與 popup 僅保留直式 tab 列、桌面僅保留橫式列；鍵盤縮小可視區時保留直式列並精簡標題與 composer，app 和 popup 跟隨可視區寬高及位移，保留捲動、草稿與對話。模擬鍵盤回歸通過，原生 iPhone Safari 實機驗收尚未完成。
-- 最新回歸共 110 項通過；production 瀏覽器的混合大小寫／手機檢查十一項通過。外部 popup 的 workspace 隔離、bridge identity、真實模型讀取 host HTML 與 reload 保存四項檢查通過。真實任務的模型、quota 差異與證據見對應驗收文件。
+- 最新回歸共 115 項通過；production 瀏覽器的混合大小寫／手機檢查十一項通過。Host browser 的 bin／shell／分頁／捲動、workspace 隔離、bridge identity、真實模型讀取、reload 保存、無宿主錯誤六項檢查通過。真實任務的模型、quota 差異與證據見對應驗收文件。
 - 外部 popup 未指定 workspace 時建立獨立 `popup-*` 工作區，直接開啟 app 使用 `default`；宿主 sessionStorage 依 URL／掛載順序恢復身份。VFS 預覽明確綁定 workspace，維持原共享檔案契約。以工作區隔離承載來源頁面，不新增專用 tab。
 - Popup 的 `read_host_page` 可按需讀取實際呼叫頁面 HTML；一般頁面排除 widget、script／style 與表單控制項，VFS 預覽回傳目前 entry 的原始 HTML／revision。Host page demo 包含「這一頁的作者是gipapa」，已由 Groq GPT-OSS 20B 實際讀取並回答；報告見 `test-results/host-browser.json`。
 - F5 首輪僅支援文字 HTML／CSS／SVG。頁面 JavaScript、二進位資源、VFS 匯出／發布、完整長對話 compaction 與進階歷史管理尚未實作。
@@ -107,7 +107,7 @@ AGENTS.md  documents/  jokes/
 - Session 記錄 agent cwd；重新接續時使用已保存 cwd，不默默套用另一個目錄。要在新目錄開始可用 `ai --new`。
 - Agent 工具 `read`、`write`、`edit`、`grep`、`find`、`ls` 與 `skill_load` 從 `~/bin` 的 JS／manifest 載入，透過受控 API 呼叫同一 VFS；shell 另外提供 `mkdir`／`rm`。工具結果包含 canonical path、revision 與可判讀錯誤，並保存到正常 Pi transcript。
 - 使用者在另一個 tab 修改檔案後，agent 下一次讀取能得到新內容；每次讀取紀錄版本，寫入使用預期版本檢查。
-- 主 panel 顯示工具呼叫、讀取路徑與結果／錯誤；輸入或輸出更新不能把正在閱讀舊內容的使用者拉到底部。
+- 主 panel 顯示工具呼叫、讀取路徑與結果／錯誤；依最新操作需求，新訊息、工具結果與串流更新自動捲到底部，沒有新內容時可自行捲動閱讀。
 
 驗收：新 tab 在 `~` → 建檔／編輯 → `cd` / `ls` / `cat` → `ai` 讀寫 → `/exit` → `cat` 看見實際結果 → reload 後仍存在。另一 tab 看見相同檔案，但 cwd 與對話保持獨立。
 

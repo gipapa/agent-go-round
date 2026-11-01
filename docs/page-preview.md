@@ -64,6 +64,8 @@ Script auto-mount 對應 `data-workspace="my-space"`、`data-surface="support-po
 
 VFS 預覽的 `read_host_page` 由可信任 runtime 綁定目前 entry，回傳原始 HTML 與檔案 path／revision，避免讀到編輯器外框。外部 demo 的 production browser 驗收已通過：真實 Groq GPT-OSS 20B 實際讀取 HTML 並回答 gipapa，另驗證 workspace 隔離、錯誤 instance 拒絕與 reload 檔案保存；證據在 `test-results/host-browser.json`。
 
+工具入口現為 `~/bin/read_host_page.js`／`read_host_page.tool.json`，shell 與 AI 皆執行該 JS，再經 `readHostPage` capability 呼叫 bridge；可用 `read_host_page --help` 查閱分頁參數。無宿主頁時明確回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」。新訊息與 AI 串流會自動捲到底部；本次 Host browser 六項檢查及 115 項回歸均通過。
+
 檔案、歷史和 writer leases 按 workspace 共用；editor、page view 與 popup 的 layout 分開保存。若從另一 surface 手動恢復同一個 session，既有 revision／lease 檢查仍會拒絕同時寫入。不同 workspace 的檔案不共用。
 
 ## 驗證

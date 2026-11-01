@@ -36,7 +36,7 @@ describe("Groq real-model file/skill joke acceptance", () => {
       // Same on-disk JS as the browser; browser smoke separately uses the real sandbox Worker.
       async execute(source, args, rpc) {
         const fn = runInNewContext(`(${source})`, {}, { timeout: 1000 });
-        return structuredClone(await fn(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), skills: { load: (name: string) => rpc("loadSkill", [name]) } }));
+        return structuredClone(await fn(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), skills: { load: (name: string) => rpc("loadSkill", [name]) }, host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]) } }));
       }
     });
     await bin.reload();

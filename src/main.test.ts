@@ -49,6 +49,27 @@ afterEach(() => {
 });
 
 describe("main workspace UI", () => {
+  it("scrolls to the newest shell output and streamed reply after the user scrolls up", async () => {
+    await loadApp();
+    const terminal = document.querySelector<HTMLElement>("#terminal")!;
+    Object.defineProperty(terminal, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(terminal, "clientHeight", { configurable: true, value: 200 });
+    const send = (text: string) => {
+      document.querySelector<HTMLTextAreaElement>("#prompt")!.value = text;
+      document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
+    };
+    terminal.scrollTop = 0;
+    send("help");
+    await vi.waitFor(() => expect(terminal.scrollTop).toBe(1000));
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
+    send("ai");
+    await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
+    terminal.scrollTop = 0;
+    send("Hello");
+    await vi.waitFor(() => expect(document.querySelector("#run-status")!.textContent).toBe("done"));
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
+    expect(terminal.scrollTop).toBe(1000);
+  });
   it("opens the provider surface and restores focus after Escape", async () => {
     await loadApp();
     const providerButton = document.querySelector<HTMLButtonElement>("#provider-toggle");

@@ -10,7 +10,7 @@
 |---|---|---|
 | F0：歷史與 identity | 每 tab provider／session；reload、重連、關 tab 後可恢復，提供 history／resume | 檢查實際 provider request 保留舊問題與回答；恢復不重播副作用 |
 | F1：IndexedDB VFS | 共用 async filesystem、路徑與目錄、revision、批次交易、workspace 隔離；對話與事件亦遷入 IndexedDB | CRUD、衝突、rollback、migration；主要處理 UTF-8 文字檔 |
-| F2：shell／editor／agent | 新 tab 位於 `~`；簡易 bash、文字 editor、`ai`／`/exit`；七個預設 bin 工具與 JS 擴充 | 六個檔案工具加 skill_load；Worker／capability boundary，非完整作業系統 bash |
+| F2：shell／editor／agent | 新 tab 位於 `~`；簡易 bash、文字 editor、`ai`／`/exit`；九個預設 bin 工具與 JS 擴充 | 六個檔案工具加 skill_load、read_host_page、help；Worker／capability boundary，非完整作業系統 bash |
 | F3：檔案式規則與 skills | AGENTS.md／agents.md、skill catalog／按需載入、references、來源 revision；active skill 每輪刷新 | 單獨 AGENTS.md 的英文問中文答，以及 rules／skills 變更驗證 |
 | F4：笑話驗收 | 五檔讀取與評分、修改後 reload／重連再評分、agent 建五檔後讀回 | SDK 使用 GPT-OSS 120B，production browser 使用 Qwen，三任務均通過；不同模型的 quota failure 另存 |
 | F5：主頁與 popup | main.html／相對 CSS／SVG 預覽、獨立 page view、workspace／surface binding、agent 改頁面後刷新 | Groq GPT-OSS 20B 的七項整合檢查通過；刷新與切 tab 保留 popup，reload 可續聊 |
@@ -25,11 +25,15 @@ Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動�
 
 外部 popup 未指定 workspace 時自動建立獨立工作區，與直接開 app 的 default 隔離；宿主頁 reload 依 sessionStorage 恢復。`read_host_page` 提供呼叫頁面 HTML，demo 已加入專屬作者資訊；真實 Groq 已讀取並辨識 gipapa。明確綁定 workspace 的 VFS 預覽沿用共享檔案契約。
 
+`read_host_page` 與 AI `help` 已統一放進 ~/bin 的 JS／manifest，shell 與 AI 共用執行入口；bridge 只提供受控 capability。無宿主時明確回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」。Terminal 新增 shell 輸出、工具結果或 AI 串流時自動捲到底部，沒有新內容時保留手動捲動位置。
+
+工具 `.js` 留在 `~/bin`，說明與 JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`。安裝／rehash 自動搬移舊 manifest，自訂內容保留，新舊路徑同名時回報衝突；restore-bin 使用新目錄。新增搬移可重入與衝突保留回歸，總計 115 項測試。
+
 ## 目前驗證基線
 
-- 本次本機回歸為 23 個檔案、110 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI／部署結果於 push 後另行確認。
+- 本次本機回歸為 23 個檔案、115 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI／部署結果於 push 後另行確認。
 - `npm run test:mobile:browser` 的十一項檢查通過，涵蓋桌面／手機單一 tab 列與操作、ls／cat／help、混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
-- `npm run test:host:browser` 的四項檢查通過：popup 檔案與其他 popup／default 隔離、錯誤 instance 拒絕、真實 Groq GPT-OSS 20B 透過 bridge 讀取 HTML 並辨識 gipapa、宿主 reload 保留 workspace 與檔案。報告為 `test-results/host-browser.json`，畫面為 `test-results/host-popup.png`；無 key 時 live 任務明列 skipped。
+- `npm run test:host:browser` 的六項檢查通過：bin JS／manifest、shell 分頁與新訊息自動捲動；popup 檔案隔離；錯誤 instance 拒絕；真實 Groq GPT-OSS 20B 經 bin／Worker／bridge 讀取 HTML 並辨識 gipapa；宿主 reload 保留 workspace 與檔案；直接開 app 的無宿主錯誤。報告為 `test-results/host-browser.json`，畫面為 `test-results/host-popup.png`；無 key 時 live 任務明列 skipped。
 - [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md) 分別記錄真實模型、任務、限制與重跑方式。報告由 runner 寫入本機 `test-results/`，不納入 Git。
 - Harness／provider、模型決策、網路與 quota 失敗分別記錄。額度失敗不列為 PASS，既有 SDK 與 browser 的模型／儲存／執行器差異保留於報告。
 

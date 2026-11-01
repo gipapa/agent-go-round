@@ -15,18 +15,72 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 const testExecutor: BinExecutor = {
   async execute(source, args, rpc: FileRpc) {
     const main = runInNewContext(`(${source})`, {}, { timeout: 1000 });
-    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])) }));
+    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]) } }));
   }
 };
-async function setup() {
+async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}) {
   const fs = new MemoryFileSystem();
   await installDefaultBin(fs);
-  const bin = new BinRegistry(fs, testExecutor);
+  const bin = new BinRegistry(fs, testExecutor, services);
   await bin.reload();
   return { fs, bin };
 }
 
 describe("VFS ~/bin JavaScript tools", () => {
+  it("moves legacy manifests without changing custom JS or JSON and is restart-safe", async () => {
+    const { fs, bin } = await setup();
+    const definition = { ...DEFAULT_BIN_TOOLS.find(tool => tool.name === "read")!, description: "My custom read description" };
+    const { source: _source, ...manifest } = definition;
+    await fs.rename("~/bin/manifests/read.tool.json", "~/bin/read.tool.json");
+    const customJson = JSON.stringify(manifest, null, 4);
+    const customJs = 'async function main(args, api) { return { custom: true }; }';
+    await fs.writeFile("~/bin/read.tool.json", customJson);
+    await fs.writeFile("~/bin/read.js", customJs);
+    await installDefaultBin(fs);
+    await bin.reload();
+    expect((await fs.readFile("~/bin/manifests/read.tool.json")).content).toBe(customJson);
+    expect((await fs.readFile("~/bin/read.js")).content).toBe(customJs);
+    expect((await fs.listDirectory("~/bin")).some(file => file.path.endsWith(".tool.json"))).toBe(false);
+    expect(await bin.execute("read", { path: "any" })).toEqual({ custom: true });
+    const revision = (await fs.readFile("~/bin/manifests/read.tool.json")).revision;
+    await installDefaultBin(fs); await bin.reload();
+    expect((await fs.readFile("~/bin/manifests/read.tool.json")).revision).toBe(revision);
+  });
+
+  it("preserves both files and reports conflicts when old and new manifests coexist", async () => {
+    const { fs, bin } = await setup();
+    const existing = (await fs.readFile("~/bin/manifests/read.tool.json")).content;
+    await fs.writeFile("~/bin/read.tool.json", "legacy custom content");
+    await expect(bin.reload()).rejects.toThrow("existing files were preserved");
+    expect((await fs.readFile("~/bin/read.tool.json")).content).toBe("legacy custom content");
+    expect((await fs.readFile("~/bin/manifests/read.tool.json")).content).toBe(existing);
+  });
+  it("runs host reads from editable bin JS for both shell and AI, with explicit no-host errors", async () => {
+    const plain = await setup();
+    await expect(executeShell("read_host_page", plain.fs, plain.bin, "/home/user")).rejects.toThrow("目前沒有連接宿主頁");
+    await expect(plain.bin.sessionTools().find(tool => tool.name === "read_host_page")!.execute("no-host", {})).rejects.toThrow("目前沒有連接宿主頁");
+    const calls: unknown[] = [];
+    const { fs, bin } = await setup({ readHostPage: async (args, _signal, context) => { calls.push({ args, context }); return { html: "這一頁的作者是gipapa" }; } });
+    expect((await executeShell("read_host_page", fs, bin, "/home/user")).text).toContain("gipapa");
+    const tool = bin.sessionTools("/home/user", undefined, undefined, "session-a").find(tool => tool.name === "read_host_page")!;
+    expect(await tool.execute("call-a", { limit: 20 })).toMatchObject({ details: { html: expect.stringContaining("gipapa") } });
+    expect(calls.at(-1)).toEqual({ args: { limit: 20 }, context: { sessionId: "session-a", toolCallId: "call-a" } });
+    await fs.writeFile("~/bin/read_host_page.js", 'async function main(args, api) { return { edited: true }; }');
+    await bin.reload();
+    expect(JSON.parse((await executeShell("read_host_page", fs, bin, "/home/user")).text)).toEqual({ edited: true });
+    expect(await bin.sessionTools().find(tool => tool.name === "read_host_page")!.execute("edited", {})).toMatchObject({ details: { edited: true } });
+  });
+
+  it("enforces host capability and range checks even when bin JS is edited", async () => {
+    const { fs, bin } = await setup({ readHostPage: async () => { throw new Error("must not dispatch"); } });
+    await fs.writeFile("~/bin/read_host_page.js", 'async function main(args, api) { return api.host.readPage({limit: -1}); }');
+    await bin.reload();
+    await expect(bin.execute("read_host_page", {})).rejects.toThrow("Invalid host page range");
+    const manifest = JSON.parse((await fs.readFile("~/bin/manifests/read_host_page.tool.json")).content);
+    await fs.writeFile("~/bin/manifests/read_host_page.tool.json", JSON.stringify({ ...manifest, capabilities: [] }));
+    await bin.reload();
+    await expect(bin.execute("read_host_page", {})).rejects.toThrow("capability");
+  });
   it("executes all six defaults against the same files and reads paginated content", async () => {
     const { bin } = await setup();
     expect(bin.list()).toHaveLength(DEFAULT_BIN_TOOLS.length);
@@ -90,7 +144,7 @@ describe("VFS ~/bin JavaScript tools", () => {
   it("loads new JS tools, enforces capabilities, and pins already-registered tool definitions", async () => {
     const { fs, bin } = await setup();
     const manifest = { version: 1, name: "hello", description: "Test extension", parameters: { type: "object", additionalProperties: false }, capabilities: ["readFile"] };
-    await fs.writeFile("~/bin/hello.tool.json", JSON.stringify(manifest));
+    await fs.writeFile("~/bin/manifests/hello.tool.json", JSON.stringify(manifest));
     await fs.writeFile("~/bin/hello.js", 'async function main(args, api) { return "first"; }');
     await bin.reload();
     const registered = bin.sessionTools().find((tool) => tool.name === "hello")!;
@@ -147,7 +201,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await executeShell("cd jokes", fs, bin, "/home/user")).toMatchObject({ cwd: "/home/user/jokes" });
     expect(await executeShell("ai", fs, bin, "/home/user")).toMatchObject({ mode: "agent" });
     await expect(executeShell("missing", fs, bin, "/home/user")).rejects.toThrow(/not found/);
-    expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "ls", "read", "skill_load", "write"]);
+    expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "help", "ls", "read", "read_host_page", "skill_load", "write"]);
   });
 
   it.each(["upper", "mixed"])("accepts %s-case shell commands without changing file paths, content or JSON", async (style) => {
@@ -182,14 +236,14 @@ describe("VFS ~/bin JavaScript tools", () => {
 
   it("recovers broken bin manifests without depending on executable bin tools", async () => {
     const { fs, bin } = await setup();
-    await fs.writeFile("~/bin/read.tool.json", "broken");
+    await fs.writeFile("~/bin/manifests/read.tool.json", "broken");
     const restarted = new BinRegistry(fs, testExecutor);
     await expect(restarted.reload()).rejects.toThrow();
     await executeShell("restore-bin read", fs, restarted, "/home/user");
     expect(restarted.list()).toHaveLength(DEFAULT_BIN_TOOLS.length);
-    await fs.writeFile("~/bin/bad.tool.json", "broken");
+    await fs.writeFile("~/bin/manifests/bad.tool.json", "broken");
     await expect(bin.reload()).rejects.toThrow();
-    await executeShell("rm ~/bin/bad.tool.json", fs, restarted, "/home/user");
+    await executeShell("rm ~/bin/manifests/bad.tool.json", fs, restarted, "/home/user");
     expect(await executeShell("rehash", fs, restarted, "/home/user")).toMatchObject({ text: expect.stringContaining("read") });
   });
 });

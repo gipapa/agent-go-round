@@ -1,5 +1,3 @@
-import { Type } from "@earendil-works/pi-ai";
-import { commandHelp } from "./shell-help";
 import { parse as parseYaml } from "yaml";
 import type { BinRegistry } from "./bin";
 import { FileSystemError, VFS_HOME, resolvePath, type FileNode, type VirtualFileSystem } from "./fs";
@@ -103,16 +101,8 @@ export async function configureFileAgent(session: AgentSession, fs: VirtualFileS
       session.recordContextSource({ kind: "skill", path: skill.path, revision: skill.revision }, id);
       session.recordFileAccess(id, "readFile", skill.path, skill.revision);
       return { ...skill, directory: skill.path.slice(0, skill.path.lastIndexOf("/")) };
-    });
-  const help: SessionTool = {
-    name: "help", label: "Command help", description: "Inspect virtual shell command syntax, options and limitations, or a tool JSON schema. Omit command for the catalog. Equivalent to COMMAND --help; does not run commands.",
-    parameters: Type.Object({ command: Type.Optional(Type.String()) }, { additionalProperties: false }),
-    async execute(_id, args) {
-      const text = commandHelp((args as { command?: string }).command, bin);
-      return { content: [{ type: "text", text }], details: { text } };
-    }
-  };
-  const allTools = [...local, help, ...extraTools];
+    }, session.sessionId);
+  const allTools = [...local, ...extraTools];
   if (new Set(allTools.map((tool) => tool.name)).size !== allTools.length) throw new Error("Tool name conflicts with ~/bin");
   session.setSystemPrompt(context.systemPrompt, context.sources);
   session.setTools(allTools);

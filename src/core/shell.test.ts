@@ -12,7 +12,7 @@ async function setup() {
   const fs = new MemoryFileSystem();
   await installDefaultBin(fs);
   const bin = new BinRegistry(fs, { async execute(source, args, rpc) {
-    return structuredClone(await runInNewContext(`(${source})`, {}, { timeout: 1000 })(args, { fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])) }));
+    return structuredClone(await runInNewContext(`(${source})`, {}, { timeout: 1000 })(args, { fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])), tools: { help: (command?: string) => rpc("commandHelp", [command]) } }));
   } });
   await bin.reload();
   const shell = async (input: string, cwd = VFS_HOME) => (await executeShell(input, fs, bin, cwd)).text;
@@ -71,7 +71,7 @@ describe("bash-style virtual shell", () => {
   it("documents every command without running it, including UI commands and custom tool schemas", async () => {
     const { fs, bin, shell } = await setup();
     await fs.writeFile("~/bin/custom_help.js", 'async function main(args, api) { return api.fs.writeFile("~/should-not-exist", "bad"); }');
-    await fs.writeFile("~/bin/custom_help.tool.json", JSON.stringify({ version: 1, name: "custom_help", description: "Custom tool help fixture", parameters: { type: "object", properties: { message: { type: "string" } } }, capabilities: ["writeFile"] }));
+    await fs.writeFile("~/bin/manifests/custom_help.tool.json", JSON.stringify({ version: 1, name: "custom_help", description: "Custom tool help fixture", parameters: { type: "object", properties: { message: { type: "string" } } }, capabilities: ["writeFile"] }));
     await bin.reload();
     expect(await shell("custom_help --help")).toContain('"message"');
     await expect(fs.stat("~/should-not-exist")).rejects.toMatchObject({ code: "not_found" });

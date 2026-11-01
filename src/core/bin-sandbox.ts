@@ -38,7 +38,9 @@ function workerBootstrap(main: (args: unknown, api: unknown) => Promise<unknown>
   });
   const fs = Object.fromEntries(["stat", "readFile", "listDirectory", "writeFile", "writeFiles", "mkdir", "remove"].map((method) => [method, (...values: unknown[]) => call(method, values)]));
   const skills = Object.freeze({ load: (name: string) => call("loadSkill", [name]) });
-  Promise.resolve().then(() => main(args, Object.freeze({ fs: Object.freeze(fs), skills }))).then(
+  const host = Object.freeze({ readPage: (options: unknown) => call("readHostPage", [options]) });
+  const tools = Object.freeze({ help: (command?: string) => call("commandHelp", [command]) });
+  Promise.resolve().then(() => main(args, Object.freeze({ fs: Object.freeze(fs), skills, host, tools }))).then(
     (result) => self.postMessage({ type: "done", result }),
     (error) => self.postMessage({ type: "error", error: error instanceof Error ? error.message : String(error) })
   );

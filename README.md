@@ -82,13 +82,15 @@ Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入
     references/scoring.md
   bin/
     read.js
-    read.tool.json
     …
+    manifests/
+      read.tool.json
+      …
 ```
 
 每個 user run 從 home 到 agent cwd 載入 AGENTS.md，也接受小寫的 agents.md；同層兩者並存時會回報歧義。Skill 先提供 metadata catalog，模型透過 `skill_load` 按需讀取 SKILL.md，再以 `read` 取得 references 和工作檔案。Active skill 在下一輪從檔案刷新。
 
-預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`。新增工具時，把 `.js` 與對應 `.tool.json` 放入 `~/bin`，再執行 `rehash`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`，shell 與 AI 共用。指令 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後執行 `rehash`。舊版根目錄的 manifest 會自動搬移並保留自訂內容；若新舊位置同名，保留兩份並回報衝突。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
 
 快速體驗檔案式 skill：
 
@@ -128,7 +130,7 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 110 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離與 host HTML 讀取。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 115 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動，以及 manifest 搬移與衝突保留。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
@@ -176,7 +178,9 @@ const widget = window.AgentGoRound.mount({
 
 Widget 提供 `open()`、`close()`、`toggle()`、`postMessage()`、`on()`、`registerTool()`、`destroy()`；`mode: "inline"` 可直接嵌入容器。Workspace／surface binding 會由 ready handshake 核對；provider 認證與跨 tab routing 尚未提供 embed API。
 
-Popup 預設提供唯讀 `read_host_page` 工具，AI 可讀取實際呼叫頁面的 HTML（移除 widget UI、script、style 及表單控制項），並以 `offset`／`limit` 分頁。HTML 視為外部資料；不會自動成為 system instructions 或寫入 VFS。Demo Host page 包含「這一頁的作者是gipapa」，可在 popup 連接 Groq、輸入 `ai`，再問「這一頁的作者是誰？」驗證工具讀取。
+`~/bin/read_host_page.js` 與 `~/bin/manifests/read_host_page.tool.json` 提供唯讀宿主讀取；shell 可直接輸入 `read_host_page` 或 `read_host_page {"offset":0,"limit":1000}`，AI 呼叫同一份 bin JS。沒有宿主時明確回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」。HTML 視為外部資料；不會自動成為 system instructions 或寫入 VFS。Demo Host page 包含「這一頁的作者是gipapa」，可在 popup 連接 Groq、輸入 `ai`，再問「這一頁的作者是誰？」驗證工具讀取。
+
+Terminal 在 shell 輸出、工具結果或 AI 串流有新內容時自動捲到底部；沒有新內容時可自行捲動閱讀。
 
 宿主可用 `registerTool(spec, handler, approval?)` 註冊額外工具。Bridge 驗證 schema、instance／session／tool-call／request identity，處理取消、deadline 與 outcome unknown；需批准的工具使用綁定精確參數、只能使用一次的 approval token。Bridge 不提供任意讀取宿主 cookies 或 storage 的介面。目前 wire protocol 為 v2、SDK 為 `0.2.0`，不支援的版本會被拒絕。
 
