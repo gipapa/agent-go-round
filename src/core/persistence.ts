@@ -11,6 +11,7 @@ export type SessionSnapshot = {
   messages: AgentMessage[];
   savedAt: number;
   activeSkill?: string;
+  autoCompactPercent?: number;
 };
 
 export class SessionPersistenceError extends Error {
@@ -49,6 +50,7 @@ export function validateSessionSnapshot(value: unknown): SessionSnapshot {
   }
   if (typeof snapshot.savedAt !== "number" || !Number.isFinite(snapshot.savedAt)) throw new SessionPersistenceError("Session snapshot is missing savedAt");
   if (snapshot.activeSkill !== undefined && typeof snapshot.activeSkill !== "string") throw new SessionPersistenceError("Invalid active skill");
+  if (snapshot.autoCompactPercent !== undefined && (!Number.isInteger(snapshot.autoCompactPercent) || snapshot.autoCompactPercent < 1 || snapshot.autoCompactPercent > 99)) throw new SessionPersistenceError("Invalid auto compact percentage");
   return snapshot as SessionSnapshot;
 }
 

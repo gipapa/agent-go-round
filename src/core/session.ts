@@ -4,6 +4,8 @@ import { SessionPersistenceError, type SessionSnapshot, type SessionStore } from
 
 export type RunStatus = "success" | "aborted" | "deadline" | "error" | "outcome_unknown" | "output_limit";
 
+export const DEFAULT_AUTO_COMPACT_PERCENT = 40 as const;
+
 export const SESSION_EVENT_VERSION = 1 as const;
 export type FileReadRange = { startLine: number; endLine: number; totalLines: number };
 export type ContextSource = { kind: "agents" | "skill"; path: string; revision: number };
@@ -26,6 +28,68 @@ export type SessionEvent = SessionEventPayload & {
   version: typeof SESSION_EVENT_VERSION;
   sessionId: string;
 };
+
+export type ContextUsage = {
+  usedTokens: number;
+  contextWindow: number;
+  percent: number;
+  autoCompactPercent: number;
+};
+
+function estimateTextTokens(text: string): number { return Math.ceil(text.length / 4); }
+function estimateValueTokens(value: unknown): number {
+  if (value === undefined || value === null) return 0;
+  if (Array.isArray(value) && value.length === 0) return 0;
+  try { return estimateTextTokens(JSON.stringify(value) ?? ""); }
+  catch { return estimateTextTokens(String(value)); }
+}
+function estimateContentTokens(content: unknown): number {
+  if (typeof content === "string") return estimateTextTokens(content);
+  if (!Array.isArray(content)) return estimateValueTokens(content);
+  return content.reduce((total, block) => {
+    if (block && typeof block === "object" && "type" in block && block.type === "text" && typeof block.text === "string") return total + estimateTextTokens(block.text);
+    if (block && typeof block === "object" && "type" in block && block.type === "thinking" && typeof block.thinking === "string") return total + estimateTextTokens(block.thinking);
+    return total + estimateValueTokens(block);
+  }, 0);
+}
+function estimateMessageTokens(message: AgentMessage): number {
+  return "content" in message ? estimateContentTokens(message.content) : estimateValueTokens(message);
+}
+function estimateContextTokens(systemPrompt: string, messages: readonly AgentMessage[], tools: readonly SessionTool[]): number {
+  return estimateTextTokens(systemPrompt) + estimateValueTokens(tools) + messages.reduce((total, message) => total + estimateMessageTokens(message), 0);
+}
+
+type CompactResult = { messages: AgentMessage[]; removed: number };
+function compactMessages(systemPrompt: string, messages: readonly AgentMessage[], tools: readonly SessionTool[], targetTokens: number): CompactResult {
+  const groups: AgentMessage[][] = [];
+  let current: AgentMessage[] = [];
+  for (const message of messages) {
+    if (message.role === "user" && current.length) { groups.push(current); current = []; }
+    current.push(message);
+  }
+  if (current.length) groups.push(current);
+  if (groups.length < 2 || estimateContextTokens(systemPrompt, messages, tools) <= targetTokens) return { messages: [...messages], removed: 0 };
+
+  const fixedTokens = estimateTextTokens(systemPrompt) + estimateValueTokens(tools);
+  const messageBudget = Math.max(1, targetTokens - fixedTokens);
+  const kept: AgentMessage[][] = [];
+  let keptTokens = 0;
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const group = groups[index];
+    const groupTokens = group.reduce((total, message) => total + estimateMessageTokens(message), 0);
+    if (kept.length > 0 && keptTokens + groupTokens > messageBudget) break;
+    kept.unshift(group);
+    keptTokens += groupTokens;
+  }
+  const removed = groups.length - kept.length;
+  if (!removed) return { messages: [...messages], removed: 0 };
+  const summary: AgentMessage = {
+    role: "user",
+    content: `[Auto compacted ${removed} old turn${removed === 1 ? "" : "s"}; files are current.]`,
+    timestamp: Date.now()
+  };
+  return { messages: [summary, ...kept.flat()], removed };
+}
 
 export interface SessionEventStore {
   append(event: SessionEvent): void;
@@ -132,6 +196,7 @@ export type AgentSessionOptions = {
   deadlineMs?: number;
   /** Maximum number of assistant text characters emitted by one prompt. */
   maxOutputCharacters?: number;
+  autoCompactPercent?: number;
   eventStore?: SessionEventStore;
   initialMessages?: readonly AgentMessage[];
   activeSkill?: string;
@@ -166,6 +231,7 @@ export class AgentSession {
   private readonly maxToolCalls?: number;
   private readonly deadlineMs?: number;
   private readonly maxOutputCharacters?: number;
+  private autoCompactPercent: number;
   private readonly eventStore?: SessionEventStore;
   private contextSources: ContextSource[] = [];
 
@@ -181,6 +247,8 @@ export class AgentSession {
     if (options.maxOutputCharacters !== undefined && (!Number.isInteger(options.maxOutputCharacters) || options.maxOutputCharacters < 0)) {
       throw new Error("maxOutputCharacters must be a non-negative integer");
     }
+    this.autoCompactPercent = options.autoCompactPercent ?? DEFAULT_AUTO_COMPACT_PERCENT;
+    if (!Number.isInteger(this.autoCompactPercent) || this.autoCompactPercent < 1 || this.autoCompactPercent > 99) throw new Error("autoCompactPercent must be an integer between 1 and 99");
     const tools = this.prepareTools(options.tools ?? []);
     this.toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
     this.approval = options.approval;
@@ -202,12 +270,27 @@ export class AgentSession {
       maxRetryDelayMs: 60_000,
       beforeToolCall: (context, signal) => this.beforeToolCall(context, signal),
       afterToolCall: (context, signal) => this.afterToolCall(context, signal),
-      shouldStopAfterTurn: () => this.activeRun?.unknownOutcome === true
+      shouldStopAfterTurn: () => this.activeRun?.unknownOutcome === true,
+      transformContext: async (messages) => this.compactContext(messages)
     });
   }
 
   get isRunning(): boolean {
     return this.activeRun !== undefined;
+  }
+
+  getAutoCompactPercent(): number { return this.autoCompactPercent; }
+
+  setAutoCompactPercent(percent: number): void {
+    if (!Number.isInteger(percent) || percent < 1 || percent > 99) throw new Error("autoCompactPercent must be an integer between 1 and 99");
+    this.autoCompactPercent = percent;
+  }
+
+  contextUsage(): ContextUsage {
+    const modelWindow = this.agent.state.model.contextWindow;
+    const contextWindow = Number.isSafeInteger(modelWindow) && modelWindow > 0 ? modelWindow : 128_000;
+    const usedTokens = estimateContextTokens(this.agent.state.systemPrompt, this.agent.state.messages, this.agent.state.tools as SessionTool[]);
+    return { usedTokens, contextWindow, percent: Math.round((usedTokens / contextWindow) * 100), autoCompactPercent: this.autoCompactPercent };
   }
 
   recovery(): SessionRecovery {
@@ -250,6 +333,7 @@ export class AgentSession {
     const cleanInput = input.trim();
     if (!cleanInput) throw new Error("訊息不可為空");
     if (this.activeRun) throw new SessionBusyError(this.sessionId);
+    this.compactBeforePrompt(cleanInput);
 
     const runId = makeId("run");
     const run = { runId, toolCallCount: 0, unknownOutcome: false, unknownToolCalls: new Set<string>(), deadlineExceeded: false, outputLimitExceeded: false, outputCharacters: 0, deadlineTimer: undefined as ReturnType<typeof setTimeout> | undefined };
@@ -294,6 +378,7 @@ export class AgentSession {
       if (event.type === "tool_execution_end") {
         this.emit({ type: "tool_finished", runId, toolCallId: event.toolCallId, toolName: event.toolName, isError: event.isError });
       }
+      if (event.type === "turn_end") this.compactState();
     });
 
     try {
@@ -365,7 +450,8 @@ export class AgentSession {
       systemPrompt: this.agent.state.systemPrompt,
       messages: [...this.agent.state.messages],
       savedAt: Date.now(),
-      ...(this.activeSkill ? { activeSkill: this.activeSkill } : {})
+      ...(this.activeSkill ? { activeSkill: this.activeSkill } : {}),
+      autoCompactPercent: this.autoCompactPercent
     };
   }
 
@@ -383,8 +469,30 @@ export class AgentSession {
       model: snapshot.model,
       systemPrompt: snapshot.systemPrompt,
       initialMessages: snapshot.messages,
-      activeSkill: snapshot.activeSkill
+      activeSkill: snapshot.activeSkill,
+      autoCompactPercent: snapshot.autoCompactPercent
     });
+  }
+
+  private compactTargetTokens(): number {
+    const modelWindow = this.agent.state.model.contextWindow;
+    const contextWindow = Number.isSafeInteger(modelWindow) && modelWindow > 0 ? modelWindow : 128_000;
+    return Math.max(1, Math.floor(contextWindow * this.autoCompactPercent / 100));
+  }
+
+  private compactContext(messages: AgentMessage[]): AgentMessage[] {
+    return compactMessages(this.agent.state.systemPrompt, messages, this.agent.state.tools as SessionTool[], this.compactTargetTokens()).messages;
+  }
+
+  private compactState(): void {
+    const result = compactMessages(this.agent.state.systemPrompt, this.agent.state.messages, this.agent.state.tools as SessionTool[], this.compactTargetTokens());
+    if (result.removed) this.agent.state.messages = result.messages;
+  }
+
+  private compactBeforePrompt(input: string): void {
+    const prompt: AgentMessage = { role: "user", content: input, timestamp: Date.now() };
+    const result = compactMessages(this.agent.state.systemPrompt, [...this.agent.state.messages, prompt], this.agent.state.tools as SessionTool[], this.compactTargetTokens());
+    if (result.removed && result.messages.at(-1) === prompt) this.agent.state.messages = result.messages.slice(0, -1);
   }
 
   private async beforeToolCall(context: { toolCall: { id: string; name: string }; args: unknown }, signal?: AbortSignal): Promise<{ block?: boolean; reason?: string } | undefined> {

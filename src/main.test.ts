@@ -101,6 +101,22 @@ describe("main workspace UI", () => {
     expect(document.activeElement).toBe(providerButton);
   });
 
+  it("shows context usage and the default auto compact target in the AI status bar", async () => {
+    await loadApp();
+    const prompt = document.querySelector<HTMLTextAreaElement>("#prompt")!;
+    prompt.value = "ai";
+    document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("#pane-type")?.textContent).toBe("AI agent"));
+    const footer = document.querySelector("#footer-model")!.textContent ?? "";
+    expect(footer).toContain("context");
+    expect(footer).toContain("compact 40%");
+
+    const setting = document.querySelector<HTMLInputElement>("#auto-compact-percent")!;
+    setting.value = "55";
+    setting.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(document.querySelector("#footer-model")!.textContent).toContain("compact 55%");
+  });
+
   it("keeps the app aligned with a keyboard-shrunken visual viewport", async () => {
     const originalVisualViewport = Object.getOwnPropertyDescriptor(window, "visualViewport");
     const listeners: Record<string, () => void> = {};

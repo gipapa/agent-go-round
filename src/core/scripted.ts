@@ -1,4 +1,4 @@
-import { AgentSession, type SessionEventStore, type ToolApproval } from "./session";
+import { AgentSession, DEFAULT_AUTO_COMPACT_PERCENT, type SessionEventStore, type ToolApproval } from "./session";
 import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEvent, type Model } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 
@@ -57,7 +57,7 @@ export function createScriptedStreamFn(responses: readonly string[], delayMs = 0
   };
 }
 
-export function createScriptedSession(responses: readonly string[], options?: { sessionId?: string; delayMs?: number; eventStore?: SessionEventStore; approval?: ToolApproval; deadlineMs?: number; maxOutputCharacters?: number }): AgentSession {
+export function createScriptedSession(responses: readonly string[], options?: { sessionId?: string; delayMs?: number; eventStore?: SessionEventStore; approval?: ToolApproval; deadlineMs?: number; maxOutputCharacters?: number; autoCompactPercent?: number }): AgentSession {
   const model: Model<"openai-completions"> = {
     id: "scripted",
     name: "Scripted model",
@@ -77,6 +77,7 @@ export function createScriptedSession(responses: readonly string[], options?: { 
     eventStore: options?.eventStore,
     approval: options?.approval,
     deadlineMs: options?.deadlineMs,
-    maxOutputCharacters: options?.maxOutputCharacters
+    maxOutputCharacters: options?.maxOutputCharacters,
+    autoCompactPercent: options?.autoCompactPercent ?? DEFAULT_AUTO_COMPACT_PERCENT
   });
 }

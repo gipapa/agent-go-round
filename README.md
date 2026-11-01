@@ -30,7 +30,7 @@ Groq 設定使用 password field。`Remember this key in this browser` 預設開
 
 已保存 key 時，重新整理會自動恢復相同 API 位址的 Groq runtime；恢復歷史對話也沿用本頁可用的設定，保留各對話原本的模型與 context length，不會重送歷史請求。未保存 key 時，reload 後需手動 Connect 一次，同一 API 位址的其他待連線 tabs 會一起恢復。
 
-Provider settings 會從 Base URL 下的 `/models` 取得模型清單，並帶入模型的 context length（tokens）；也可按 `Refresh models` 更新。端點不存在、請求失敗或未提供長度時，可手動輸入 Model 與 Context length。長度會保存於設定和對話的模型資料，傳入 runtime；目前尚未實作依此長度自動壓縮對話。模型欄位依據 [Groq Models API](https://console.groq.com/docs/api-reference#models) 的 `id`／`context_window`，也接受相容端點的 `context_length`／`max_model_len`。
+Provider settings 會從 Base URL 下的 `/models` 取得模型清單，並帶入模型的 context length（tokens）；也可按 `Refresh models` 更新。端點不存在、請求失敗或未提供長度時，可手動輸入 Model 與 Context length。設定中的 `Auto compact target` 預設為 context 的 40%，當估算使用量超過這個比例時，會保留較新的對話輪次並移除較舊輪次，再繼續送出請求；百分比可自行調整。AI status bar 會顯示估算使用量、模型 context 長度和 compact 目標。模型欄位依據 [Groq Models API](https://console.groq.com/docs/api-reference#models) 的 `id`／`context_window`，也接受相容端點的 `context_length`／`max_model_len`。
 
 ## 簡易 bash 與對話
 
@@ -138,7 +138,7 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 147 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 150 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、context usage、auto compact、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 

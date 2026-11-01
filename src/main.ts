@@ -15,7 +15,7 @@ import type { ProviderRuntime } from "./core/provider";
 import type { TSchema } from "@earendil-works/pi-ai";
 import { createGroqRuntime, fetchProviderModels, normalizeBaseUrl, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL, type GroqConfig, type ProviderModel } from "./core/provider";
 import { createScriptedSession } from "./core/scripted";
-import { AgentSession, inspectSessionRecovery, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
+import { AgentSession, DEFAULT_AUTO_COMPACT_PERCENT, inspectSessionRecovery, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
 import { TabRouter, type TabRouteEvent } from "./core/tab-router";
 import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
@@ -70,7 +70,8 @@ const STORAGE_KEYS = {
   apiKey: "agent-go-round.groq.api-key",
   baseUrl: "agent-go-round.groq.base-url",
   model: "agent-go-round.groq.model",
-  contextWindow: "agent-go-round.groq.context-window"
+  contextWindow: "agent-go-round.groq.context-window",
+  autoCompactPercent: "agent-go-round.auto-compact-percent"
 } as const;
 
 function readStored(key: string): string {
@@ -84,6 +85,7 @@ function readStored(key: string): string {
 const storedApiKey = readStored(STORAGE_KEYS.apiKey);
 const storedBaseUrl = readStored(STORAGE_KEYS.baseUrl);
 const storedModel = readStored(STORAGE_KEYS.model);
+const storedAutoCompactPercent = readStored(STORAGE_KEYS.autoCompactPercent);
 
 const state = {
   tabs: [] as AgentTab[],
@@ -203,6 +205,7 @@ app.innerHTML = `
             <label id="model-select-label" hidden>Available models<select id="model-select"></select></label>
             <label>Model<input id="model" type="text" autocomplete="off" required /></label>
             <label>Context length (tokens)<input id="context-window" type="number" min="1" step="1" required /></label>
+            <label>Auto compact target (% of context)<input id="auto-compact-percent" type="number" min="1" max="99" step="1" required /></label>
             <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
             <button id="refresh-models" class="drawer-button muted-button" type="button">Refresh models</button>
             <p id="models-status" class="settings-status" role="status" aria-live="polite">Models can also be entered manually.</p>
@@ -225,6 +228,10 @@ const get = <T extends HTMLElement>(id: string): T => {
 get<HTMLInputElement>("base-url").value = storedBaseUrl || configuredBaseUrl;
 get<HTMLInputElement>("model").value = storedModel || configuredModel;
 get<HTMLInputElement>("context-window").value = readStored(STORAGE_KEYS.contextWindow) || "128000";
+const storedCompactValue = Number(storedAutoCompactPercent);
+get<HTMLInputElement>("auto-compact-percent").value = Number.isInteger(storedCompactValue) && storedCompactValue >= 1 && storedCompactValue <= 99
+  ? String(storedCompactValue)
+  : String(DEFAULT_AUTO_COMPACT_PERCENT);
 get<HTMLInputElement>("api-key").value = storedApiKey;
 get<HTMLInputElement>("remember-key").checked = true;
 
@@ -239,6 +246,11 @@ let modelCatalog: ProviderModel[] = [];
 let catalogIdentity = "";
 let modelsRequest: { identity: string; controller: AbortController; promise: Promise<void> } | undefined;
 
+function currentAutoCompactPercent(): number {
+  const value = Number(get<HTMLInputElement>("auto-compact-percent").value);
+  return Number.isInteger(value) && value >= 1 && value <= 99 ? value : DEFAULT_AUTO_COMPACT_PERCENT;
+}
+
 function cachedRuntime(config: GroqConfig): Promise<ProviderRuntime> {
   const identity = JSON.stringify([normalizeBaseUrl(config.baseUrl), config.model, config.contextWindow]);
   let runtime = runtimeCache.get(identity);
@@ -250,10 +262,11 @@ function cachedRuntime(config: GroqConfig): Promise<ProviderRuntime> {
   return runtime;
 }
 
-function bindRuntime(tab: AgentTab, runtime: ProviderRuntime): void {
+function bindRuntime(tab: AgentTab, runtime: ProviderRuntime, autoCompactPercent = currentAutoCompactPercent()): void {
   const previous = tab.session.snapshot();
   const next = AgentSession.fromSnapshot(previous, { streamFn: runtime.streamFn, tools: currentHostTools(previous.sessionId), eventStore: sessionEventStore, approval: requestHostToolApproval, maxToolCalls: 32, deadlineMs: 360_000 });
   next.agent.state.model = runtime.model;
+  next.setAutoCompactPercent(autoCompactPercent);
   attachSession(tab, next);
   tab.provider = "groq";
   tab.connected = true;
@@ -266,7 +279,7 @@ async function reconnectTab(tab: AgentTab): Promise<void> {
   // Credentials apply only to the configured endpoint, including during history resume.
   if (normalizeBaseUrl(model.baseUrl) !== normalizeBaseUrl(providerConfig.baseUrl)) return;
   const runtime = await cachedRuntime({ ...providerConfig, baseUrl: model.baseUrl, model: model.id, contextWindow: model.contextWindow });
-  bindRuntime(tab, runtime);
+  bindRuntime(tab, runtime, currentAutoCompactPercent());
 }
 
 function modelsIdentity(): string {
@@ -496,6 +509,7 @@ function persistProviderSettings(): void {
     if (baseUrl) browserStorage.setItem(STORAGE_KEYS.baseUrl, baseUrl);
     if (model) browserStorage.setItem(STORAGE_KEYS.model, model);
     browserStorage.setItem(STORAGE_KEYS.contextWindow, get<HTMLInputElement>("context-window").value);
+    browserStorage.setItem(STORAGE_KEYS.autoCompactPercent, get<HTMLInputElement>("auto-compact-percent").value);
   } catch {
     settingsStatus.textContent = "Browser storage is unavailable; the key will only live for this page.";
   }
@@ -507,7 +521,7 @@ function makeId(prefix: string): string {
 }
 
 function scriptedSession(tabId: string, responses: readonly string[]): AgentSession {
-  return createScriptedSession(responses, { sessionId: makeId(`session-${tabId}`), delayMs: 10, eventStore: sessionEventStore, approval: requestHostToolApproval });
+  return createScriptedSession(responses, { sessionId: makeId(`session-${tabId}`), delayMs: 10, eventStore: sessionEventStore, approval: requestHostToolApproval, autoCompactPercent: currentAutoCompactPercent() });
 }
 
 function hostToolText(value: unknown): string {
@@ -690,7 +704,7 @@ async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
     await conversations().remember(workspaceTabSnapshot(tab));
     const runtime = tab.runtime;
     const next = runtime
-      ? new AgentSession({ sessionId: makeId("session"), model: runtime.model, streamFn: runtime.streamFn, eventStore: sessionEventStore, maxToolCalls: 32, deadlineMs: 360_000, approval: requestHostToolApproval })
+      ? new AgentSession({ sessionId: makeId("session"), model: runtime.model, streamFn: runtime.streamFn, eventStore: sessionEventStore, maxToolCalls: 32, deadlineMs: 360_000, approval: requestHostToolApproval, autoCompactPercent: currentAutoCompactPercent() })
       : scriptedSession(tab.id, ["New demo conversation."]);
     if (!runtime && tab.provider === "groq") {
       next.agent.state.model = tab.session.agent.state.model;
@@ -1081,8 +1095,12 @@ function renderPane(tab: AgentTab): void {
   get<HTMLSpanElement>("run-status").textContent = statusLabel(tab.status);
   const running = tab.session.isRunning || !!tab.commandAbort;
   const modelLabel = tab.session.agent.state.model.name;
+  const context = tab.session.contextUsage();
+  const contextLabel = tab.mode === "agent"
+    ? ` · context ${context.percent}% (${context.usedTokens.toLocaleString()}/${context.contextWindow.toLocaleString()}) · compact ${context.autoCompactPercent}%`
+    : "";
   get<HTMLSpanElement>("pane-model").textContent = tab.mode === "shell" ? "virtual shell" : modelLabel;
-  get<HTMLSpanElement>("footer-model").textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${!tab.connected ? " · reconnect required" : ""}`;
+  get<HTMLSpanElement>("footer-model").textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${contextLabel}${!tab.connected ? " · reconnect required" : ""}`;
   promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $ help | ai` : "Ask AI to work with your files…";
   if (promptElement.dataset.tabId !== tab.id) {
     promptElement.value = tab.draft;
@@ -1166,7 +1184,7 @@ function addTab(): void {
   const parent = activeTab();
   if (parent.provider === "groq") {
     tab.provider = "groq"; tab.runtime = parent.runtime; tab.connected = !!parent.runtime;
-    attachSession(tab, new AgentSession({ sessionId: makeId("session"), model: parent.runtime?.model ?? parent.session.agent.state.model, streamFn: parent.runtime?.streamFn ?? (() => { throw new Error("Reconnect Groq before continuing"); }), eventStore: sessionEventStore, maxToolCalls: 32, deadlineMs: 360_000, approval: requestHostToolApproval }));
+    attachSession(tab, new AgentSession({ sessionId: makeId("session"), model: parent.runtime?.model ?? parent.session.agent.state.model, streamFn: parent.runtime?.streamFn ?? (() => { throw new Error("Reconnect Groq before continuing"); }), eventStore: sessionEventStore, maxToolCalls: 32, deadlineMs: 360_000, approval: requestHostToolApproval, autoCompactPercent: currentAutoCompactPercent() }));
   }
   state.tabs.push(tab);
   state.activeTabId = id;
@@ -1196,6 +1214,7 @@ async function restoreTab(snapshot: WorkspaceTabSnapshot): Promise<AgentTab> {
     catch (error) { tab.transcript.push({ id: makeId("restore-error"), role: "system", text: `Automatic provider restore failed: ${error instanceof Error ? error.message : String(error)}` }); }
     if (!tab.connected) tab.transcript.push({ id: makeId("restore"), role: "system", text: "Saved Groq history is preserved. Reconnect the provider before continuing." });
   }
+  tab.session.setAutoCompactPercent(currentAutoCompactPercent());
   try {
     const recovery = tab.connected
       ? tab.session.recovery()
@@ -1405,6 +1424,13 @@ get<HTMLButtonElement>("sidebar-provider-toggle").addEventListener("click", (eve
 get<HTMLButtonElement>("command-hint").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("refresh-models").addEventListener("click", () => { void refreshModels(true); });
+get<HTMLInputElement>("auto-compact-percent").addEventListener("change", () => {
+  const percent = currentAutoCompactPercent();
+  get<HTMLInputElement>("auto-compact-percent").value = String(percent);
+  for (const tab of state.tabs) tab.session.setAutoCompactPercent(percent);
+  persistProviderSettings();
+  render();
+});
 for (const id of ["base-url", "api-key"]) {
   get<HTMLInputElement>(id).addEventListener("input", () => {
     modelsRequest?.controller.abort();
@@ -1622,6 +1648,7 @@ get<HTMLButtonElement>("use-scripted").addEventListener("click", () => {
   tab.session.stop();
   const fallback = scriptedSession(tab.id, ["Demo runtime is active again.", "This session continues independently."]);
   const nextSession = AgentSession.fromSnapshot(tab.session.snapshot(), { streamFn: fallback.agent.streamFunction, eventStore: sessionEventStore, tools: currentHostTools(tab.session.sessionId), approval: requestHostToolApproval });
+  nextSession.setAutoCompactPercent(currentAutoCompactPercent());
   nextSession.agent.state.model = fallback.agent.state.model;
   attachSession(tab, nextSession);
   tab.provider = "scripted";

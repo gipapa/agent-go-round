@@ -4,6 +4,29 @@ import { SessionBusyError } from "./session";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 
 describe("AgentSession", () => {
+  it("reports context usage and compacts older turns to the configured percentage", async () => {
+    const session = createScriptedSession(["first answer", "second answer"], { sessionId: "compact-session", autoCompactPercent: 40 });
+    session.agent.state.model = { ...session.agent.state.model, contextWindow: 100 };
+    expect(session.contextUsage()).toMatchObject({ contextWindow: 100, percent: 0, autoCompactPercent: 40 });
+    await session.prompt("a".repeat(80));
+    await session.prompt("b".repeat(80));
+    const text = session.agent.state.messages.flatMap(message => {
+      if (!("content" in message)) return [];
+      if (typeof message.content === "string") return [message.content];
+      return Array.isArray(message.content) ? message.content.filter(block => block.type === "text").map(block => block.text) : [];
+    }).join("\n");
+    expect(text).toContain("Auto compacted");
+    expect(text).not.toContain("a".repeat(80));
+    expect(session.contextUsage().percent).toBeLessThanOrEqual(40);
+  });
+
+  it("validates the auto compact percentage", () => {
+    const session = createScriptedSession(["response"]);
+    expect(() => session.setAutoCompactPercent(0)).toThrow(/between 1 and 99/);
+    expect(() => session.setAutoCompactPercent(100)).toThrow(/between 1 and 99/);
+    expect(() => createScriptedSession([], { autoCompactPercent: 0 })).toThrow(/between 1 and 99/);
+  });
+
   it("streams text and gives each run one terminal event", async () => {
     const session = createScriptedSession(["hello"], { sessionId: "test-session" });
     const events: string[] = [];
