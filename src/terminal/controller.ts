@@ -52,7 +52,7 @@ export async function executeTerminalInput(input: string, context: TerminalConte
         const installed = await installJokeDemo(context.fs);
         return { text: `Joke demo: ${installed.created.length} files created, ${installed.kept.length} existing files kept.\nRun ai, then ask:\n${JOKE_PROMPT}` };
       }
-      case "editor": if (values.length === 1) { await context.openEditor(values[0]); return { text: "" }; }
+      case "editor": if (values.length <= 1) { await context.openEditor(values[0] ?? context.cwd); return { text: "" }; }
     }
   }
   return executeShell(command, context.fs, context.bin, context.cwd, context.signal);

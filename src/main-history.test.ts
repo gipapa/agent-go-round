@@ -155,6 +155,37 @@ describe("UI history at the real provider request boundary", () => {
     expect(document.querySelector("#pane-model")?.textContent).toBe("openai/gpt-oss-120b");
   });
 
+  it("opens the human browser without a file and protects drafts while switching files", async () => {
+    await loadApp();
+    const fs = new IndexedDbFileSystem(window.indexedDB);
+    await fs.writeFile("~/first.md", "first"); await fs.writeFile("~/second.md", "second");
+    await send("edit");
+    expect(document.querySelector<HTMLElement>("#file-editor")!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>("#editor-document")!.hidden).toBe(true);
+    const open = async (name: string) => {
+      await vi.waitFor(() => expect(document.querySelector(`[data-path="/home/user/${name}"] .browser-entry`)).not.toBeNull());
+      document.querySelector<HTMLButtonElement>(`[data-path="/home/user/${name}"] .browser-entry`)!.click();
+      await vi.waitFor(() => expect(document.querySelector("#editor-browser")!.hasAttribute("aria-busy")).toBe(false));
+    };
+    await open("first.md");
+    const editor = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
+    editor.value = "local draft"; editor.dispatchEvent(new Event("input", { bubbles: true }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await open("second.md"); expect(editor.value).toBe("local draft"); expect(confirm).toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    await open("second.md"); expect(editor.value).toBe("second");
+    editor.value = "draft after rename"; editor.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="重新命名 second.md"]')!.click();
+    const browser = document.querySelector("#editor-browser")!;
+    browser.querySelector("input")!.value = "renamed.md"; browser.querySelector("form")!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("#editor-path")!.textContent).toBe("~/renamed.md"));
+    expect(editor.value).toBe("draft after rename");
+    await vi.waitFor(() => expect(browser.hasAttribute("aria-busy")).toBe(false));
+    document.querySelector<HTMLButtonElement>("#editor-save")!.click();
+    await vi.waitFor(async () => expect((await fs.readFile("~/renamed.md")).content).toBe("draft after rename"));
+    confirm.mockRestore();
+  });
+
   it("retains editor drafts across reload and rejects concurrent file changes", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);

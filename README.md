@@ -42,7 +42,7 @@ Groq 設定使用 password field。`Remember this key in this browser` 預設開
 | `find [PATH] [-name GLOB] [-type f\|d]` | 遞迴尋找檔案與目錄 |
 | `cat [-n] FILE…`、`read PATH` | `cat` 顯示全文，`read` 回傳含 revision／分頁的 JSON |
 | `write PATH "CONTENT"` | 建立文字檔；覆寫既有檔案需以 JSON 提供 expectedRevision |
-| `edit PATH` | 在目前 panel 開啟文字編輯器 |
+| `edit [PATH]` | 人類檔案瀏覽／編輯器；省略路徑瀏覽目前資料夾，或指定資料夾／檔案；可新增、改名、刪除及儲存 |
 | `edit PATH "OLD" "NEW"` | 精確替換文字 |
 | `grep [-inrRFE] PATTERN [PATH…]` | 搜尋內容；`-r` 遞迴、`-n` 行號、`-i` 忽略大小寫、`-F` 純文字 |
 | `mkdir [-p] PATH…`、`touch FILE…`、`mv FROM TO`、`rm [-rf] PATH…`、`rmdir PATH…` | 建立目錄／空檔、搬移或刪除；刪目錄需 `-r`，`rmdir` 只刪空目錄 |
@@ -54,6 +54,8 @@ Groq 設定使用 password field。`Remember this key in this browser` 預設開
 | `demo jokes`、`clear` | 建立笑話範例，或清空目前 terminal 顯示 |
 
 進入 agent 後，`/exit` 返回 shell；`/skill NAME TASK` 明確選用 skill，`/skill off` 清除 active skill。這些控制指令也接受大小寫混用，skill 名稱與任務文字維持原樣。
+
+人類編輯檔案可輸入 `edit` 或 `edit ~/skills`：瀏覽器列出目前資料夾的全部項目（包含點檔），點資料夾進入、點檔案編輯。可用按鈕新增檔案／資料夾、重新命名和刪除；刪除前會確認，資料夾僅能刪除空目錄。切換檔案時會提醒未儲存內容，改名會保留正在編輯的草稿；Back to terminal 也保留草稿。儲存使用原本的 revision 衝突檢查。
 
 例如以下指令只會建立一個保留大小寫的 `Notes.md`：
 

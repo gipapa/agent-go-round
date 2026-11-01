@@ -19,6 +19,7 @@ it("routes workspace actions with quoted paths and case-sensitive arguments", as
   const { context, send } = await setup();
   await send('PrEvIeW "Mixed Page.html"'); expect(context.openPreview).toHaveBeenCalledWith("/home/user/project/Mixed Page.html");
   await send('EdIt "Mixed File.md"'); expect(context.openEditor).toHaveBeenCalledWith("Mixed File.md");
+  await send("edit"); expect(context.openEditor).toHaveBeenCalledWith("/home/user/project");
   await send("AI --ReSuMe History-MiXeD42"); expect(context.enterAgent).toHaveBeenCalledWith({ kind: "resume", sessionId: "History-MiXeD42" });
   expect((await send("HiStOrY")).text).toBe("No saved conversations");
 });

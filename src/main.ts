@@ -1,4 +1,5 @@
 import { TerminalView, type TerminalLine as TranscriptLine } from "./terminal/view";
+import { FileBrowser } from "./terminal/file-browser";
 import { initializeWorkspace } from "./core/workspace-bootstrap";
 import "./styles.css";
 import { PreviewSurface, type PreviewConfig } from "./preview-surface";
@@ -42,6 +43,8 @@ type AgentTab = {
   agentCwd?: string;
   pendingContext: string[];
   editor?: { path: string; content: string; revision: number; saving?: boolean; status?: string };
+  browserDirectory?: string;
+  browserHidden?: boolean;
   expandedTools: Set<string>;
   cwd: string;
   commandAbort?: AbortController;
@@ -162,7 +165,8 @@ app.innerHTML = `
         <section id="file-editor" class="file-editor" hidden aria-label="Human file editor">
           <div class="editor-toolbar"><div class="editor-title"><span class="editor-kicker">HUMAN EDITOR</span><strong id="editor-path"></strong></div><span id="editor-status" role="status"></span><button id="editor-save" type="button" class="terminal-button">Save ⌘S</button><button id="editor-cancel" type="button" class="terminal-button">Back to terminal</button></div>
           <div class="editor-help">Tab inserts indentation · ⌘/Ctrl+S saves · changes stay local until Save</div>
-          <div class="editor-surface"><pre id="editor-line-numbers" aria-hidden="true">1</pre><label for="editor-content" class="sr-only">File contents</label><textarea id="editor-content" spellcheck="false" aria-label="File contents"></textarea></div>
+          <button id="editor-files" class="terminal-button" type="button" aria-controls="editor-browser" aria-expanded="true">檔案</button>
+          <div class="editor-layout"><aside id="editor-browser"></aside><div id="editor-document" class="editor-surface"><pre id="editor-line-numbers" aria-hidden="true">1</pre><label for="editor-content" class="sr-only">File contents</label><textarea id="editor-content" spellcheck="false" aria-label="File contents" wrap="off"></textarea></div></div>
         </section>
         <form id="terminal-form" class="terminal-form">
           <span class="terminal-prompt" aria-hidden="true">❯</span>
@@ -219,6 +223,7 @@ get<HTMLInputElement>("api-key").value = storedApiKey;
 get<HTMLInputElement>("remember-key").checked = true;
 
 const terminalView = new TerminalView(get<HTMLDivElement>("terminal"));
+const fileBrowser = new FileBrowser(get<HTMLElement>("editor-browser"));
 const promptElement = get<HTMLTextAreaElement>("prompt");
 const sendButton = get<HTMLButtonElement>("send");
 const stopButton = get<HTMLButtonElement>("stop");
@@ -257,6 +262,11 @@ function syncViewportHeight(): void {
   const editing = document.activeElement?.matches('textarea, input:not([type="checkbox"]):not([type="button"]), select, [contenteditable="true"]') ?? false;
   const keyboardOpen = fullViewportHeight - viewportHeight > 120 || (editing && viewportHeight < 500);
   document.documentElement.classList.toggle("keyboard-open", keyboardOpen);
+  const tab = state.tabs.find(tab => tab.id === state.activeTabId);
+  if (tab?.mode === "editor") {
+    if (keyboardOpen && document.activeElement === editorContent) tab.browserHidden = true;
+    updateEditorLayout(tab);
+  }
   document.documentElement.style.setProperty("--viewport-height", `${Math.round(viewportHeight)}px`);
   document.documentElement.style.setProperty("--viewport-width", `${Math.round(viewportWidth)}px`);
   document.documentElement.style.setProperty("--viewport-offset-top", `${Math.round(viewportOffsetTop)}px`);
@@ -615,11 +625,28 @@ async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
 async function openFileEditor(tab: AgentTab, path: string): Promise<void> {
   if (!fileRuntime) throw new Error("Files are unavailable");
   const resolved = resolvePath(path, tab.cwd);
+  const node = await fileRuntime.fs.stat(resolved).catch(error => { if (error instanceof FileSystemError && error.code === "not_found") return undefined; throw error; });
+  if (node?.kind === "directory") {
+    tab.browserDirectory = resolved; tab.mode = "editor"; return;
+  }
+  if (tab.editor?.path === resolved) { tab.mode = "editor"; return; }
+  if (!await mayReplaceEditor(tab)) return;
   try { const file = await fileRuntime.fs.readFile(resolved); tab.editor = { path: resolved, content: file.content, revision: file.revision }; }
   catch (error) { if (error instanceof FileSystemError && error.code === "not_found") tab.editor = { path: resolved, content: "", revision: 0 }; else throw error; }
+  tab.browserDirectory = resolved.slice(0, resolved.lastIndexOf("/"));
+  tab.browserHidden = document.documentElement.classList.contains("keyboard-open");
   tab.mode = "editor";
-  get<HTMLTextAreaElement>("editor-content").dataset.identity = "";
-  get<HTMLElement>("editor-status").textContent = "";
+  if (activeTab() === tab) editorContent.dataset.identity = "";
+}
+
+async function mayReplaceEditor(tab: AgentTab): Promise<boolean> {
+  if (!tab.editor || !fileRuntime) return true;
+  if (tab.editor.saving) throw new Error("檔案儲存中，請稍後再操作");
+  const editor = tab.editor;
+  let saved: string | undefined;
+  try { saved = (await fileRuntime.fs.readFile(editor.path)).content; }
+  catch (error) { if (!(error instanceof FileSystemError) || error.code !== "not_found") throw error; }
+  return saved === editor.content || window.confirm(`${displayPath(editor.path)} 有未儲存內容，要放棄變更嗎？`);
 }
 
 function openPreview(entry: string): void {
@@ -645,6 +672,7 @@ async function saveFileEditor(): Promise<void> {
     editor.status = `Saved · revision ${file.revision}${editor.content !== content ? " · newer edits unsaved" : ""}`;
     if (activeTab() === tab && tab.editor === editor) get<HTMLElement>("editor-status").textContent = editor.status;
     scheduleWorkspaceSave();
+    if (activeTab() === tab && tab.mode === "editor") void fileBrowser.refresh();
   } catch (error) {
     editor.status = error instanceof Error ? error.message : String(error);
     if (activeTab() === tab && tab.editor === editor) get<HTMLElement>("editor-status").textContent = editor.status;
@@ -915,6 +943,33 @@ function renderTabs(): void {
   }
 }
 
+function browserContext(tab: AgentTab) {
+  return {
+    id: tab.id, directory: tab.browserDirectory ?? (tab.editor ? tab.editor.path.slice(0, tab.editor.path.lastIndexOf("/")) : tab.cwd), fs: fileRuntime!.fs,
+    navigate: (path: string) => { tab.browserDirectory = path; },
+    open: async (path: string) => { await openFileEditor(tab, path); if (activeTab() === tab) render(); scheduleWorkspaceSave(); },
+    beforeMutation: async (path: string, operation: "rename" | "remove") => {
+      if (!tab.editor || !(tab.editor.path === path || tab.editor.path.startsWith(path + "/"))) return true;
+      if (tab.editor.saving) throw new Error("檔案儲存中，請稍後再操作");
+      return operation === "rename" || await mayReplaceEditor(tab);
+    },
+    renamed: (from: string, to: string) => {
+      if (tab.editor && (tab.editor.path === from || tab.editor.path.startsWith(from + "/"))) {
+        tab.editor.path = to + tab.editor.path.slice(from.length); tab.editor.revision++;
+      }
+      if (activeTab() === tab) render(); scheduleWorkspaceSave();
+    },
+    removed: (path: string) => { if (tab.editor?.path === path) tab.editor = undefined; if (activeTab() === tab) render(); scheduleWorkspaceSave(); }
+  };
+}
+
+function updateEditorLayout(tab: AgentTab): void {
+  const browsing = !tab.editor || !tab.browserHidden;
+  get<HTMLElement>("editor-browser").hidden = !browsing;
+  get<HTMLElement>("editor-document").hidden = !tab.editor || (browsing && document.documentElement.classList.contains("keyboard-open"));
+  get<HTMLElement>("editor-files").setAttribute("aria-expanded", String(browsing));
+}
+
 function renderPane(tab: AgentTab): void {
   get<HTMLSpanElement>("pane-title").textContent = tab.name;
   get<HTMLSpanElement>("pane-type").textContent = tab.mode === "shell" ? "簡易 bash" : tab.mode === "editor" ? "檔案編輯" : tab.mode === "preview" ? "頁面預覽" : "AI agent";
@@ -936,7 +991,7 @@ function renderPane(tab: AgentTab): void {
   stopButton.disabled = !running;
   promptElement.disabled = running || !workspaceReady;
   routeButton.disabled = state.tabs.length < 2;
-  const editing = tab.mode === "editor" && !!tab.editor;
+  const editing = tab.mode === "editor";
   const previewing = tab.mode === "preview" && !!tab.preview;
   get<HTMLDivElement>("terminal").hidden = editing || previewing;
   get<HTMLElement>("terminal-form").hidden = editing || previewing;
@@ -949,9 +1004,13 @@ function renderPane(tab: AgentTab): void {
   }
   for (const [id, preview] of previews) preview.element.hidden = !previewing || id !== tab.id;
   if (editing) {
-    get<HTMLElement>("editor-path").textContent = displayPath(tab.editor!.path);
-    get<HTMLElement>("editor-status").textContent = tab.editor!.status ?? "";
-    get<HTMLButtonElement>("editor-save").disabled = !!tab.editor!.saving;
+    fileBrowser.show(browserContext(tab));
+    updateEditorLayout(tab);
+    get<HTMLButtonElement>("editor-save").disabled = !tab.editor || !!tab.editor.saving;
+    get<HTMLElement>("editor-path").textContent = tab.editor ? displayPath(tab.editor.path) : "選擇或新增檔案";
+    get<HTMLElement>("editor-status").textContent = tab.editor?.status ?? "";
+  }
+  if (editing && tab.editor) {
     if (editorContent.dataset.identity !== `${tab.id}:${tab.editor!.path}`) { editorContent.value = tab.editor!.content; editorContent.dataset.identity = `${tab.id}:${tab.editor!.path}`; }
     syncEditorLineNumbers();
   }
@@ -1180,8 +1239,11 @@ editorContent.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveFileEditor(); }
 });
 get<HTMLButtonElement>("editor-save").addEventListener("click", () => void saveFileEditor());
+get<HTMLButtonElement>("editor-files").addEventListener("click", () => {
+  const tab = activeTab(); tab.browserHidden = !tab.browserHidden; updateEditorLayout(tab);
+});
 get<HTMLButtonElement>("editor-cancel").addEventListener("click", () => {
-  activeTab().mode = "shell"; activeTab().editor = undefined; render(); scheduleWorkspaceSave(); promptElement.focus();
+  activeTab().mode = "shell"; render(); scheduleWorkspaceSave(); promptElement.focus();
 });
 
 promptElement.addEventListener("input", () => {

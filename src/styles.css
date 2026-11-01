@@ -196,9 +196,27 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 #editor-path { overflow-wrap: anywhere; }
 #editor-status { font-size: 12px; color: #b8a8cb; }
 .editor-help { color: #777283; font-size: 10px; }
+.editor-layout { display: flex; gap: 12px; min-height: 0; flex: 1; }
+#editor-files { align-self: flex-start; }
+.editor-layout:has(#editor-document[hidden]) .file-browser { flex: 1; }
+.file-browser { display: flex; flex-direction: column; gap: 8px; width: 280px; flex: 0 0 280px; min-height: 0; border: 1px solid #474052; padding: 10px; font-size: 11px; }
+.browser-path { overflow-wrap: anywhere; }
+.browser-actions, .browser-create { display: flex; flex-wrap: wrap; gap: 5px; }
+.file-browser button { border: 1px solid #454151; background: #242230; color: #d0c4df; padding: 6px; font-size: 11px; }
+.browser-create input { min-width: 0; width: 100%; border: 1px solid #454151; background: #111116; color: #e4dfed; padding: 8px; }
+.browser-status { margin: 0; color: #b8a8cb; overflow-wrap: anywhere; }
+.browser-list { min-height: 0; overflow: auto; }
+.browser-row { display: flex; align-items: center; gap: 4px; margin-bottom: 5px; }
+.browser-entry { min-width: 0; flex: 1; text-align: left; overflow-wrap: anywhere; }
+.file-browser[aria-busy="true"] { opacity: .7; }
+@media (max-width: 760px) {
+  .editor-layout { flex-direction: column; }
+  .file-browser { width: 100%; flex: 0 1 42%; min-height: 170px; }
+  .browser-create input { width: auto; flex: 1; font-size: 16px; }
+}
 .editor-surface { display: grid; min-height: 0; flex: 1; grid-template-columns: 48px minmax(0, 1fr); overflow: hidden; border: 1px solid #474052; background: #111116; }
 #editor-line-numbers { min-width: 0; margin: 0; overflow: hidden; border-right: 1px solid #302c3d; color: #6c657c; padding: 12px 10px; text-align: right; user-select: none; font: 13px/1.6 ui-monospace, monospace; }
-#editor-content { width: 100%; min-height: 140px; resize: none; border: 0; outline: 0; padding: 12px 14px; background: #111116; color: #e4dfed; font: 13px/1.6 ui-monospace, monospace; tab-size: 2; }
+#editor-content { width: 100%; min-width: 0; min-height: 0; resize: none; border: 0; outline: 0; padding: 12px 14px; background: #111116; color: #e4dfed; font: 13px/1.6 ui-monospace, monospace; tab-size: 2; }
 #editor-content:focus { box-shadow: inset 0 0 0 1px #8f6aba; }
 .line-content details summary { cursor: pointer; }
 .line-content details pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; border-left: 1px solid #474052; color: #d0c4df; }
@@ -215,6 +233,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 /* Keep touch inputs at their readable size when Safari focuses them. */
 @media (max-width: 760px), (pointer: coarse) {
   .terminal-form textarea, .provider-form input:not([type="checkbox"]), .provider-form textarea, .provider-form select, #editor-content { font-size: 16px; }
+  #editor-line-numbers { font-size: 16px; }
 }
 @media (max-width: 760px), (hover: none) and (pointer: coarse) {
   .keyboard-open .workspace-header, .keyboard-open .pane-header, .keyboard-open .terminal-footer { display: none; }
@@ -226,6 +245,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .keyboard-open .terminal-form-actions { grid-column: auto; flex-wrap: nowrap; gap: 6px; }
   .keyboard-open .run-status, .keyboard-open .stop-button:disabled { display: none; }
   .keyboard-open .file-editor { padding: 8px; gap: 6px; }
+  .keyboard-open .editor-help { display: none; }
+  .keyboard-open .file-browser { min-height: 0; }
   .keyboard-open #editor-content { min-height: 0; }
 }
 
