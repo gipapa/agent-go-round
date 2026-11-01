@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL, normalizeBaseUrl, normalizeModel, normalizeGroqRateLimitResponse, createGroqRuntime } from "./provider";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL, fetchProviderModels, normalizeBaseUrl, normalizeModel, normalizeGroqRateLimitResponse, createGroqRuntime } from "./provider";
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("Groq provider configuration", () => {
   it("has explicit browser-safe defaults", () => {
@@ -10,6 +12,38 @@ describe("Groq provider configuration", () => {
   it("rejects insecure non-local endpoints", () => {
     expect(() => normalizeBaseUrl("http://api.example.com/v1")).toThrow(/HTTPS/);
     expect(normalizeBaseUrl("http://localhost:8787/v1")).toBe("http://localhost:8787/v1");
+  });
+
+  it("loads model IDs and context lengths from the configured authenticated endpoint", async () => {
+    const fetcher = vi.fn(async () => Response.json({ data: [
+      { id: "groq-model", context_window: 131072 },
+      { id: "local-model", context_length: 32768 },
+      { id: "vllm-model", max_model_len: 8192 },
+      { id: "unknown-limit", context_window: -1 },
+      { id: "inactive", active: false },
+      { id: "" }, null
+    ] }));
+    vi.stubGlobal("fetch", fetcher);
+    const models = await fetchProviderModels({ apiKey: "test-secret", baseUrl: "https://api.example.com/v1/" });
+    expect(fetcher).toHaveBeenCalledWith("https://api.example.com/v1/models", expect.objectContaining({ headers: { Authorization: "Bearer test-secret" } }));
+    expect(models).toEqual([
+      { id: "groq-model", contextWindow: 131072 }, { id: "local-model", contextWindow: 32768 },
+      { id: "unknown-limit" }, { id: "vllm-model", contextWindow: 8192 }
+    ]);
+    const runtime = await createGroqRuntime({ apiKey: "test-secret", model: models[1].id, contextWindow: models[1].contextWindow });
+    expect(runtime.model.contextWindow).toBe(32768);
+    await expect(createGroqRuntime({ apiKey: "fixture", contextWindow: 0 })).rejects.toThrow(/Context length/);
+    await expect(createGroqRuntime({ apiKey: "fixture", contextWindow: 1.5 })).rejects.toThrow(/Context length/);
+  });
+
+  it("reports unavailable or malformed model catalogs for manual fallback", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response("", { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ models: [] })).mockResolvedValueOnce(Response.json({ data: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const config = { apiKey: "fixture" };
+    await expect(fetchProviderModels(config)).rejects.toThrow(/404/);
+    await expect(fetchProviderModels(config)).rejects.toThrow(/Invalid models/);
+    await expect(fetchProviderModels(config)).rejects.toThrow(/no available models/);
   });
 
   it("uses model-supported reasoning defaults and rejects incompatible GPT-OSS settings", async () => {

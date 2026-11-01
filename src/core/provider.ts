@@ -18,6 +18,7 @@ export type GroqConfig = {
   baseUrl?: string;
   model?: string;
   apiKey: string;
+  contextWindow?: number;
   headers?: Record<string, string>;
   temperature?: number;
   reasoningEffort?: "none" | "low" | "medium" | "high";
@@ -28,6 +29,27 @@ export type ProviderRuntime = {
   models: MutableModels;
   streamFn: StreamFn;
 };
+
+export type ProviderModel = { id: string; contextWindow?: number };
+
+/** OpenAI-compatible model catalog; some servers provide IDs without token limits. */
+export async function fetchProviderModels(config: Pick<GroqConfig, "baseUrl" | "apiKey">, signal?: AbortSignal): Promise<ProviderModel[]> {
+  const response = await fetch(`${normalizeBaseUrl(config.baseUrl)}/models`, {
+    headers: config.apiKey.trim() ? { Authorization: `Bearer ${config.apiKey.trim()}` } : {},
+    signal
+  });
+  if (!response.ok) throw new Error(`Models endpoint returned HTTP ${response.status}`);
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object" || !("data" in body) || !Array.isArray(body.data)) throw new Error("Invalid models response");
+  const models = new Map<string, ProviderModel>();
+  for (const value of body.data) {
+    if (!value || typeof value.id !== "string" || !value.id.trim() || value.active === false) continue;
+    const limit = [value.context_window, value.context_length, value.max_model_len].find(value => Number.isSafeInteger(value) && value > 0);
+    models.set(value.id, { id: value.id, ...(limit !== undefined ? { contextWindow: limit } : {}) });
+  }
+  if (!models.size) throw new Error("Models endpoint returned no available models");
+  return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
 
 const browserAuthContext: AuthContext = {
   env: async () => undefined,
@@ -82,7 +104,7 @@ export async function normalizeGroqRateLimitResponse(response: Response): Promis
   } catch { return response; }
 }
 
-function createModel(baseUrl: string, modelId: string, effort?: "none" | "low" | "medium" | "high"): Model<"openai-completions"> {
+function createModel(baseUrl: string, modelId: string, contextWindow: number, effort?: "none" | "low" | "medium" | "high"): Model<"openai-completions"> {
   const isGptOss = /^openai\/gpt-oss-(?:20b|120b)$/.test(modelId);
   const isQwen = modelId === "qwen/qwen3.8-27b";
   if (isGptOss && effort === "none") throw new Error("GPT-OSS requires low, medium or high reasoning effort");
@@ -102,8 +124,8 @@ function createModel(baseUrl: string, modelId: string, effort?: "none" | "low" |
       : {}),
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 4_096
+    contextWindow,
+    maxTokens: Math.min(4_096, contextWindow)
   };
 }
 
@@ -114,11 +136,13 @@ function createModel(baseUrl: string, modelId: string, effort?: "none" | "low" |
 export async function createGroqRuntime(config: GroqConfig): Promise<ProviderRuntime> {
   const apiKey = config.apiKey.trim();
   if (!apiKey) throw new Error("請先輸入 Groq API key");
+  const contextWindow = config.contextWindow ?? 128_000;
+  if (!Number.isSafeInteger(contextWindow) || contextWindow <= 0) throw new Error("Context length must be a positive integer");
   if (config.temperature !== undefined && (!Number.isFinite(config.temperature) || config.temperature < 0 || config.temperature > 2)) throw new Error("temperature must be between 0 and 2");
   if (config.reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(config.reasoningEffort)) throw new Error("Invalid reasoning effort");
 
   const baseUrl = normalizeBaseUrl(config.baseUrl);
-  const model = createModel(baseUrl, normalizeModel(config.model), config.reasoningEffort);
+  const model = createModel(baseUrl, normalizeModel(config.model), contextWindow, config.reasoningEffort);
   const credentials = new InMemoryCredentialStore();
   await credentials.modify(GROQ_PROVIDER_ID, async () => ({ type: "api_key", key: apiKey }));
 

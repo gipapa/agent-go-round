@@ -1,5 +1,5 @@
-export { createGroqRuntime, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL, GROQ_PROVIDER_ID } from "./core/provider";
-export type { GroqConfig, ProviderRuntime } from "./core/provider";
+export { createGroqRuntime, fetchProviderModels, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL, GROQ_PROVIDER_ID } from "./core/provider";
+export type { GroqConfig, ProviderRuntime, ProviderModel } from "./core/provider";
 export { createScriptedSession, createScriptedStreamFn } from "./core/scripted";
 export { AgentSession, MemorySessionEventStore, SessionBusyError, SESSION_EVENT_VERSION, ToolOutcomeUnknownError, inspectSessionRecovery } from "./core/session";
 export type {

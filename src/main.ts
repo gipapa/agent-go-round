@@ -13,7 +13,7 @@ import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspac
 import type { SessionSnapshot } from "./core/persistence";
 import type { ProviderRuntime } from "./core/provider";
 import type { TSchema } from "@earendil-works/pi-ai";
-import { createGroqRuntime, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL } from "./core/provider";
+import { createGroqRuntime, fetchProviderModels, normalizeBaseUrl, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL, type GroqConfig, type ProviderModel } from "./core/provider";
 import { createScriptedSession } from "./core/scripted";
 import { AgentSession, inspectSessionRecovery, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
 import { TabRouter, type TabRouteEvent } from "./core/tab-router";
@@ -69,7 +69,8 @@ const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
   apiKey: "agent-go-round.groq.api-key",
   baseUrl: "agent-go-round.groq.base-url",
-  model: "agent-go-round.groq.model"
+  model: "agent-go-round.groq.model",
+  contextWindow: "agent-go-round.groq.context-window"
 } as const;
 
 function readStored(key: string): string {
@@ -199,13 +200,17 @@ app.innerHTML = `
           <p class="drawer-copy">The key is saved in this browser's local storage when enabled. It is never added to a transcript.</p>
           <form id="provider-form" class="provider-form">
             <label>Base URL<input id="base-url" type="url" autocomplete="url" /></label>
-            <label>Model<input id="model" type="text" autocomplete="off" /></label>
+            <label id="model-select-label" hidden>Available models<select id="model-select"></select></label>
+            <label>Model<input id="model" type="text" autocomplete="off" required /></label>
+            <label>Context length (tokens)<input id="context-window" type="number" min="1" step="1" required /></label>
             <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
+            <button id="refresh-models" class="drawer-button muted-button" type="button">Refresh models</button>
+            <p id="models-status" class="settings-status" role="status" aria-live="polite">Models can also be entered manually.</p>
             <div class="remember-row"><label class="remember-toggle"><input id="remember-key" type="checkbox" checked /> Remember this key in this browser</label><button id="clear-key" class="clear-key" type="button">clear saved key</button></div>
             <p id="settings-status" class="settings-status" role="status" aria-live="polite"></p>
           </form>
         </div>
-        <div class="surface-actions"><button id="use-scripted" class="drawer-button muted-button" type="button">Use demo</button><button class="drawer-button" type="submit" form="provider-form">Connect Groq</button></div>
+        <div class="surface-actions"><button id="use-scripted" class="drawer-button muted-button" type="button">Use demo</button><button id="connect-provider" class="drawer-button" type="submit" form="provider-form">Connect Groq</button></div>
       </aside>
     </main>
   </div>
@@ -219,8 +224,96 @@ const get = <T extends HTMLElement>(id: string): T => {
 
 get<HTMLInputElement>("base-url").value = storedBaseUrl || configuredBaseUrl;
 get<HTMLInputElement>("model").value = storedModel || configuredModel;
+get<HTMLInputElement>("context-window").value = readStored(STORAGE_KEYS.contextWindow) || "128000";
 get<HTMLInputElement>("api-key").value = storedApiKey;
 get<HTMLInputElement>("remember-key").checked = true;
+
+let providerConfig: GroqConfig | undefined = storedApiKey ? {
+  apiKey: storedApiKey,
+  baseUrl: storedBaseUrl || configuredBaseUrl,
+  model: storedModel || configuredModel,
+  contextWindow: Number(get<HTMLInputElement>("context-window").value)
+} : undefined;
+const runtimeCache = new Map<string, Promise<ProviderRuntime>>();
+let modelCatalog: ProviderModel[] = [];
+let catalogIdentity = "";
+let modelsRequest: { identity: string; controller: AbortController; promise: Promise<void> } | undefined;
+
+function cachedRuntime(config: GroqConfig): Promise<ProviderRuntime> {
+  const identity = JSON.stringify([normalizeBaseUrl(config.baseUrl), config.model, config.contextWindow]);
+  let runtime = runtimeCache.get(identity);
+  if (!runtime) {
+    runtime = createGroqRuntime(config);
+    runtimeCache.set(identity, runtime);
+    void runtime.catch(() => { if (runtimeCache.get(identity) === runtime) runtimeCache.delete(identity); });
+  }
+  return runtime;
+}
+
+function bindRuntime(tab: AgentTab, runtime: ProviderRuntime): void {
+  const previous = tab.session.snapshot();
+  const next = AgentSession.fromSnapshot(previous, { streamFn: runtime.streamFn, tools: currentHostTools(previous.sessionId), eventStore: sessionEventStore, approval: requestHostToolApproval, maxToolCalls: 32, deadlineMs: 360_000 });
+  next.agent.state.model = runtime.model;
+  attachSession(tab, next);
+  tab.provider = "groq";
+  tab.connected = true;
+  tab.runtime = runtime;
+}
+
+async function reconnectTab(tab: AgentTab): Promise<void> {
+  if (!providerConfig || tab.provider !== "groq" || tab.connected) return;
+  const model = tab.session.agent.state.model;
+  // Credentials apply only to the configured endpoint, including during history resume.
+  if (normalizeBaseUrl(model.baseUrl) !== normalizeBaseUrl(providerConfig.baseUrl)) return;
+  const runtime = await cachedRuntime({ ...providerConfig, baseUrl: model.baseUrl, model: model.id, contextWindow: model.contextWindow });
+  bindRuntime(tab, runtime);
+}
+
+function modelsIdentity(): string {
+  return JSON.stringify([get<HTMLInputElement>("base-url").value.trim(), get<HTMLInputElement>("api-key").value.trim()]);
+}
+
+function applyCatalogModel(): void {
+  const entry = modelCatalog.find(model => model.id === get<HTMLInputElement>("model").value.trim());
+  get<HTMLSelectElement>("model-select").value = entry?.id ?? "";
+  if (entry?.contextWindow) get<HTMLInputElement>("context-window").value = String(entry.contextWindow);
+}
+
+function refreshModels(force = false): Promise<void> {
+  const identity = modelsIdentity();
+  if (!force && catalogIdentity === identity) return Promise.resolve();
+  if (!force && modelsRequest?.identity === identity) return modelsRequest.promise;
+  modelsRequest?.controller.abort();
+  const controller = new AbortController();
+  modelCatalog = []; catalogIdentity = "";
+  get<HTMLElement>("model-select-label").hidden = true;
+  get<HTMLElement>("models-status").textContent = "Loading models…";
+  const config = { baseUrl: get<HTMLInputElement>("base-url").value, apiKey: get<HTMLInputElement>("api-key").value };
+  const promise = (async () => {
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const models = await fetchProviderModels(config, controller.signal);
+      if (controller.signal.aborted || identity !== modelsIdentity() || !app?.isConnected) return;
+      modelCatalog = models; catalogIdentity = identity;
+      const select = get<HTMLSelectElement>("model-select");
+      const option = (label: string, value: string) => { const element = document.createElement("option"); element.textContent = label; element.value = value; return element; };
+      select.replaceChildren(option("Enter a model manually", ""), ...models.map(model => option(`${model.id}${model.contextWindow ? ` · ${model.contextWindow.toLocaleString()} tokens` : " · enter context length"}`, model.id)));
+      get<HTMLElement>("model-select-label").hidden = false;
+      applyCatalogModel();
+      if (models.some(model => model.id === get<HTMLInputElement>("model").value.trim() && !model.contextWindow)) get<HTMLInputElement>("context-window").value = "";
+      get<HTMLElement>("models-status").textContent = "Models loaded. Missing context lengths can be entered manually.";
+    } catch (error) {
+      if (identity === modelsIdentity() && modelsRequest?.controller === controller && app?.isConnected) {
+        get<HTMLElement>("models-status").textContent = `Could not load /models. Enter the model ID and context length manually, or check the URL and API key and retry. ${error instanceof Error ? error.message : ""}`;
+      }
+    } finally {
+      clearTimeout(timer);
+      if (modelsRequest?.controller === controller) modelsRequest = undefined;
+    }
+  })();
+  modelsRequest = { identity, controller, promise };
+  return promise;
+}
 
 const terminalView = new TerminalView(get<HTMLDivElement>("terminal"));
 const fileBrowser = new FileBrowser(get<HTMLElement>("editor-browser"));
@@ -402,6 +495,7 @@ function persistProviderSettings(): void {
     else browserStorage.removeItem(STORAGE_KEYS.apiKey);
     if (baseUrl) browserStorage.setItem(STORAGE_KEYS.baseUrl, baseUrl);
     if (model) browserStorage.setItem(STORAGE_KEYS.model, model);
+    browserStorage.setItem(STORAGE_KEYS.contextWindow, get<HTMLInputElement>("context-window").value);
   } catch {
     settingsStatus.textContent = "Browser storage is unavailable; the key will only live for this page.";
   }
@@ -615,7 +709,7 @@ async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
     const saved = await conversations().resume(start.sessionId);
     await conversations().remember(workspaceTabSnapshot(tab));
     tab.detach(); tab.unregisterRoute();
-    const replacement = restoreTab({ ...saved, id: tab.id, mode: "agent" });
+    const replacement = await restoreTab({ ...saved, id: tab.id, mode: "agent" });
     state.tabs[state.tabs.indexOf(tab)] = replacement;
     replacement.transcript.push({ id: makeId("resume"), role: "system", text: `Resumed ${saved.session.sessionId}` });
     return;
@@ -1081,7 +1175,7 @@ function addTab(): void {
   promptElement.focus();
 }
 
-function restoreTab(snapshot: WorkspaceTabSnapshot): AgentTab {
+async function restoreTab(snapshot: WorkspaceTabSnapshot): Promise<AgentTab> {
   const tab = createTab(snapshot.id, snapshot.name, ["Restored workspace tab."], snapshot.branch, snapshot.path);
   tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text: streaming ? `${text}\n[Interrupted by reload]` : text, ...(toolCallId ? { toolCallId } : {}) }));
   tab.draft = snapshot.draft;
@@ -1098,7 +1192,9 @@ function restoreTab(snapshot: WorkspaceTabSnapshot): AgentTab {
     attachSession(tab, AgentSession.fromSnapshot(snapshot.session, { streamFn: fallback.agent.streamFunction, tools: currentHostTools(snapshot.session.sessionId), eventStore: sessionEventStore, approval: requestHostToolApproval }));
   } else {
     attachSession(tab, AgentSession.fromSnapshot(snapshot.session, { streamFn: () => { throw new Error("Reconnect Groq before continuing this saved conversation"); }, tools: [], eventStore: sessionEventStore, maxToolCalls: 32, deadlineMs: 360_000, approval: requestHostToolApproval }));
-    tab.transcript.push({ id: makeId("restore"), role: "system", text: "Saved Groq history is preserved. Reconnect the provider before continuing." });
+    try { await reconnectTab(tab); }
+    catch (error) { tab.transcript.push({ id: makeId("restore-error"), role: "system", text: `Automatic provider restore failed: ${error instanceof Error ? error.message : String(error)}` }); }
+    if (!tab.connected) tab.transcript.push({ id: makeId("restore"), role: "system", text: "Saved Groq history is preserved. Reconnect the provider before continuing." });
   }
   try {
     const recovery = tab.connected
@@ -1130,6 +1226,10 @@ async function restoreWorkspace(): Promise<void> {
     return;
   }
   if (!saved) {
+    if (providerConfig) {
+      try { bindRuntime(activeTab(), await cachedRuntime(providerConfig)); }
+      catch (error) { settingsStatus.textContent = `Automatic provider restore failed: ${error instanceof Error ? error.message : String(error)}`; }
+    }
     scheduleWorkspaceSave();
     return;
   }
@@ -1142,7 +1242,7 @@ async function restoreWorkspace(): Promise<void> {
   state.tabs = [];
   state.nextTabNumber = saved.nextTabNumber;
   try {
-    for (const tabSnapshot of saved.tabs) state.tabs.push(restoreTab(tabSnapshot));
+    for (const tabSnapshot of saved.tabs) state.tabs.push(await restoreTab(tabSnapshot));
   } catch (error) {
     workspaceReadFailed = true;
     setWorkspaceStatus(`workspace · restore failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1304,6 +1404,25 @@ get<HTMLFormElement>("route-form").addEventListener("submit", (event) => {
 get<HTMLButtonElement>("sidebar-provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("command-hint").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
+get<HTMLButtonElement>("refresh-models").addEventListener("click", () => { void refreshModels(true); });
+for (const id of ["base-url", "api-key"]) {
+  get<HTMLInputElement>(id).addEventListener("input", () => {
+    modelsRequest?.controller.abort();
+    modelCatalog = []; catalogIdentity = "";
+    get<HTMLElement>("model-select-label").hidden = true;
+    get<HTMLElement>("models-status").textContent = "Refresh models to load the current endpoint's catalog, or enter a model manually.";
+  });
+  get<HTMLInputElement>(id).addEventListener("change", () => { void refreshModels(); });
+}
+get<HTMLSelectElement>("model-select").addEventListener("change", () => {
+  get<HTMLInputElement>("model").value = get<HTMLSelectElement>("model-select").value;
+  get<HTMLInputElement>("context-window").value = "";
+  applyCatalogModel();
+});
+get<HTMLInputElement>("model").addEventListener("input", () => {
+  get<HTMLInputElement>("context-window").value = "";
+  applyCatalogModel();
+});
 get<HTMLButtonElement>("close-settings").addEventListener("click", closeSettings);
 settingsBackdrop.addEventListener("click", closeSettings);
 get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
@@ -1314,6 +1433,12 @@ get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
   }
   get<HTMLInputElement>("api-key").value = "";
   get<HTMLInputElement>("remember-key").checked = false;
+  providerConfig = undefined;
+  runtimeCache.clear();
+  modelsRequest?.controller.abort();
+  modelCatalog = []; catalogIdentity = "";
+  get<HTMLElement>("model-select-label").hidden = true;
+  get<HTMLElement>("models-status").textContent = "Models can also be entered manually.";
   settingsStatus.textContent = "Saved API key cleared from this browser.";
 });
 
@@ -1366,6 +1491,7 @@ function openSettings(message = "", returnFocus: HTMLElement | null = document.a
   settingsBackdrop.setAttribute("aria-hidden", "false");
   settingsDrawer.setAttribute("aria-hidden", "false");
   settingsStatus.textContent = message;
+  if (get<HTMLInputElement>("api-key").value.trim()) void refreshModels();
   requestAnimationFrame(() => get<HTMLInputElement>("api-key").focus());
 }
 
@@ -1513,23 +1639,28 @@ get<HTMLFormElement>("provider-form").addEventListener("submit", async (event) =
     settingsStatus.textContent = "Stop the active run before changing providers.";
     return;
   }
-  const form = event.currentTarget as HTMLFormElement;
-  const submit = form.querySelector<HTMLButtonElement>("button[type=submit]");
-  if (submit) submit.disabled = true;
-  persistProviderSettings();
+  const submit = get<HTMLButtonElement>("connect-provider");
+  if (submit.disabled) return;
+  submit.disabled = true;
   settingsStatus.textContent = "Creating Groq runtime…";
   try {
-    const runtime = await createGroqRuntime({
+    await refreshModels();
+    const config: GroqConfig = {
       baseUrl: get<HTMLInputElement>("base-url").value,
       model: get<HTMLInputElement>("model").value,
-      apiKey: get<HTMLInputElement>("api-key").value
-    });
-    const previous = tab.session.snapshot();
-    const nextSession = new AgentSession({ sessionId: previous.sessionId, model: runtime.model, streamFn: runtime.streamFn, initialMessages: previous.messages, systemPrompt: previous.systemPrompt, activeSkill: previous.activeSkill, tools: currentHostTools(previous.sessionId), eventStore: sessionEventStore, approval: requestHostToolApproval, maxToolCalls: 32, deadlineMs: 360_000 });
-    attachSession(tab, nextSession);
-    tab.provider = "groq";
-    tab.connected = true;
-    tab.runtime = runtime;
+      apiKey: get<HTMLInputElement>("api-key").value,
+      contextWindow: Number(get<HTMLInputElement>("context-window").value)
+    };
+    const runtime = await createGroqRuntime(config);
+    if (tab.session.isRunning || tab.commandAbort) throw new Error("Stop the active run before changing providers.");
+    runtimeCache.clear();
+    providerConfig = config;
+    persistProviderSettings();
+    bindRuntime(tab, runtime);
+    runtimeCache.set(JSON.stringify([normalizeBaseUrl(config.baseUrl), config.model, config.contextWindow]), Promise.resolve(runtime));
+    for (const candidate of state.tabs) {
+      if (!candidate.session.isRunning && !candidate.commandAbort) await reconnectTab(candidate);
+    }
     settingsStatus.textContent = "Groq runtime connected.";
     render();
     scheduleWorkspaceSave();
@@ -1537,6 +1668,6 @@ get<HTMLFormElement>("provider-form").addEventListener("submit", async (event) =
   } catch (error) {
     settingsStatus.textContent = error instanceof Error ? error.message : String(error);
   } finally {
-    if (submit) submit.disabled = false;
+    submit.disabled = false;
   }
 });

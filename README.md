@@ -28,6 +28,10 @@ npm run dev
 
 Groq 設定使用 password field。`Remember this key in this browser` 預設開啟，勾選時保存於目前 origin 的 localStorage；取消勾選時只保留在目前頁面的記憶體，亦可清除已保存的 key。API key 不會寫入 VFS、對話、bundle 或 embed bridge。
 
+已保存 key 時，重新整理會自動恢復相同 API 位址的 Groq runtime；恢復歷史對話也沿用本頁可用的設定，保留各對話原本的模型與 context length，不會重送歷史請求。未保存 key 時，reload 後需手動 Connect 一次，同一 API 位址的其他待連線 tabs 會一起恢復。
+
+Provider settings 會從 Base URL 下的 `/models` 取得模型清單，並帶入模型的 context length（tokens）；也可按 `Refresh models` 更新。端點不存在、請求失敗或未提供長度時，可手動輸入 Model 與 Context length。長度會保存於設定和對話的模型資料，傳入 runtime；目前尚未實作依此長度自動壓縮對話。模型欄位依據 [Groq Models API](https://console.groq.com/docs/api-reference#models) 的 `id`／`context_window`，也接受相容端點的 `context_length`／`max_model_len`。
+
 ## 簡易 bash 與對話
 
 這是操作 VFS 的簡易 bash，支援下列內建指令及 `~/bin` 擴充工具；不支援管線、重導向、作業系統程式或完整 bash 語法。
@@ -134,7 +138,7 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 136 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 147 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 

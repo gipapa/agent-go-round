@@ -11,6 +11,7 @@ beforeEach(() => {
   Object.defineProperty(window, "localStorage", { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) } });
   requests = [];
   vi.stubGlobal("fetch", vi.fn(async (_input, init: RequestInit) => {
+    if (!init.body) return new Response("", { status: 404 });
     const body = JSON.parse(init.body as string);
     requests.push({ ...body, messages: body.messages.map((message: { role: string; content: unknown }) => ({ ...message, content: Array.isArray(message.content) ? message.content.map((block) => block.text ?? "").join("") : message.content })) });
     const chunks = [
@@ -120,10 +121,9 @@ describe("UI history at the real provider request boundary", () => {
     const id = initial!.tabs[0].session.sessionId;
     expect(JSON.stringify(initial)).not.toContain("fixture-secret");
     await loadApp();
-    expect(document.querySelector("#provider-label")?.textContent).toContain("reconnect");
-    await send("What did I ask you to remember?");
+    expect(document.querySelector("#provider-label")?.textContent).toBe("groq · live");
     expect(requests).toHaveLength(1);
-    await connect(); await send("What did I ask you to remember?");
+    await send("What did I ask you to remember?");
     expect(requests).toHaveLength(2);
     expect(requests[1].messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "user", content: "Remember pineapple-42" }), expect.objectContaining({ role: "assistant", content: "好，已記住。" })]));
     await connect(); await send("Again, what was the code?");
@@ -134,7 +134,8 @@ describe("UI history at the real provider request boundary", () => {
     document.querySelector<HTMLElement>('[aria-label="Close main"]')!.click();
     await vi.waitFor(() => expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(1));
     await send(`ai --resume ${id}`);
-    await connect(); await send("Recall the original code after reopening");
+    expect(document.querySelector("#provider-label")?.textContent).toBe("groq · live");
+    await send("Recall the original code after reopening");
     expect(requests.at(-1)!.messages).toContainEqual(expect.objectContaining({ content: "Remember pineapple-42" }));
   });
 
@@ -153,6 +154,77 @@ describe("UI history at the real provider request boundary", () => {
     await send("ai"); await send("Hello only from B");
     expect(JSON.stringify(requests[2].messages)).not.toContain("Hello from A");
     expect(document.querySelector("#pane-model")?.textContent).toBe("openai/gpt-oss-120b");
+  });
+
+  it("selects models from /models and saves their actual context length across reload", async () => {
+    const transport = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => String(input).endsWith("/models")
+      ? Response.json({ data: [{ id: "catalog-model", context_window: 32768 }, { id: "unknown-limit" }] })
+      : transport(input, init));
+    await loadApp();
+    document.querySelector<HTMLInputElement>("#api-key")!.value = "fixture-secret";
+    document.querySelector<HTMLButtonElement>("#provider-toggle")!.click();
+    await vi.waitFor(() => expect(document.querySelector("#models-status")!.textContent).toContain("Models loaded"));
+    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#model-select-label")!.hidden).toBe(false));
+    const select = document.querySelector<HTMLSelectElement>("#model-select")!;
+    select.value = "catalog-model"; select.dispatchEvent(new Event("change"));
+    expect(document.querySelector<HTMLInputElement>("#context-window")!.value).toBe("32768");
+    document.querySelector<HTMLFormElement>("#provider-form")!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("#provider-label")!.textContent).toBe("groq · live"));
+    await send("ai"); await send("Catalog model request");
+    const before = (await saved())!.tabs[0].session;
+    expect(before.model).toMatchObject({ id: "catalog-model", contextWindow: 32768 });
+    await loadApp();
+    expect(document.querySelector("#provider-label")!.textContent).toBe("groq · live");
+    expect(document.querySelector<HTMLInputElement>("#context-window")!.value).toBe("32768");
+    expect((await saved())!.tabs[0].session).toMatchObject({ sessionId: before.sessionId, model: { id: "catalog-model", contextWindow: 32768 } });
+    expect(requests).toHaveLength(1); // Runtime recovery never resends a prompt.
+    document.querySelector<HTMLButtonElement>("#provider-toggle")!.click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#model-select-label")!.hidden).toBe(false));
+    const restoredSelect = document.querySelector<HTMLSelectElement>("#model-select")!;
+    restoredSelect.value = "unknown-limit"; restoredSelect.dispatchEvent(new Event("change"));
+    expect(document.querySelector<HTMLInputElement>("#context-window")!.value).toBe("");
+    document.querySelector<HTMLInputElement>("#context-window")!.value = "16384";
+    document.querySelector<HTMLFormElement>("#provider-form")!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#settings-drawer")!.hidden).toBe(true));
+    expect((await saved())!.tabs[0].session.model).toMatchObject({ id: "unknown-limit", contextWindow: 16384 });
+  });
+
+  it("allows manual models when /models is unavailable", async () => {
+    await loadApp();
+    document.querySelector<HTMLButtonElement>("#provider-toggle")!.click();
+    document.querySelector<HTMLInputElement>("#api-key")!.value = "fixture-secret";
+    document.querySelector<HTMLButtonElement>("#refresh-models")!.click();
+    await vi.waitFor(() => expect(document.querySelector("#models-status")!.textContent).toContain("Enter the model ID and context length manually"));
+    const model = document.querySelector<HTMLInputElement>("#model")!;
+    model.value = "custom-model"; model.dispatchEvent(new Event("input"));
+    expect(document.querySelector<HTMLInputElement>("#context-window")!.value).toBe("");
+    document.querySelector<HTMLInputElement>("#context-window")!.value = "65536";
+    document.querySelector<HTMLFormElement>("#provider-form")!.requestSubmit();
+    await vi.waitFor(() => expect(document.querySelector("#provider-label")!.textContent).toBe("groq · live"));
+    expect((await saved())!.tabs[0].session.model).toMatchObject({ id: "custom-model", contextWindow: 65536 });
+  });
+
+  it("reconnects restored tabs together without replacing their individual models", async () => {
+    await loadApp();
+    document.querySelector<HTMLInputElement>("#remember-key")!.checked = false;
+    await connect();
+    document.querySelector<HTMLButtonElement>("#add-tab")!.click();
+    document.querySelector<HTMLInputElement>("#model")!.value = "second-model";
+    document.querySelector<HTMLInputElement>("#context-window")!.value = "8192";
+    await connect();
+    const original = (await saved())!.tabs.map(tab => tab.session.model);
+    await loadApp();
+    expect(document.querySelector("#provider-label")!.textContent).toBe("groq · reconnect");
+    await connect();
+    const restored = (await saved())!;
+    expect(restored.tabs.map(tab => tab.session.model)).toEqual(original);
+    document.querySelector<HTMLButtonElement>("#tab-list .tab")!.click();
+    expect(document.querySelector("#provider-label")!.textContent).toBe("groq · live");
+    expect(requests).toHaveLength(0);
+    await loadApp();
+    expect(document.querySelector("#provider-label")!.textContent).toBe("groq · live");
+    expect((await saved())!.tabs.map(tab => tab.session.model)).toEqual(original);
   });
 
   it("opens the human browser without a file and protects drafts while switching files", async () => {
