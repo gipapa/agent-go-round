@@ -1,22 +1,20 @@
 # AgentGoRound
 
-一個以穩定、簡單與高度客製化為目標的前端 agent harness，參考 Pi 的小核心與擴充方式，讓其他專案能加入自己的模型、工具與上下文。
+以 Pi 為核心的純前端 agent 編輯器：在瀏覽器中管理檔案、接續對話，讓 agent 讀取工作區規則與 skills，並透過 popup 修改與預覽自己的主頁。
 
-目前工作樹提供 IndexedDB 虛擬檔案系統、shell／文字編輯器／Pi 共用 tabs、可擴充的 `~/bin` JS 工具，以及從檔案載入 AGENTS.md 與 skills。Groq 對話可在 reload、重連或關閉重開後接續。跨 tab 路由為同頁面、使用者明確觸發的操作；不包含模型自動 delegation。
+Pi 擁有唯一的模型／工具循環，使用 Groq 的 OpenAI 相容 Chat Completions 接口。檔案與對話保存於瀏覽器 IndexedDB，不需要檔案伺服器。
 
-- [設計與實作規劃](docs/plan.md)
-- 完整舊版保存在 `v2` 分支，封存起點為 `73285d6`；舊版未完成的驗收紀錄亦保留在該分支。
-- 更早版本保存在 `v1`、`v1.5` 分支。
+## 目前功能
 
-模型採 Groq 的 OpenAI 相容 Chat Completions 接口，Pi 擁有唯一工具循環。JS loader、iframe popup 與 VFS `main.html` 主頁預覽已實作；popup 可以修改同一個 workspace 的頁面檔案。
+- 既有 tabs 共用虛擬檔案系統，各自保有 cwd、草稿與對話；同一個 panel 可切換簡易 bash、文字編輯器與 agent。
+- `~/bin` 提供可擴充的 JavaScript 檔案工具；從 VFS 載入 AGENTS.md 與 skills，記錄實際讀寫的路徑和 revision。
+- 歷史對話可在 reload、重新連接 Groq 或關閉 tab 後恢復；不會自動重送未完成的模型請求或工具副作用。
+- `~/main.html` 支援 HTML／CSS／SVG 預覽，popup 使用同一 workspace 的檔案；刷新預覽保留 popup 對話與草稿。
+- 使用者可明確向另一個 tab 提問並接收回覆；目前沒有模型自動 delegation。
 
-公開 SDK entry 位於 `src/index.ts`，除了 core runtime、storage、skills、router 與 bridge types，也安全 export `mount()`；非瀏覽器環境可以 import 這個 entry 而不會自動碰 DOM，呼叫 `mount()` 時才要求 browser document。
+[線上版本](https://gipapa.github.io/agent-go-round/) · [檔案工具](docs/bin-tools.md) · [主頁與 popup](docs/page-preview.md) · [笑話驗收](docs/joke-acceptance.md) · [實作規劃](docs/filesystem-editor-plan.md)
 
-日常驗證以不消耗模型額度的回歸測試為主，Groq 作為第一個真實對話與工具驗收 provider。ChatGPT 訂閱整合延後，不阻擋基本對話、視窗與嵌入開發。
-
-## 開發
-
-新 tab 先進入 `~` 的 shell，可輸入 `help`、`ls ~/bin`、`write demo.md "hello"`、`read demo.md`；`ai` 進入 agent，`/exit` 返回 shell。預設提供 read、write、edit、grep、find、ls 和 skill_load，新增工具以 `.js` 與 `.tool.json` 放入 `~/bin` 後執行 `rehash`。完整參數、隔離執行與擴充方式見 [bin 工具說明](docs/bin-tools.md)。`preview ~/main.html` 開啟頁面預覽，缺少檔案時可明確建立範本；右下角 Pi 可讀寫相同 VFS。操作、page view 和 embed binding 見 [主頁預覽](docs/page-preview.md)。
+## 本機啟動
 
 需要 Node.js 22 或更新版本：
 
@@ -25,7 +23,99 @@ npm install
 npm run dev
 ```
 
-開啟 Vite 顯示的網址即可使用 scripted demo；在頁面輸入 Groq API key 可切換到 Groq。設定 drawer 使用 password field，`Remember this key in this browser` 預設開啟；取消勾選時 key 只存在目前頁面的 in-memory provider runtime，保持勾選才會保存到目前 origin 的 `localStorage`，並提供清除操作。key 不會寫入 bundle、session 或 embed bridge。不要把 API key 貼到聊天或 commit。
+開啟 Vite 顯示的網址。新 tab 先進入 `~` 的簡易 bash；預設 scripted demo 可體驗介面，真正的模型對話與 agent 工具呼叫需在 provider settings 連接 Groq。手動操作 shell 檔案工具不需要 API key。
+
+Groq 設定使用 password field。`Remember this key in this browser` 預設開啟，勾選時保存於目前 origin 的 localStorage；取消勾選時只保留在目前頁面的記憶體，亦可清除已保存的 key。API key 不會寫入 VFS、對話、bundle 或 embed bridge。
+
+## 簡易 bash 與對話
+
+這是操作 VFS 的簡易 bash，支援下列內建指令及 `~/bin` 擴充工具；不支援管線、重導向、作業系統程式或完整 bash 語法。
+
+**指令名稱不分大小寫。** `ls`、`LS`、`Ls` 的效果相同；`AI --NEW`、`Ai --ReSuMe ID`、`DeMo JoKeS`、`RESTORE-BIN READ` 也可使用。路徑、檔案內容、搜尋字串、JSON 欄位與 session ID 保留原本大小寫。
+
+| 指令 | 用途 |
+|---|---|
+| `help` | 顯示支援指令與用法 |
+| `pwd`、`cd PATH` | 查看或切換目前目錄 |
+| `ls [PATH]`、`find [PATH] [NAME_GLOB]` | 列出目錄或尋找檔案 |
+| `read PATH`／`cat PATH` | 讀取內容與 revision |
+| `write PATH "CONTENT"` | 建立文字檔；覆寫既有檔案需以 JSON 提供 expectedRevision |
+| `edit PATH` | 在目前 panel 開啟文字編輯器 |
+| `edit PATH "OLD" "NEW"` | 精確替換文字 |
+| `grep "TEXT" [PATH]` | 搜尋檔案內容 |
+| `mkdir PATH`、`touch PATH`、`mv FROM TO`、`rm PATH` | 建立目錄／空檔、搬移或刪除 |
+| `preview [PATH]` | 開啟頁面預覽，預設為 `~/main.html` |
+| `ai` | 啟動或接續目前 tab 的 agent |
+| `ai --new` | 另開對話，保留舊對話於歷史 |
+| `history`、`ai --resume SESSION_ID` | 列出或恢復已保存的對話 |
+| `rehash`、`restore-bin NAME` | 載入新增／修改的工具，或還原預設工具 |
+| `demo jokes`、`clear` | 建立笑話範例，或清空目前 terminal 顯示 |
+
+進入 agent 後，`/exit` 返回 shell；`/skill NAME TASK` 明確選用 skill，`/skill off` 清除 active skill。這些控制指令也接受大小寫混用，skill 名稱與任務文字維持原樣。
+
+例如以下指令只會建立一個保留大小寫的 `Notes.md`：
+
+```text
+WrItE Notes.md "Hello World"
+READ Notes.md
+GREP "World" Notes.md
+```
+
+所有 bin 工具都接受 JSON 參數，可提供分頁、批次讀寫、revision 與搜尋選項，詳見 [bin 工具說明](docs/bin-tools.md)。
+
+## AGENTS.md、skills 與工具
+
+工作區以 `/home/user` 對應 `~`，典型結構如下：
+
+```text
+~/
+  AGENTS.md
+  main.html
+  documents/
+  jokes/
+  .pi/skills/joke-master/
+    SKILL.md
+    references/scoring.md
+  bin/
+    read.js
+    read.tool.json
+    …
+```
+
+每個 user run 從 home 到 agent cwd 載入 AGENTS.md，也接受小寫的 agents.md；同層兩者並存時會回報歧義。Skill 先提供 metadata catalog，模型透過 `skill_load` 按需讀取 SKILL.md，再以 `read` 取得 references 和工作檔案。Active skill 在下一輪從檔案刷新。
+
+預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`。新增工具時，把 `.js` 與對應 `.tool.json` 放入 `~/bin`，再執行 `rehash`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+
+快速體驗檔案式 skill：
+
+1. 在 shell 輸入 `demo jokes`，建立中文 AGENTS.md、joke-master skill、評分參考與五個笑話，既有檔案不覆寫。
+2. 在 settings 連接 Groq，輸入 `ai`。
+3. 用英文詢問：`Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.`
+4. 檢閱中文評分、冠軍原文、讀檔來源與 revision；修改檔案後可要求重新讀取與評分。
+
+完整驗收條件與模型／額度紀錄見 [笑話驗收](docs/joke-acceptance.md)。
+
+## 主頁預覽與 popup
+
+在 shell 輸入 `preview ~/main.html`。檔案不存在時，按「建立主頁範本」才會寫入；也可先用 `edit ~/main.html` 自行編輯。
+
+右下角「開啟 Pi」會打開共用該 workspace 檔案的 popup。連接 Groq、輸入 `ai` 後，可要求 agent 修改 `~/main.html`。檔案有更新時，按「重新載入預覽」套用內容；刷新只更新頁面 iframe，保留 popup 的對話、草稿與 active run。
+
+「開啟主頁」提供隱藏編輯器外框的 page view，例如 `?workspace=my-space&view=page`；「工作區」可另開 shell/editor。預覽 entry 和 popup surface 會持久化，整頁 reload 後可恢復，Groq 需要重新連線。
+
+目前支援 UTF-8 HTML、CSS、相對 CSS import 與 SVG 圖片。頁面在隔離 iframe 呈現，頁面腳本、外部網路資源與導航不執行；二進位圖片匯入、完整頁面 JavaScript、VFS 匯出／發布另列後續。詳見 [主頁預覽](docs/page-preview.md)。
+
+手機輸入欄位使用 16px；鍵盤縮小可視區時精簡標題列與側欄，保留輸入列及可捲動的對話區。Popup 跟隨宿主的可視區尺寸與位移，調整尺寸時保留草稿。已做瀏覽器可視區模擬，iPhone Safari 原生鍵盤仍需實機驗證。
+
+## 儲存與工作區
+
+UI 使用 IndexedDB 保存檔案、tabs、editor draft、session transcript、歷史與 lifecycle／來源版本紀錄，首次會遷移舊 localStorage workspace 並保留原資料。關閉 tab 保留對話歷史；reload 後重連 Groq 會接續原 messages 與 active skill。
+
+URL 可用 `?workspace=NAME` 隔離檔案與歷史。相同 workspace 的 editor、page view 與 popup 共用檔案及歷史，各自保存 layout；revision／writer lease 檢查避免同一 session 被同時覆寫。Identity 接受 1–64 個英數字、底線或連字號。
+
+IndexedDB 資料屬於目前瀏覽器與 app origin，不是雲端同步，也不會因部署到 GitHub Pages 就讓其他訪客取得你的自訂檔案。
+
+## 驗證
 
 ```sh
 npm test
@@ -34,40 +124,25 @@ npm run build
 npm run verify:dist
 ```
 
-手機輸入與 popup 可用 `npm run test:mobile:browser` 驗證（需 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定路徑，不消耗模型額度）。測試會模擬鍵盤縮小可視區，檢查 composer、捲動、設定表單與 popup 草稿保留；實際 iPhone Safari 鍵盤仍需裝置驗證。
+目前回歸測試為 94 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽及 popup。一般 `npm test` 不呼叫模型或消耗額度。
 
-目前固定使用 `@earendil-works/pi-agent-core` / `pi-ai` `0.84.4`。日常回歸使用 scripted model；檔案式 skill 的 Groq 三任務驗收已執行，完整狀態與重跑方式見 [笑話驗收](docs/joke-acceptance.md)。
+瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
-快速體驗：在 shell 輸入 `demo jokes`，建立不覆寫既有檔案的中文 AGENTS.md、joke-master skill、評分參考與五個笑話。連接 Groq 後執行 `ai`，使用英文請它讀取、評分並選出最好笑的笑話。`edit PATH` 開啟文字編輯器；`history` 與 `ai --resume SESSION_ID` 可重開對話，`ai --new` 開始新對話。
+| 指令 | 驗證範圍與需求 |
+|---|---|
+| `npm run test:mobile:browser` | 混合大小寫工具、模擬鍵盤、捲動、設定表單與 popup 草稿；先啟動 production preview，不需 API key |
+| `npm run test:jokes` | 真實 Groq 的五檔評分、歷史恢復、建立五檔並讀回；使用 `.env.local` 的 key |
+| `npm run test:jokes:browser` | 真正瀏覽器 UI／IndexedDB／Worker 的笑話驗收；先啟動 dev server，使用 `.env.local` 的 key，Node 需支援 TypeScript stripping |
+| `npm run test:preview:browser` | 真實 Groq 修改頁面、刷新、歷史、工作區隔離；先啟動 production preview，使用 `.env.local` 的 key |
+| `npm run test:groq` | adapter 的 read、mutation/read-back、tool-error correction；以環境變數提供 key |
 
-簡易 bash 的指令名稱不分大小寫，`LS`、`Read`、`AI --NEW`、`Preview` 等寫法皆可；路徑、內容、搜尋文字與 session ID 保留原本大小寫。
+Production preview 先執行 `npm run build`，再以 `npm run preview` 啟動。瀏覽器 runner 可用 `AGENT_GO_ROUND_APP_URL` 指定 app URL；live runner 可用 `AGENT_GO_ROUND_GROQ_MODEL` 選擇模型。測試 key 使用 `AGENT_GO_ROUND_GROQ_API_KEY`，不要提交到 Git。
 
-Groq live tool acceptance 是明確 opt-in：設定 `AGENT_GO_ROUND_GROQ_API_KEY` 後執行 `npm run test:groq`，會跑 read、mutation/read-back、tool-error correction 三個短任務，輸出 provider/model、工具呼叫與 `harness`／`provider`／`quota`／`network`／`model_decision` 失敗分類；可用 `AGENT_GO_ROUND_GROQ_REPORT` 另外保存 JSON report。一般 `npm test` 不會觸發網路或消耗額度。
+笑話、主頁與手機 runner 的報告／截圖保存於忽略追蹤的 `test-results/`。`test:groq` 輸出至 terminal，可透過 `AGENT_GO_ROUND_GROQ_REPORT` 指定 JSON 報告路徑。詳細證據見對應驗收文件，quota／模型失敗不計為通過。
 
-核心也提供第一輪 typed tool boundary：`AgentSession` 可注入 Pi `AgentTool`，由 Pi 負責 TypeBox schema validation 與唯一 tool loop；宿主可用 `requiresApproval`、`approval` callback、`maxToolCalls`、`deadlineMs` 與 `maxOutputCharacters` 限制副作用與資源。若工具已送出但結果不明，請丟出 `ToolOutcomeUnknownError`；session 會記錄 `outcome_unknown`、停止自動 follow-up，交由宿主明確讀回或請使用者決定。`MemorySessionEventStore` 可保存 version 1 session events，事件不保存 tool arguments 或 result details。
+## 嵌入其他網站
 
-Session transcript 可透過 `MemorySessionStore` 或注入的 `LocalStorageSessionStore` 保存與 restore；snapshot 只允許在 idle session 建立，避免把執行中的狀態假裝成可恢復完成。儲存格式有 version 與 `sessionId` 驗證，保存／讀取失敗會回報錯誤。
-
-`MemorySessionEventStore` 與 `LocalStorageSessionEventStore` 保存 versioned run/tool lifecycle，`inspectSessionRecovery()` 只重建 interrupted／outcome-unknown metadata，不會在 reload 時自動重送模型或工具副作用；UI 會將需要人工 review 的 recovery notice 寫入對應 tab。
-
-Workspace UI 使用 `IndexedDbConversationStore` 保存 tabs、草稿、editor draft 與完整 session transcript，並將 session 歷史獨立於開啟的 tabs 保存。首次從既有 localStorage workspace 遷移，保留原資料。`IndexedDbSessionEventStore` 保存 lifecycle 與讀檔來源／版本，不保存逐字 text delta。Groq reload 後須重新連線，重連保留原 messages 和 active skill；不自動重送模型或工具。`prepareFileContext()` 從 home 到 cwd 載入 AGENTS.md／agents.md，`VfsSkillLoader` 只先提供 skill metadata，`~/bin/skill_load.js` 按需載入正文；active skill 在下一輪從檔案刷新。SDK 仍保留 memory／localStorage store 與最小 MemorySkillLoader 供獨立宿主使用。
-
-## Embed spike
-
-production build 會另外產生 `embed.js`，可由宿主 HTML 以 script 載入。Loader 會建立一個隔離的 iframe popup，不會直接接管宿主頁面的 DOM 或 CSS：
-
-```html
-<script
-  type="module"
-  src="https://your-domain.example/agent-go-round/embed.js"
-  data-target="body"
-  data-mode="popup"
-  data-button-label="Open AgentGoRound"
-  defer
-></script>
-```
-
-本專案部署到 GitHub Pages 時可直接使用：
+Production build 會產生 `embed.js`。宿主 HTML 可以載入 GitHub Pages 的 loader，即使宿主本身在 localhost：
 
 ```html
 <script
@@ -75,36 +150,43 @@ production build 會另外產生 `embed.js`，可由宿主 HTML 以 script 載�
   src="https://gipapa.github.io/agent-go-round/embed.js"
   data-target="body"
   data-mode="popup"
+  data-workspace="my-space"
+  data-surface="support-popup"
   data-button-label="Open AgentGoRound"
-  defer
 ></script>
 ```
 
-GitHub Pages 使用 project-site 子路徑 `/agent-go-round/`；loader 會依照 `embed.js` 所在位置找到 iframe app，因此宿主頁面不需要自行設定 app URL。若宿主網站有 CSP，需允許從 `https://gipapa.github.io` 載入 script 與 iframe。loader 不包含 Groq API key；目前真實 Groq 對話仍需使用者在 popup 輸入自己的 key，不能把擁有者 key 放進公開 bundle。
+Loader 依 `embed.js` 所在位置推導 iframe app URL，保留 `/agent-go-round/` 子路徑。測試線上版本時使用上述絕對 URL；`src="./embed.js"` 會改載入宿主自己提供的檔案。若宿主有 CSP，需允許該來源的 script 與 iframe。使用者仍在 popup 輸入自己的 Groq key。
 
-localhost 的 host page 也可以直接使用 GitHub Pages 的 production loader。若要測 production 版本，請使用絕對 URL；`src="./embed.js"` 則會改載入 localhost 自己提供的 loader：
+亦可由宿主明確 mount：
 
-```html
-<script
-  type="module"
-  src="https://gipapa.github.io/agent-go-round/embed.js"
-  data-target="body"
-  data-mode="popup"
-  data-button-label="Open AgentGoRound"
-  defer
-></script>
+```js
+const widget = window.AgentGoRound.mount({
+  appUrl: "https://gipapa.github.io/agent-go-round/",
+  workspaceId: "my-space",
+  surfaceId: "support-popup",
+  mode: "popup"
+});
 ```
 
-Loader 會從自身的 GitHub Pages URL 推導 iframe app URL；localhost host 需要能連網，且若有 CSP 需允許載入 `https://gipapa.github.io` 的 script 與 iframe。
+Widget 提供 `open()`、`close()`、`toggle()`、`postMessage()`、`on()`、`registerTool()`、`destroy()`；`mode: "inline"` 可直接嵌入容器。Workspace／surface binding 會由 ready handshake 核對；provider 認證與跨 tab routing 尚未提供 embed API。
 
-Loader 也會提供 `window.AgentGoRound.mount()`，widget instance 目前支援 `open()`、`close()`、`toggle()`、`postMessage()` 與 `destroy()`。iframe bridge 使用 `postMessage`，目前支援 `hello`、`ready`、`prompt`、`error`、`host_tools`、`host_tool_call`／`host_tool_result`／`host_tool_cancel`、`open-settings` 與 `close-settings`；provider 認證與跨 tab routing 尚未納入 embed API。
+宿主可用 `registerTool(spec, handler, approval?)` 註冊工具。Bridge 驗證 schema、instance／session／tool-call／request identity，處理取消、deadline 與 outcome unknown；需批准的工具使用綁定精確參數、只能使用一次的 approval token。Bridge 不提供任意讀取宿主 DOM、cookies 或 storage 的介面。目前 wire protocol 為 v2、SDK 為 `0.2.0`，不支援的版本會被拒絕。
 
-宿主可在 mount 後以 `widget.registerTool({ name, label, description, parameters, requiresApproval, timeoutMs }, handler, approval?)` 明確註冊 allow-listed tool。每次呼叫都帶有 instance、session、tool-call、request identity；parent bridge 會再次驗證 JSON schema，handler 可使用 `AbortSignal`。`requiresApproval` tool 必須先取得由宿主核發、綁定精確參數與 tool-call、60 秒後過期且只能使用一次的 approval token，直接繞過 approval 的 `host_tool_call` 會被拒絕。bridge 會處理 cancel、timeout 與 `outcome_unknown`，不會讓 iframe 直接讀取宿主 DOM、cookies 或 storage。因本版加入 tool-call identity 與 approval token，wire protocol 已 bump 為 v2、SDK 為 `0.2.0`，目前採明確 exact-match；不支援的版本會 fail closed。`public/embed-example.html` 內含一個 read-only host tool 範例。
+純 HTML 範例為 [public/embed-example.html](public/embed-example.html)，可在本機 build／preview 後開啟 `/embed-example.html`，或查看 [線上 embed example](https://gipapa.github.io/agent-go-round/embed-example.html)。React 範例在 [examples/react-host](examples/react-host)：在該目錄執行 `npm install`，再以 `VITE_AGENT_APP_URL=http://127.0.0.1:4173/ npm run dev` 啟動；unmount 時會 destroy widget。
 
-本機可先執行 `npm run build && npm run verify:dist && npm run preview`，再開啟 `/embed-example.html` 測試第三方 host page；`public/embed-example.html` 是最小純 HTML 範例。GitHub Actions 會在部署前檢查 `index.html`、`embed.js` 與 host example artifact；push 到 `master` 後才會把工作樹內容發布到 GitHub Pages。部署後可開啟 [GitHub Pages embed example](https://gipapa.github.io/agent-go-round/embed-example.html)。
+## 核心 SDK
 
-另一個框架 host 範例位於 `examples/react-host`：在該目錄執行 `npm install`，再以 `VITE_AGENT_APP_URL=http://127.0.0.1:4173/ npm run dev` 啟動；React `useEffect` 會 mount、註冊 host tool，unmount 時 destroy。此範例已通過獨立 typecheck/build 與跨 origin browser smoke。
+公開 entry 為 [src/index.ts](src/index.ts)，非瀏覽器環境可 import，呼叫 `mount()` 才要求 browser document。Pi 套件固定為 `@earendil-works/pi-agent-core`／`pi-ai` `0.84.4`。
 
-push 到 `master` 會由 GitHub Actions 執行測試、build，成功後部署到 [GitHub Pages](https://gipapa.github.io/agent-go-round/)。
+`AgentSession` 可注入 Pi `AgentTool`，由 Pi 驗證參數並執行工具循環；宿主可設定 approval、maxToolCalls、deadlineMs 與 maxOutputCharacters。工具結果不明時使用 `ToolOutcomeUnknownError`，session 記錄 outcome_unknown 並停止自動 follow-up；`inspectSessionRecovery()` 重建中斷資訊，不重播副作用。
+
+SDK 也提供可替換的 filesystem、session／workspace stores、event stores、skills loader、tab router 與 embed bridge。Memory／localStorage adapters 保留供獨立宿主使用；正式 UI 使用 IndexedDB。模型自動多代理編排、完整長對話 compaction、MCP、遠端磁碟與 ChatGPT 訂閱接入仍列後續，見 [設計規劃](docs/plan.md)。
+
+## 部署與版本
+
+Push 到 `master` 會由 GitHub Actions 執行測試、typecheck、build 與 dist 檢查，再發布到 GitHub Pages。Project-site build 使用 `VITE_BASE_PATH=/agent-go-round/`。
+
+完整舊版保存在 `v2` 分支，封存起點為 `73285d6`；更早版本在 `v1`、`v1.5`。舊版的未完成驗收紀錄保留於對應分支，並不代表新版已通過。
 
 採用 [MIT License](LICENSE)。
