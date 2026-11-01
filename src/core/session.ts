@@ -5,11 +5,12 @@ import { SessionPersistenceError, type SessionSnapshot, type SessionStore } from
 export type RunStatus = "success" | "aborted" | "deadline" | "error" | "outcome_unknown" | "output_limit";
 
 export const SESSION_EVENT_VERSION = 1 as const;
+export type FileReadRange = { startLine: number; endLine: number; totalLines: number };
 export type ContextSource = { kind: "agents" | "skill"; path: string; revision: number };
 
 type SessionEventPayload =
   | { type: "context_loaded"; runId: string; source: ContextSource; toolCallId?: string }
-  | { type: "file_access"; runId: string; toolCallId: string; method: string; path: string; revision?: number }
+  | { type: "file_access"; runId: string; toolCallId: string; method: string; path: string; revision?: number; readRange?: FileReadRange }
   | { type: "tool_result_ready"; runId: string; toolCallId: string }
   | { type: "run_started"; runId: string; input: string }
   | { type: "text_delta"; runId: string; delta: string }
@@ -31,15 +32,6 @@ export interface SessionEventStore {
   list(sessionId?: string): readonly SessionEvent[];
 }
 
-export class SessionEventStorageError extends Error {
-  readonly code = "session_event_storage_error" as const;
-
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "SessionEventStorageError";
-  }
-}
-
 export class MemorySessionEventStore implements SessionEventStore {
   private readonly events: SessionEvent[] = [];
 
@@ -53,68 +45,6 @@ export class MemorySessionEventStore implements SessionEventStore {
 
   clear(): void {
     this.events.length = 0;
-  }
-}
-
-type SessionEventStorage = Pick<Storage, "getItem" | "setItem" | "removeItem"> & {
-  readonly length?: number;
-  key?: (index: number) => string | null;
-};
-
-/** A browser event sink used for recovery inspection; it never stores tool args/results. */
-export class LocalStorageSessionEventStore implements SessionEventStore {
-  constructor(private readonly storage: SessionEventStorage, private readonly keyPrefix = "agent-go-round.events.") {}
-
-  append(event: SessionEvent): void {
-    const events = this.read(event.sessionId);
-    events.push(event);
-    try {
-      this.storage.setItem(this.key(event.sessionId), JSON.stringify(events));
-    } catch (error) {
-      throw new SessionEventStorageError("Unable to write session events", { cause: error });
-    }
-  }
-
-  list(sessionId?: string): readonly SessionEvent[] {
-    if (sessionId) return this.read(sessionId);
-    const events: SessionEvent[] = [];
-    if (this.storage.length === undefined || !this.storage.key) return events;
-    for (let index = 0; index < this.storage.length; index += 1) {
-      const key = this.storage.key(index);
-      if (key?.startsWith(this.keyPrefix)) events.push(...this.read(decodeURIComponent(key.slice(this.keyPrefix.length))));
-    }
-    return events;
-  }
-
-  clear(sessionId: string): void {
-    try {
-      this.storage.removeItem(this.key(sessionId));
-    } catch (error) {
-      throw new SessionEventStorageError("Unable to remove session events", { cause: error });
-    }
-  }
-
-  private key(sessionId: string): string {
-    return `${this.keyPrefix}${encodeURIComponent(sessionId)}`;
-  }
-
-  private read(sessionIdOrEncoded: string): SessionEvent[] {
-    const encoded = sessionIdOrEncoded.startsWith(this.keyPrefix) ? sessionIdOrEncoded.slice(this.keyPrefix.length) : encodeURIComponent(sessionIdOrEncoded);
-    const key = `${this.keyPrefix}${encoded}`;
-    let raw: string | null;
-    try {
-      raw = this.storage.getItem(key);
-    } catch (error) {
-      throw new SessionEventStorageError("Unable to read session events", { cause: error });
-    }
-    if (raw === null) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) throw new Error("Stored session events are not an array");
-      return parsed as SessionEvent[];
-    } catch (error) {
-      throw new SessionEventStorageError("Stored session events are not valid JSON", { cause: error });
-    }
   }
 }
 
@@ -307,8 +237,8 @@ export class AgentSession {
     if (this.activeRun) this.emit({ type: "context_loaded", runId: this.activeRun.runId, source, ...(toolCallId ? { toolCallId } : {}) });
   }
 
-  recordFileAccess(toolCallId: string, method: string, path: string, revision?: number): void {
-    if (this.activeRun) this.emit({ type: "file_access", runId: this.activeRun.runId, toolCallId, method, path, ...(revision !== undefined ? { revision } : {}) });
+  recordFileAccess(toolCallId: string, method: string, path: string, revision?: number, readRange?: FileReadRange): void {
+    if (this.activeRun) this.emit({ type: "file_access", runId: this.activeRun.runId, toolCallId, method, path, ...(revision !== undefined ? { revision } : {}), ...(readRange ? { readRange } : {}) });
   }
 
   subscribe(listener: (event: SessionEvent) => void): () => void {

@@ -32,7 +32,7 @@ function cloneSnapshot(snapshot: SessionSnapshot): SessionSnapshot {
   return JSON.parse(JSON.stringify(snapshot)) as SessionSnapshot;
 }
 
-export function validateSessionSnapshot(value: unknown, expectedSessionId?: string): SessionSnapshot {
+export function validateSessionSnapshot(value: unknown): SessionSnapshot {
   if (!value || typeof value !== "object") throw new SessionPersistenceError("Session snapshot is not an object");
   const snapshot = value as Partial<SessionSnapshot>;
   if (snapshot.version !== SESSION_SNAPSHOT_VERSION) {
@@ -40,9 +40,6 @@ export function validateSessionSnapshot(value: unknown, expectedSessionId?: stri
   }
   if (typeof snapshot.sessionId !== "string" || !snapshot.sessionId) {
     throw new SessionPersistenceError("Session snapshot is missing sessionId");
-  }
-  if (expectedSessionId !== undefined && snapshot.sessionId !== expectedSessionId) {
-    throw new SessionPersistenceError(`Session snapshot identity mismatch: expected ${expectedSessionId}`);
   }
   if (!snapshot.model || typeof snapshot.model !== "object") {
     throw new SessionPersistenceError("Session snapshot is missing model");
@@ -70,46 +67,5 @@ export class MemorySessionStore implements SessionStore {
 
   async remove(sessionId: string): Promise<void> {
     this.snapshots.delete(sessionId);
-  }
-}
-
-export class LocalStorageSessionStore implements SessionStore {
-  constructor(private readonly storage: Pick<Storage, "getItem" | "setItem" | "removeItem">, private readonly keyPrefix = "agent-go-round.session.") {}
-
-  async load(sessionId: string): Promise<SessionSnapshot | undefined> {
-    let raw: string | null;
-    try {
-      raw = this.storage.getItem(this.key(sessionId));
-    } catch (error) {
-      throw new SessionPersistenceError("Unable to read session storage", { cause: error });
-    }
-    if (raw === null) return undefined;
-    try {
-      return validateSessionSnapshot(JSON.parse(raw), sessionId);
-    } catch (error) {
-      if (error instanceof SessionPersistenceError) throw error;
-      throw new SessionPersistenceError("Stored session snapshot is not valid JSON", { cause: error });
-    }
-  }
-
-  async save(snapshot: SessionSnapshot): Promise<void> {
-    const valid = validateSessionSnapshot(snapshot);
-    try {
-      this.storage.setItem(this.key(valid.sessionId), JSON.stringify(valid));
-    } catch (error) {
-      throw new SessionPersistenceError("Unable to write session storage", { cause: error });
-    }
-  }
-
-  async remove(sessionId: string): Promise<void> {
-    try {
-      this.storage.removeItem(this.key(sessionId));
-    } catch (error) {
-      throw new SessionPersistenceError("Unable to remove session storage", { cause: error });
-    }
-  }
-
-  private key(sessionId: string): string {
-    return `${this.keyPrefix}${encodeURIComponent(sessionId)}`;
   }
 }

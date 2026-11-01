@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { IndexedDbFileSystem } from "./core/fs";
@@ -43,6 +44,23 @@ async function saved() {
 }
 
 describe("UI history at the real provider request boundary", () => {
+  it("starts with default VFS rules and an empty skills folder, then discovers demo skills at home", async () => {
+    await loadApp();
+    const fs = new IndexedDbFileSystem(window.indexedDB);
+    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: "請回覆繁體中文", revision: 1 });
+    expect(await fs.listDirectory("~/skills")).toEqual([]);
+    await connect(); await send("ai"); await send("Hello");
+    expect(requests[0].messages[0].content).toContain("請回覆繁體中文");
+    await send("/exit"); await send("demo jokes");
+    expect((await fs.readFile("~/skills/joke-master/SKILL.md")).content).toContain("name: joke-master");
+    await expect(fs.stat("~/.pi")).rejects.toMatchObject({ code: "not_found" });
+    await expect(fs.stat("~/AGENTS.md")).rejects.toMatchObject({ code: "not_found" });
+    await send("ai"); await send("Use joke-master");
+    expect(requests.at(-1)!.messages[0].content).toContain("/home/user/skills/joke-master/SKILL.md");
+    await loadApp();
+    expect((await fs.readFile("~/agents.md")).revision).toBe(1);
+  });
+
   it("documents the limited shell and starts/replaces conversations with ai", async () => {
     await loadApp();
     expect(document.querySelector(".shell-notice")!.textContent).toContain("簡易 bash");
@@ -66,7 +84,7 @@ describe("UI history at the real provider request boundary", () => {
     expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("<h1>MiXeD Content</h1>");
     document.querySelector<HTMLButtonElement>("#editor-cancel")!.click();
     await send("DeMo JoKeS");
-    expect((await fs.readFile("~/AGENTS.md")).content).toContain("繁體中文");
+    expect((await fs.readFile("~/agents.md")).content).toContain("繁體中文");
     const initial = await saved();
     const store = new IndexedDbConversationStore(new IndexedWorkspaceRecords(window.indexedDB));
     await store.load();
@@ -123,10 +141,10 @@ describe("UI history at the real provider request boundary", () => {
   it("keeps providers per tab and refreshes file instructions without duplicating old rules", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
-    await fs.writeFile("~/AGENTS.md", "第一個規則：使用中文。");
+    await fs.writeFile("~/agents.md", "第一個規則：使用中文。");
     await connect(); await send("ai"); await send("Hello from A");
     expect(requests[0].messages[0].content).toContain("第一個規則");
-    await fs.writeFile("~/AGENTS.md", "第二個規則：使用繁體中文。");
+    await fs.writeFile("~/agents.md", "第二個規則：使用繁體中文。");
     await send("Check new rules");
     expect(requests[1].messages[0].content).toContain("第二個規則");
     expect(requests[1].messages[0].content).not.toContain("第一個規則");

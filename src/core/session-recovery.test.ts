@@ -1,29 +1,9 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { LocalStorageSessionEventStore, inspectSessionRecovery, type SessionEvent } from "./session";
-
-class MapStorage {
-  private readonly values = new Map<string, string>();
-
-  get length(): number {
-    return this.values.size;
-  }
-
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string): void {
-    this.values.set(key, value);
-  }
-
-  removeItem(key: string): void {
-    this.values.delete(key);
-  }
-
-  key(index: number): string | null {
-    return [...this.values.keys()][index] ?? null;
-  }
-}
+import "fake-indexeddb/auto";
+import { IDBFactory } from "fake-indexeddb";
+import { IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./conversations";
+import { inspectSessionRecovery, type SessionEvent } from "./session";
 
 function event(type: SessionEvent["type"], extra: Record<string, unknown> = {}): SessionEvent {
   return {
@@ -43,17 +23,16 @@ function event(type: SessionEvent["type"], extra: Record<string, unknown> = {}):
 }
 
 describe("session recovery", () => {
-  it("persists versioned events by stable session identity", () => {
-    const storage = new MapStorage();
-    const first = new LocalStorageSessionEventStore(storage, "events.");
-    first.append(event("run_started"));
-    first.append(event("tool_started"));
-
-    const restored = new LocalStorageSessionEventStore(storage, "events.");
+  it("persists events by stable session identity in IndexedDB", async () => {
+    const factory = new IDBFactory();
+    const first = new IndexedDbSessionEventStore(new IndexedWorkspaceRecords(factory));
+    await first.hydrate();
+    first.append(event("run_started")); first.append(event("tool_started"));
+    await first.flush();
+    const restored = new IndexedDbSessionEventStore(new IndexedWorkspaceRecords(factory));
+    await restored.hydrate();
     expect(restored.list("session-1")).toHaveLength(2);
     expect(restored.list("other-session")).toEqual([]);
-    restored.clear("session-1");
-    expect(restored.list("session-1")).toEqual([]);
   });
 
   it("reports interrupted work without replaying a model or tool", () => {

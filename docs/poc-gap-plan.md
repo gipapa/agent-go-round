@@ -49,9 +49,9 @@
 1. 增加獨立 session repository 與列表索引：sessionId、標題、建立／更新時間、provider/model、狀態與摘要預覽。沿用 storage interface，browser 實作可採 IndexedDB。
 2. 提供歷史列表、重開、重新命名、搜尋、封存與明確刪除；關閉 tab 只關閉視窗，保留 session。
 3. 每個 session 獨立保存 committed messages 與 draft，某一個 session running 不應阻擋其他 session 保存。中斷中的 run 另記 checkpoint／事件，不偽裝成完整 idle snapshot。
-4. 定義既有 localStorage workspace 的一次性 migration、版本驗證與失敗回復。匯入匯出只包含對話與必要 metadata。
+4. 對話、workspace 與事件統一使用 IndexedDB；開發期間直接重建舊工作區。
 
-驗收：關閉後可從歷史重開並續聊；重新整理、多 tab 同時工作、storage 寫入失敗與 migration 都不會悄悄丟失已提交對話。
+驗收：關閉後可從歷史重開並續聊；重新整理、多 tab 同時工作、storage 寫入失敗與交易回滾都會明確回報。
 
 ## P2：把上下文與工具接成可用任務
 

@@ -1,23 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createScriptedSession, createScriptedStreamFn } from "./scripted";
 import { AgentSession, MemorySessionEventStore } from "./session";
-import { LocalStorageSessionStore, MemorySessionStore, SessionPersistenceError } from "./persistence";
-
-class MapStorage implements Pick<Storage, "getItem" | "setItem" | "removeItem"> {
-  private readonly values = new Map<string, string>();
-
-  getItem(key: string): string | null {
-    return this.values.get(key) ?? null;
-  }
-
-  setItem(key: string, value: string): void {
-    this.values.set(key, value);
-  }
-
-  removeItem(key: string): void {
-    this.values.delete(key);
-  }
-}
+import { MemorySessionStore, validateSessionSnapshot } from "./persistence";
 
 describe("session persistence", () => {
   it("saves an idle transcript and restores the same session identity", async () => {
@@ -42,25 +26,10 @@ describe("session persistence", () => {
     ]);
   });
 
-  it("uses the same contract for local storage and rejects an identity mismatch", async () => {
-    const storage = new MapStorage();
-    const store = new LocalStorageSessionStore(storage, "test.session.");
-    const session = createScriptedSession(["answer"], { sessionId: "local/session" });
-    await session.prompt("persist me");
-    await session.save(store);
-
-    expect((await store.load("local/session"))?.sessionId).toBe("local/session");
-    await expect(store.load("other-session")).resolves.toBeUndefined();
-
-    storage.setItem("test.session.bad", JSON.stringify({
-      version: 1,
-      sessionId: "different",
-      model: session.agent.state.model,
-      systemPrompt: "",
-      messages: [],
-      savedAt: Date.now()
-    }));
-    await expect(store.load("bad")).rejects.toBeInstanceOf(SessionPersistenceError);
+  it("rejects a snapshot with a missing identity or unsupported format", () => {
+    const snapshot = createScriptedSession([], { sessionId: "expected" }).snapshot();
+    expect(() => validateSessionSnapshot({ ...snapshot, sessionId: "" })).toThrow(/sessionId/);
+    expect(() => validateSessionSnapshot({ ...snapshot, version: 99 })).toThrow(/Unsupported/);
   });
 
   it("does not pretend a running session is recoverably saved", async () => {

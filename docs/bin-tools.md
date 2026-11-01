@@ -32,18 +32,20 @@
 | 工具 | 參數與行為 |
 |---|---|
 | read | `path` 可為單一路徑或最多 32 個路徑的陣列，選填 `offset`（行號，從 1 開始）、`limit`；回傳內容、revision、totalLines、nextOffset |
-| write | 單檔用 `path`／`content`；多檔用 `files:[{path,content,expectedRevision?}]` 原子提交，最多 32 檔。`createParents:true` 建父目錄；覆寫需提供 revision |
+| write | 單檔用 `path`／`content`；多檔用 `files:[{path,content,expectedRevision?}]` 原子提交，最多 32 檔。`createParents:true` 建父目錄；覆寫需提供 revision；回傳 path、revision、bytes（UTF-8） |
 | edit | `path`、`oldText`、`newText`，選填 `replaceAll`、`expectedRevision`；精確替換，多處匹配預設失敗 |
 | grep | `pattern`，選填 `path`、`regex`、`ignoreCase`、`limit`；遞迴搜尋內容，回傳檔名、revision、行號與文字 |
 | find | 選填 `path`、`name`（basename glob，支援 `*`、`?`）、`type`、`limit`；遞迴列出匹配路徑 |
-| ls | 選填 `path`；列出目錄的直接子項，包含隱藏檔與 revision |
+| ls | 選填 `path`；列出目錄的直接子項，包含隱藏檔、revision 與 size（UTF-8 bytes），不含正文 |
 | skill_load | `name`；經由 `api.skills.load` 載入本輪 catalog 中的 SKILL.md，記錄來源與 active skill。與其他工具一樣從 ~/bin 載入 JS／manifest |
 | read_host_page | 選填 `offset`／`limit`；經 `api.host.readPage` 讀取呼叫頁面 HTML，無宿主時回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」；shell／AI 共用 bin JS |
 | help | 選填 `command`；經 `api.tools.help` 取得指令說明與 schema；AI 的 help 同樣從 bin JS 載入 |
 
+VFS 的 `stat`／`listDirectory`／寫入結果只提供 `FileStat`；只有 `readFile` 取得正文。`ls -l` 直接使用 metadata 的 size，不會為了計算大小重讀檔案。Workspace 預設檔案由 `workspace-bootstrap.ts` 建立；檔案能力與 Worker 共用 `file-capabilities.ts` 的名單及 VFS 型別。
+
 ## Shell 與 AI 工具的輸出
 
-工具說明／schema 集中於 `~/bin/manifests/`；`ls ~/bin` 只列指令 JS 與 manifests 目錄。安裝或 `rehash` 時，舊根目錄的 `.tool.json` 以原子 rename 搬移，自訂內容保留；新舊路徑同名時不覆寫，明確回報衝突。`restore-bin NAME` 亦使用新位置。
+工具說明／schema 集中於 `~/bin/manifests/`；`ls ~/bin` 只列指令 JS 與 manifests 目錄。只讀取目前位置，不搬移舊 manifest。`restore-bin NAME` 亦使用同一位置。
 
 Shell 的 `ls` 預設列出目前 cwd 的直接子項名稱，隱藏點檔；`ls -a` 包含隱藏檔、`ls -F` 為目錄加 `/`、`ls -l` 顯示 VFS 類型、UTF-8 bytes、revision 與時間，沒有虛構作業系統權限。`cat` 讀完整正文（支援多檔與 `-n`）；`read` 保留分頁 JSON。`grep -rin PATTERN PATH` 和 `find . -name "*.md" -type f` 顯示一般文字結果；工具呼叫及 shell 的 JSON 形式保留上表契約，`ls` 工具仍包含隱藏檔。
 
@@ -117,7 +119,7 @@ async function main(args, api) {
 
 單次執行預設 10 秒、最多 8192 次 filesystem RPC、結果最多 128000 字元；Worker 可被 Stop 中止。若寫入已開始但工具未完成，回報 `outcome_unknown`，需要先讀回，不能自動重做。每檔最多 512 KiB，workspace 最多 2048 個節點及 16 MiB 文字內容。
 
-預設安裝補缺檔，並且只對逐字符合舊版內建 JS 與 manifest 的工具做原子升級，不覆蓋使用者修改的工具。工具損壞時，可用內建 `restore-bin read`（或其他預設工具名稱）重設其 JS 與 manifest；自訂 manifest 損壞時可 `rm ~/bin/manifests/hello.tool.json` 後 `rehash`。這些恢復命令由 shell 本身提供，不依賴損壞的工具。
+預設安裝只補缺檔，保留自訂工具，不比對或自動升級舊版本。工具損壞時，可用內建 `restore-bin read`（或其他預設工具名稱）重設其 JS 與 manifest；自訂 manifest 損壞時可 `rm ~/bin/manifests/hello.tool.json` 後 `rehash`。這些恢復命令由 shell 本身提供，不依賴損壞的工具。
 
 ## 驗證紀錄
 

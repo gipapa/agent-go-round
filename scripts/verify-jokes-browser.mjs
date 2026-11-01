@@ -3,7 +3,7 @@ import { loadEnvFile } from "node:process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile } from "node:fs/promises";
-import { validateJokeAnswer } from "../src/acceptance/joke-validation.ts";
+import { jokeContextFromFiles, validateJokeAnswer } from "../src/acceptance/joke-validation.ts";
 
 try { loadEnvFile(".env.local"); } catch (error) { if (error.code !== "ENOENT") throw error; }
 const key = process.env.AGENT_GO_ROUND_GROQ_API_KEY || process.env.GROQ_API_KEY;
@@ -47,10 +47,11 @@ async function persisted() {
   return evaluate(`(async () => {
     const open=(name)=>new Promise((resolve,reject)=>{const q=indexedDB.open(name);q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
     const rows=async(name,store)=>{const db=await open(name);return new Promise((resolve,reject)=>{const tx=db.transaction(store);const q=tx.objectStore(store).getAll();q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);tx.oncomplete=()=>db.close()})};
-    const records=await rows('agent-go-round.conversations.v1','records');
+    const records=await rows('agent-go-round.sessions','records');
+    const contents=new Map((await rows('agent-go-round.vfs','contents')).map(row=>[row.key,row.content]));
     const layout=records.find(row=>row.id==='layout'&&row.workspace===${JSON.stringify(workspaceId)})?.value.snapshot;
     const tab=layout?.tabs.find(tab=>tab.id===layout.activeTabId);
-    return {tab,events:records.filter(row=>row.workspace===${JSON.stringify(workspaceId)}&&row.id.startsWith('event:')).map(row=>row.value),files:(await rows('agent-go-round.files.v1','nodes')).filter(row=>row.workspace===${JSON.stringify(workspaceId)}).map(row=>row.node)};
+    return {tab,events:records.filter(row=>row.workspace===${JSON.stringify(workspaceId)}&&row.id.startsWith('event:')).map(row=>row.value),files:(await rows('agent-go-round.vfs','nodes')).filter(row=>row.workspace===${JSON.stringify(workspaceId)}).map(row=>({...row.node,...(row.node.kind==='file'?{content:contents.get(row.key)}:{})}))};
   })()`);
 }
 async function grade(id, result, directory) {
@@ -61,11 +62,11 @@ async function grade(id, result, directory) {
   }
   const input = state.events.filter((event) => event.sessionId === state.tab.session.sessionId && event.type === "run_finished").at(-1);
   if (!input) throw new Error("No durable run_finished event");
-  const files = Object.fromEntries(state.files.filter((file) => file.kind === "file" && file.path.startsWith(directory + "/") && file.path.endsWith(".md")).map((file) => [file.path, { content: file.content, revision: file.revision }]));
+  const files = Object.fromEntries(state.files.filter((file) => file.kind === "file" && file.path.slice(0, file.path.lastIndexOf("/")) === directory && file.path.endsWith(".md")).map((file) => [file.path, { content: file.content, revision: file.revision }]));
   if (Object.keys(files).length !== 5) throw new Error(`${id}: expected five persisted files`);
   const trace = state.events.filter((event) => event.runId === input.runId && ["file_access", "context_loaded", "tool_finished"].includes(event.type));
   let answer;
-  try { answer = validateJokeAnswer(input.text, files, state.events, input.runId); }
+  try { answer = validateJokeAnswer(input.text, files, state.events, input.runId, jokeContextFromFiles(state.files.filter(file => file.kind === "file"))); }
   catch (error) { report.tasks.push({ id, status: "fail", model: state.tab.session.model.id, text: input.text, files, trace, failure: error.message }); throw error; }
   return { id, status: "pass", model: state.tab.session.model.id, answer, text: input.text, trace, sessionId: state.tab.session.sessionId, messageCount: state.tab.session.messages.length };
 }
@@ -79,8 +80,8 @@ try {
   await call("open", report.url); await waitReady();
   await call("snapshot");
   if (languageOnly) {
-    const written = await command('write ' + JSON.stringify({ path: "~/AGENTS.md", content: "即使使用者使用英文提問，也必須使用繁體中文回答。" }));
-    if (!written.last.includes("revision")) throw new Error("Failed to create language rule");
+    const rules = await command("read ~/agents.md");
+    if (!rules.last.includes("請回覆繁體中文")) throw new Error("Default workspace language rule is missing");
     await connect(); await command("ai");
     const result = await command("Explain a virtual filesystem in one short sentence.");
     const state = await persisted();
@@ -126,7 +127,7 @@ try {
 } catch (error) { report.status = "fail"; report.failure = String(error.message).replaceAll(key, "[redacted]"); process.exitCode = 1; }
 finally {
   await mkdir("test-results", { recursive: true });
-  await writeFile(`test-results/${languageOnly ? "language-browser" : "jokes-browser"}.json`, JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2));
+  await writeFile(process.env.AGENT_GO_ROUND_JOKE_BROWSER_REPORT || `test-results/${languageOnly ? "language-browser" : "jokes-browser"}.json`, JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2));
   console.log(JSON.stringify({ status: report.status, tasks: report.tasks.map(({ id, status }) => ({ id, status })), failure: report.failure }));
   await call("close");
 }

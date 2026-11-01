@@ -55,7 +55,7 @@ try {
   const second = await evaluate("new URL(window.__second.iframe.src).searchParams.get('workspace')");
   assert(workspace !== second && second !== "default", "Popup workspaces are not distinct");
   await wait("!!window.__second.iframe.contentDocument?.querySelector('#send')&&!window.__second.iframe.contentDocument.querySelector('#send').disabled");
-  const markers = await evaluate("(async()=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('agent-go-round.files.v1');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});return new Promise((resolve,reject)=>{const tx=db.transaction('nodes'),r=tx.objectStore('nodes').getAll();r.onsuccess=()=>resolve(r.result.filter(row=>row.node.path.endsWith('/host-only.txt')).map(row=>row.workspace));r.onerror=()=>reject(r.error);tx.oncomplete=()=>db.close()})})()");
+  const markers = await evaluate("(async()=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('agent-go-round.vfs');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});return new Promise((resolve,reject)=>{const tx=db.transaction('nodes'),r=tx.objectStore('nodes').getAll();r.onsuccess=()=>resolve(r.result.filter(row=>row.node.path.endsWith('/host-only.txt')).map(row=>row.workspace));r.onerror=()=>reject(r.error);tx.oncomplete=()=>db.close()})})()");
   assert(markers.includes(workspace) && !markers.includes(second) && !markers.includes("default"), "File leaked between workspaces");
   await evaluate("(() => {window.__second.destroy();return true;})()");
   check("separate popup workspaces isolate files from each other and the direct app");

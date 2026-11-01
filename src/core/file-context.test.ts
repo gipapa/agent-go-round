@@ -37,7 +37,7 @@ describe("VFS instructions and skills", () => {
     const next = await prepareFileContext(fs, "/home/user");
     expect(next.systemPrompt).toContain("新的規則");
     expect(next.systemPrompt).not.toContain("即使使用者使用英文提問");
-    const oldSkill = await fs.readFile("~/.pi/skills/joke-master/SKILL.md");
+    const oldSkill = await fs.readFile("~/skills/joke-master/SKILL.md");
     await fs.writeFile(oldSkill.path, oldSkill.content + "\nChanged");
     await expect(new VfsSkillLoader(fs).load("joke-master", first.skills)).rejects.toThrow(/changed during/);
     await fs.writeFile("~/agents.md", "ambiguous");
@@ -50,13 +50,13 @@ describe("VFS instructions and skills", () => {
     await fs.writeFile("~/jokes/笑話1.md", "user content");
     expect((await installJokeDemo(fs)).kept).toHaveLength(8);
     expect((await fs.readFile("~/jokes/笑話1.md")).content).toBe("user content");
-    await fs.mkdir("~/.pi/skills/second");
-    const first = await fs.readFile("~/.pi/skills/joke-master/SKILL.md");
-    await fs.writeFile("~/.pi/skills/second/SKILL.md", first.content);
+    await fs.mkdir("~/skills/second");
+    const first = await fs.readFile("~/skills/joke-master/SKILL.md");
+    await fs.writeFile("~/skills/second/SKILL.md", first.content);
     await expect(new VfsSkillLoader(fs).discover()).rejects.toThrow(/Duplicate/);
-    await fs.writeFile("~/.pi/skills/second/SKILL.md", "no frontmatter");
+    await fs.writeFile("~/skills/second/SKILL.md", "no frontmatter");
     await expect(new VfsSkillLoader(fs).discover()).rejects.toThrow(/frontmatter/);
-    await fs.remove("~/.pi/skills/second/SKILL.md");
+    await fs.remove("~/skills/second/SKILL.md");
     await expect(new VfsSkillLoader(fs).load("missing", [])).rejects.toThrow(/Unknown/);
   });
 
@@ -67,7 +67,7 @@ describe("VFS instructions and skills", () => {
     const bin = new BinRegistry(fs, { async execute() { throw new Error("Not used in context preparation test"); } });
     await bin.reload();
     await configureFileAgent(session, fs, "/home/user", bin, "joke-master");
-    const file = await fs.readFile("~/.pi/skills/joke-master/SKILL.md");
+    const file = await fs.readFile("~/skills/joke-master/SKILL.md");
     await fs.writeFile(file.path, file.content + "\n新的評分指示。");
     const restored = AgentSession.fromSnapshot(session.snapshot(), { streamFn: createScriptedStreamFn([]) });
     const next = await configureFileAgent(restored, fs, "/home/user", bin);

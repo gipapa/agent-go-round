@@ -1,4 +1,4 @@
-import type { BinCapability } from "./bin-defaults";
+import { FILE_METHODS, type BinCapability } from "./file-capabilities";
 
 export type FileRpc = (method: BinCapability, args: unknown[]) => Promise<unknown>;
 export interface BinExecutor {
@@ -21,7 +21,7 @@ function sandboxBootstrap(): void {
 }
 
 // Runs in the worker; the only host capabilities are bounded filesystem RPCs.
-function workerBootstrap(main: (args: unknown, api: unknown) => Promise<unknown>, args: unknown): void {
+function workerBootstrap(main: (args: unknown, api: unknown) => Promise<unknown>, args: unknown, methods: readonly string[]): void {
   let nextId = 0;
   const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   self.onmessage = (event: MessageEvent) => {
@@ -36,7 +36,7 @@ function workerBootstrap(main: (args: unknown, api: unknown) => Promise<unknown>
     pending.set(id, { resolve, reject });
     self.postMessage({ type: "fs", id, method, args: values });
   });
-  const fs = Object.fromEntries(["stat", "readFile", "listDirectory", "writeFile", "writeFiles", "mkdir", "remove"].map((method) => [method, (...values: unknown[]) => call(method, values)]));
+  const fs = Object.fromEntries(methods.map((method) => [method, (...values: unknown[]) => call(method, values)]));
   const skills = Object.freeze({ load: (name: string) => call("loadSkill", [name]) });
   const host = Object.freeze({ readPage: (options: unknown) => call("readHostPage", [options]) });
   const tools = Object.freeze({ help: (command?: string) => call("commandHelp", [command]) });
@@ -108,7 +108,7 @@ export class SandboxedBinExecutor implements BinExecutor {
       };
       iframe.addEventListener("load", () => {
         if (!active) return;
-        const program = `const main = (${source}); (${workerBootstrap.toString()})(main, ${JSON.stringify(args)});`;
+        const program = `const main = (${source}); (${workerBootstrap.toString()})(main, ${JSON.stringify(args)}, ${JSON.stringify(FILE_METHODS)});`;
         iframe.contentWindow?.postMessage({ type: "start", program }, "*", [channel.port2]);
       }, { once: true });
       document.body.append(iframe);

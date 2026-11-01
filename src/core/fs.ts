@@ -1,4 +1,5 @@
 export const VFS_HOME = "/home/user";
+export const VFS_DATABASE = "agent-go-round.vfs";
 const MAX_FILES = 2048;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_WORKSPACE_BYTES = 16 * 1024 * 1024;
@@ -7,22 +8,17 @@ export class FileSystemError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = "FileSystemError"; }
 }
 
-export type FileNode = {
-  path: string;
-  kind: "file" | "directory";
-  content: string;
-  revision: number;
-  updatedAt: number;
-  createdAt: number;
-};
+export type FileStat = { path: string; kind: "file" | "directory"; size: number; revision: number; updatedAt: number; createdAt: number };
+export type FileNode = FileStat & { kind: "file"; content: string };
 export type WriteOptions = { expectedRevision?: number };
+export type FileWrite = { path: string; content: string; expectedRevision?: number };
 export interface VirtualFileSystem {
-  stat(path: string): Promise<FileNode>;
+  stat(path: string): Promise<FileStat>;
   readFile(path: string): Promise<FileNode>;
-  listDirectory(path: string): Promise<FileNode[]>;
-  writeFile(path: string, content: string, options?: WriteOptions): Promise<FileNode>;
-  writeFiles(files: readonly { path: string; content: string; expectedRevision?: number }[]): Promise<FileNode[]>;
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<FileNode>;
+  listDirectory(path: string): Promise<FileStat[]>;
+  writeFile(path: string, content: string, options?: WriteOptions): Promise<FileStat>;
+  writeFiles(files: readonly FileWrite[]): Promise<FileStat[]>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<FileStat>;
   remove(path: string): Promise<void>;
   rename(from: string, to: string, options?: WriteOptions): Promise<void>;
 }
@@ -39,204 +35,204 @@ export function resolvePath(path: string, cwd = VFS_HOME): string {
   if (result !== VFS_HOME && !result.startsWith(VFS_HOME + "/")) throw new FileSystemError("outside_workspace", "Path must stay inside ~");
   return result;
 }
-
 export function displayPath(path: string): string { return path === VFS_HOME ? "~" : path.startsWith(VFS_HOME + "/") ? "~" + path.slice(VFS_HOME.length) : path; }
 function parent(path: string): string { return path.slice(0, path.lastIndexOf("/")); }
-function requireNode(nodes: Map<string, FileNode>, path: string, kind?: FileNode["kind"]): FileNode {
-  const node = nodes.get(path);
+function directory(path: string): FileStat { const now = Date.now(); return { path, kind: "directory", size: 0, revision: 1, createdAt: now, updatedAt: now }; }
+function checkRevision(node: FileStat | undefined, expected?: number): void {
+  if (expected !== undefined && expected !== (node?.revision ?? 0)) throw new FileSystemError("conflict", `File changed: ${displayPath(node?.path ?? "file")}; read it again before writing`);
+}
+type Usage = { count: number; bytes: number };
+interface FileTransaction {
+  get(path: string): Promise<FileStat | undefined>;
+  children(path: string): Promise<FileStat[]>;
+  put(node: FileStat): Promise<void>;
+  delete(path: string): Promise<void>;
+  readContent(path: string): Promise<string | undefined>;
+  writeContent(path: string, content: string): Promise<void>;
+  usage(): Promise<Usage | undefined>;
+  saveUsage(usage: Usage): Promise<void>;
+}
+interface FileMutation extends FileTransaction { save(node: FileStat, content?: string): Promise<void>; removeNode(path: string): Promise<void> }
+async function requireNode(tx: FileTransaction, path: string, kind?: FileStat["kind"]): Promise<FileStat> {
+  const node = await tx.get(path) ?? (path === VFS_HOME ? directory(path) : undefined);
   if (!node) throw new FileSystemError("not_found", `Not found: ${displayPath(path)}`);
   if (kind && node.kind !== kind) throw new FileSystemError("wrong_kind", `Expected ${kind}: ${displayPath(path)}`);
   return node;
 }
-function validateBudget(nodes: Map<string, FileNode>): void {
-  if (nodes.size > MAX_FILES) throw new FileSystemError("quota", "Workspace file limit exceeded");
-  let bytes = 0;
-  for (const node of nodes.values()) {
-    const size = new TextEncoder().encode(node.content).byteLength;
-    if (size > MAX_FILE_BYTES) throw new FileSystemError("quota", "File exceeds 512 KiB");
-    bytes += size;
-  }
-  if (bytes > MAX_WORKSPACE_BYTES) throw new FileSystemError("quota", "Workspace exceeds 16 MiB");
-}
 
 abstract class BaseFileSystem implements VirtualFileSystem {
-  protected abstract access<T>(write: boolean, operation: (nodes: Map<string, FileNode>) => T): Promise<T>;
-  stat(path: string): Promise<FileNode> { return this.access(false, (nodes) => ({ ...requireNode(nodes, resolvePath(path)) })); }
-  readFile(path: string): Promise<FileNode> { return this.access(false, (nodes) => ({ ...requireNode(nodes, resolvePath(path), "file") })); }
-  listDirectory(path: string): Promise<FileNode[]> {
-    return this.access(false, (nodes) => {
-      const resolved = resolvePath(path);
-      requireNode(nodes, resolved, "directory");
-      return [...nodes.values()].filter((node) => parent(node.path) === resolved).sort((a, b) => a.path.localeCompare(b.path)).map((node) => ({ ...node }));
-    });
-  }
-  writeFile(path: string, content: string, options: WriteOptions = {}): Promise<FileNode> {
-    return this.writeFiles([{ path, content, ...options }]).then((files) => files[0]);
-  }
-  writeFiles(files: readonly { path: string; content: string; expectedRevision?: number }[]): Promise<FileNode[]> {
-    return this.access(true, (nodes) => {
-      if (!files.length || files.length > 32) throw new FileSystemError("invalid_batch", "Write batch must contain 1–32 files");
-      const result: FileNode[] = [];
-      for (const { path, content, expectedRevision } of files) {
-        const resolved = resolvePath(path);
-        if (typeof content !== "string") throw new FileSystemError("invalid_content", "File content must be text");
-        if (content.length > MAX_FILE_BYTES) throw new FileSystemError("quota", "File exceeds 512 KiB");
-        requireNode(nodes, parent(resolved), "directory");
-        const previous = nodes.get(resolved);
-        if (previous?.kind === "directory") throw new FileSystemError("wrong_kind", "Cannot write to a directory");
-        if (expectedRevision !== undefined && expectedRevision !== (previous?.revision ?? 0)) throw new FileSystemError("conflict", `File changed: ${displayPath(resolved)}; read it again before writing`);
-        const now = Date.now();
-        const node: FileNode = { path: resolved, kind: "file", content, revision: (previous?.revision ?? 0) + 1, updatedAt: now, createdAt: previous?.createdAt ?? now };
-        nodes.set(resolved, node);
-        result.push({ ...node });
-      }
-      validateBudget(nodes);
+  protected abstract transaction<T>(write: boolean, operation: (tx: FileTransaction) => Promise<T>): Promise<T>;
+  private mutate<T>(operation: (tx: FileMutation) => Promise<T>): Promise<T> {
+    return this.transaction(true, async tx => {
+      const usage = await tx.usage() ?? { count: 0, bytes: 0 };
+      const save = async (node: FileStat, content?: string) => {
+        const previous = await tx.get(node.path);
+        usage.count += previous ? 0 : 1;
+        usage.bytes += node.size - (previous?.size ?? 0);
+        if (usage.count > MAX_FILES || usage.bytes > MAX_WORKSPACE_BYTES) throw new FileSystemError("quota", "Workspace file or byte limit exceeded");
+        await tx.put(node);
+        if (content !== undefined) await tx.writeContent(node.path, content);
+      };
+      const removeNode = async (path: string) => {
+        const previous = await requireNode(tx, path);
+        usage.count--; usage.bytes -= previous.size;
+        await tx.delete(path);
+      };
+      if (!await tx.get(VFS_HOME)) await save(directory(VFS_HOME));
+      const result = await operation({ ...tx, save, removeNode });
+      await tx.saveUsage(usage);
       return result;
     });
   }
-  mkdir(path: string, options: { recursive?: boolean } = {}): Promise<FileNode> {
-    return this.access(true, (nodes) => {
-      const resolved = resolvePath(path);
-      const create = (target: string): FileNode => {
-        const existing = nodes.get(target);
-        if (existing) return requireNode(nodes, target, "directory");
-        if (options.recursive) create(parent(target)); else requireNode(nodes, parent(target), "directory");
-        const node: FileNode = { path: target, kind: "directory", content: "", revision: 1, updatedAt: Date.now(), createdAt: Date.now() };
-        nodes.set(target, node);
-        return node;
+  stat(path: string): Promise<FileStat> { return this.transaction(false, tx => requireNode(tx, resolvePath(path))); }
+  readFile(path: string): Promise<FileNode> {
+    return this.transaction(false, async tx => {
+      const node = await requireNode(tx, resolvePath(path), "file");
+      const content = await tx.readContent(node.path);
+      if (content === undefined) throw new FileSystemError("storage", `Missing file content: ${displayPath(node.path)}`);
+      return { ...node, kind: "file", content };
+    });
+  }
+  listDirectory(path: string): Promise<FileStat[]> {
+    return this.transaction(false, async tx => {
+      const node = await requireNode(tx, resolvePath(path), "directory");
+      return (await tx.children(node.path)).sort((a, b) => a.path.localeCompare(b.path));
+    });
+  }
+  writeFile(path: string, content: string, options: WriteOptions = {}): Promise<FileStat> { return this.writeFiles([{ path, content, ...options }]).then(files => files[0]); }
+  writeFiles(files: readonly FileWrite[]): Promise<FileStat[]> {
+    if (!files.length || files.length > 32) return Promise.reject(new FileSystemError("invalid_batch", "Write batch must contain 1–32 files"));
+    return this.mutate(async tx => {
+      const result: FileStat[] = [], paths = new Set<string>();
+      for (const file of files) {
+        const path = resolvePath(file.path);
+        if (paths.has(path)) throw new FileSystemError("invalid_batch", `Duplicate file path: ${displayPath(path)}`);
+        paths.add(path);
+        if (typeof file.content !== "string") throw new FileSystemError("invalid_content", "File content must be text");
+        const size = new TextEncoder().encode(file.content).byteLength;
+        if (size > MAX_FILE_BYTES) throw new FileSystemError("quota", "File exceeds 512 KiB");
+        await requireNode(tx, parent(path), "directory");
+        const previous = await tx.get(path);
+        if (previous?.kind === "directory") throw new FileSystemError("wrong_kind", "Cannot write to a directory");
+        checkRevision(previous, file.expectedRevision);
+        const now = Date.now();
+        const node: FileStat = { path, kind: "file", size, revision: (previous?.revision ?? 0) + 1, updatedAt: now, createdAt: previous?.createdAt ?? now };
+        await tx.save(node, file.content); result.push(node);
+      }
+      return result;
+    });
+  }
+  mkdir(path: string, options: { recursive?: boolean } = {}): Promise<FileStat> {
+    return this.mutate(async tx => {
+      const create = async (target: string): Promise<FileStat> => {
+        if (await tx.get(target)) return requireNode(tx, target, "directory");
+        if (options.recursive) await create(parent(target)); else await requireNode(tx, parent(target), "directory");
+        const node = directory(target); await tx.save(node); return node;
       };
-      const result = create(resolved);
-      validateBudget(nodes);
-      return { ...result };
+      return create(resolvePath(path));
     });
   }
   remove(path: string): Promise<void> {
-    return this.access(true, (nodes) => {
+    return this.mutate(async tx => {
       const resolved = resolvePath(path);
       if (resolved === VFS_HOME) throw new FileSystemError("protected", "Cannot remove ~");
-      requireNode(nodes, resolved);
-      if ([...nodes.keys()].some((key) => key.startsWith(resolved + "/"))) throw new FileSystemError("not_empty", "Directory is not empty");
-      nodes.delete(resolved);
+      await requireNode(tx, resolved);
+      if ((await tx.children(resolved)).length) throw new FileSystemError("not_empty", "Directory is not empty");
+      await tx.removeNode(resolved);
     });
   }
   rename(from: string, to: string, options: WriteOptions = {}): Promise<void> {
-    return this.access(true, (nodes) => {
+    return this.mutate(async tx => {
       const source = resolvePath(from), target = resolvePath(to);
-      const previous = requireNode(nodes, source);
-      if (options.expectedRevision !== undefined && previous.revision !== options.expectedRevision) throw new FileSystemError("conflict", "Source changed before rename");
+      const node = await requireNode(tx, source); checkRevision(node, options.expectedRevision);
       if (source === VFS_HOME) throw new FileSystemError("protected", "Cannot rename ~");
       if (source === target) return;
       if (target.startsWith(source + "/")) throw new FileSystemError("invalid_path", "Cannot move a directory inside itself");
-      if (nodes.has(target)) throw new FileSystemError("conflict", "Destination already exists");
-      requireNode(nodes, parent(target), "directory");
-      for (const [path, node] of [...nodes]) {
-        if (path !== source && !path.startsWith(source + "/")) continue;
-        const next = target + path.slice(source.length);
-        nodes.delete(path);
-        nodes.set(next, { ...node, path: next, revision: node.revision + 1, updatedAt: Date.now() });
+      if (await tx.get(target)) throw new FileSystemError("conflict", "Destination already exists");
+      await requireNode(tx, parent(target), "directory");
+      const entries = [node];
+      for (let i = 0; i < entries.length; i++) if (entries[i].kind === "directory") entries.push(...await tx.children(entries[i].path));
+      for (const entry of entries) {
+        const content = entry.kind === "file" ? await tx.readContent(entry.path) : undefined;
+        if (entry.kind === "file" && content === undefined) throw new FileSystemError("storage", `Missing file content: ${displayPath(entry.path)}`);
+        await tx.removeNode(entry.path);
+        await tx.save({ ...entry, path: target + entry.path.slice(source.length), revision: entry.revision + 1, updatedAt: Date.now() }, content);
       }
     });
   }
 }
 
-function home(): FileNode { return { path: VFS_HOME, kind: "directory", content: "", revision: 1, updatedAt: Date.now(), createdAt: Date.now() }; }
-
 export class MemoryFileSystem extends BaseFileSystem {
-  private nodes = new Map<string, FileNode>([[VFS_HOME, home()]]);
-  protected async access<T>(write: boolean, operation: (nodes: Map<string, FileNode>) => T): Promise<T> {
-    const working = new Map(this.nodes);
-    const result = operation(working);
-    if (write) this.nodes = working;
+  private nodes = new Map<string, FileStat>();
+  private contents = new Map<string, string>();
+  private used?: Usage;
+  private pending: Promise<unknown> = Promise.resolve();
+  protected transaction<T>(write: boolean, operation: (tx: FileTransaction) => Promise<T>): Promise<T> {
+    const result = this.pending.then(async () => {
+      const nodes = new Map(this.nodes), contents = new Map(this.contents);
+      let usage = this.used && { ...this.used };
+      const result = await operation({
+        get: async path => { const node = nodes.get(path); return node && { ...node }; },
+        children: async path => [...nodes.values()].filter(node => parent(node.path) === path).map(node => ({ ...node })),
+        put: async node => { nodes.set(node.path, { ...node }); },
+        delete: async path => { nodes.delete(path); contents.delete(path); },
+        readContent: async path => contents.get(path),
+        writeContent: async (path, content) => { contents.set(path, content); },
+        usage: async () => usage,
+        saveUsage: async value => { usage = { ...value }; }
+      });
+      if (write) { this.nodes = nodes; this.contents = contents; this.used = usage; }
+      return result;
+    });
+    this.pending = result.then(() => undefined, () => undefined);
     return result;
   }
 }
 
-/** Nodes are scoped by workspace; compare-and-write happens inside one IDB transaction. */
+function request<T>(operation: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => { operation.onsuccess = () => resolve(operation.result); operation.onerror = () => reject(operation.error); });
+}
+/** Metadata, contents and usage commit together; ordinary operations read only necessary keys. */
 export class IndexedDbFileSystem extends BaseFileSystem {
   private database?: Promise<IDBDatabase>;
-  constructor(private readonly factory: IDBFactory, private readonly workspaceId = "default", private readonly databaseName = "agent-go-round.files.v1") {
+  constructor(private readonly factory: IDBFactory, private readonly workspaceId = "default") {
     super();
     if (!workspaceId || workspaceId.length > 128) throw new FileSystemError("invalid_workspace", "Invalid workspace identity");
   }
   private open(): Promise<IDBDatabase> {
     return this.database ??= new Promise((resolve, reject) => {
-      const request = this.factory.open(this.databaseName, 2);
-      request.onupgradeneeded = () => {
-        const store = request.result.objectStoreNames.contains("nodes") ? request.transaction!.objectStore("nodes") : request.result.createObjectStore("nodes", { keyPath: "key" });
-        if (!store.indexNames.contains("workspace")) store.createIndex("workspace", "workspace");
-        if (!store.indexNames.contains("parent")) store.createIndex("parent", ["workspace", "parent"]);
-        const cursor = store.openCursor();
-        cursor.onsuccess = () => {
-          const entry = cursor.result;
-          if (!entry) return;
-          const row = entry.value;
-          entry.update({ ...row, parent: parent(row.node.path), node: { ...row.node, createdAt: row.node.createdAt ?? row.node.updatedAt } });
-          entry.continue();
-        };
+      const opening = this.factory.open(VFS_DATABASE, 1);
+      opening.onupgradeneeded = () => {
+        const nodes = opening.result.createObjectStore("nodes", { keyPath: "key" });
+        nodes.createIndex("workspace", "workspace"); nodes.createIndex("parent", ["workspace", "parent"]);
+        opening.result.createObjectStore("contents", { keyPath: "key" });
+        opening.result.createObjectStore("usage", { keyPath: "workspace" });
       };
-      request.onerror = () => { this.database = undefined; reject(new FileSystemError("storage", request.error?.message ?? "Cannot open files database")); };
-      request.onblocked = () => { this.database = undefined; reject(new FileSystemError("blocked", "Close other app windows to upgrade the files database")); };
-      request.onsuccess = () => {
-        request.result.onversionchange = () => { request.result.close(); this.database = undefined; };
-        resolve(request.result);
-      };
+      opening.onerror = () => { this.database = undefined; reject(new FileSystemError("storage", opening.error?.message ?? "Cannot open files database")); };
+      opening.onblocked = () => { this.database = undefined; reject(new FileSystemError("blocked", "Close other app windows to open the files database")); };
+      opening.onsuccess = () => { const db = opening.result; db.onversionchange = () => { db.close(); this.database = undefined; }; resolve(db); };
     });
   }
-  override async stat(path: string): Promise<FileNode> {
-    const resolved = resolvePath(path);
+  protected async transaction<T>(write: boolean, operation: (tx: FileTransaction) => Promise<T>): Promise<T> {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction("nodes");
-      const request = tx.objectStore("nodes").get(this.key(resolved));
-      let node: FileNode | undefined;
-      request.onsuccess = () => { node = request.result?.node ?? (resolved === VFS_HOME ? home() : undefined); };
-      tx.oncomplete = () => node ? resolve({ ...node }) : reject(new FileSystemError("not_found", `Not found: ${displayPath(resolved)}`));
-      tx.onabort = () => reject(new FileSystemError("storage", tx.error?.message ?? "File read failed"));
-    });
-  }
-  override async readFile(path: string): Promise<FileNode> {
-    const node = await this.stat(path);
-    if (node.kind !== "file") throw new FileSystemError("wrong_kind", `Expected file: ${displayPath(node.path)}`);
-    return node;
-  }
-  override async listDirectory(path: string): Promise<FileNode[]> {
-    const directory = await this.stat(path);
-    if (directory.kind !== "directory") throw new FileSystemError("wrong_kind", `Expected directory: ${displayPath(directory.path)}`);
-    const db = await this.open();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction("nodes");
-      const request = tx.objectStore("nodes").index("parent").getAll([this.workspaceId, directory.path]);
-      let result: FileNode[] = [];
-      request.onsuccess = () => { result = request.result.map((row: { node: FileNode }) => row.node).sort((a: FileNode, b: FileNode) => a.path.localeCompare(b.path)); };
-      tx.oncomplete = () => resolve(result);
-      tx.onabort = () => reject(new FileSystemError("storage", tx.error?.message ?? "Directory read failed"));
-    });
-  }
-  protected async access<T>(write: boolean, operation: (nodes: Map<string, FileNode>) => T): Promise<T> {
-    const db = await this.open();
-    return new Promise<T>((resolve, reject) => {
-      const tx = db.transaction("nodes", write ? "readwrite" : "readonly");
-      const store = tx.objectStore("nodes");
-      const request = store.index("workspace").getAll(this.workspaceId);
-      let result: T;
-      let failure: unknown;
-      request.onsuccess = () => {
-        try {
-          const rows = request.result as Array<{ key: string; workspace: string; node: FileNode }>;
-          const nodes = new Map(rows.map((row) => [row.node.path, row.node]));
-          const before = new Map(nodes);
-          if (!nodes.has(VFS_HOME)) nodes.set(VFS_HOME, home());
-          result = operation(nodes);
-          if (write) {
-            for (const path of before.keys()) if (!nodes.has(path)) store.delete(this.key(path));
-            for (const [path, node] of nodes) if (before.get(path) !== node) store.put({ key: this.key(path), workspace: this.workspaceId, parent: parent(path), node });
-          }
-        } catch (error) { failure = error; tx.abort(); }
-      };
+      const tx = db.transaction(["nodes", "contents", "usage"], write ? "readwrite" : "readonly");
+      const nodes = tx.objectStore("nodes"), contents = tx.objectStore("contents"), usage = tx.objectStore("usage");
+      const key = (path: string) => JSON.stringify([this.workspaceId, path]);
+      let result: T, failure: unknown;
       tx.oncomplete = () => resolve(result);
       tx.onabort = () => reject(failure ?? new FileSystemError("storage", tx.error?.message ?? "Files transaction aborted"));
-      tx.onerror = () => { /* onabort reports the final transaction outcome. */ };
+      tx.onerror = () => {};
+      void operation({
+        get: async path => (await request(nodes.get(key(path))))?.node,
+        children: async path => (await request(nodes.index("parent").getAll([this.workspaceId, path]))).map(row => row.node),
+        put: async node => { await request(nodes.put({ key: key(node.path), workspace: this.workspaceId, parent: parent(node.path), node })); },
+        delete: async path => { await request(nodes.delete(key(path))); await request(contents.delete(key(path))); },
+        readContent: async path => (await request(contents.get(key(path))))?.content,
+        writeContent: async (path, content) => { await request(contents.put({ key: key(path), content })); },
+        usage: async () => { const row = await request(usage.get(this.workspaceId)); return row && { count: row.count, bytes: row.bytes }; },
+        saveUsage: async value => { await request(usage.put({ workspace: this.workspaceId, ...value })); }
+      }).then(value => { result = value; }).catch(error => { failure = error; tx.abort(); });
     });
   }
-  private key(path: string): string { return JSON.stringify([this.workspaceId, path]); }
 }

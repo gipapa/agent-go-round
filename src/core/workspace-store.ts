@@ -45,16 +45,6 @@ export class WorkspacePersistenceError extends Error {
   }
 }
 
-export interface WorkspaceStore {
-  load(): Promise<WorkspaceSnapshot | undefined>;
-  save(snapshot: WorkspaceSnapshot): Promise<void>;
-  remove(): Promise<void>;
-}
-
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 export function validateWorkspaceSnapshot(snapshot: unknown): WorkspaceSnapshot {
   if (!snapshot || typeof snapshot !== "object") throw new WorkspacePersistenceError("Workspace snapshot is not an object");
   const value = snapshot as Partial<WorkspaceSnapshot>;
@@ -78,63 +68,7 @@ export function validateWorkspaceSnapshot(snapshot: unknown): WorkspaceSnapshot 
     if (tab.editor && (typeof tab.editor.path !== "string" || typeof tab.editor.content !== "string" || !Number.isInteger(tab.editor.revision))) throw new WorkspacePersistenceError("Invalid editor draft");
     if (tabIds.has(tab.id)) throw new WorkspacePersistenceError(`Workspace contains duplicate tab id: ${tab.id}`);
     tabIds.add(tab.id);
-    if (tab.session.version !== 1 || typeof tab.session.sessionId !== "string" || !tab.session.sessionId || !Array.isArray(tab.session.messages)) {
-      throw new WorkspacePersistenceError(`Workspace tab ${tab.id} contains an invalid session snapshot`);
-    }
     validateSessionSnapshot(tab.session);
   }
   return value as WorkspaceSnapshot;
-}
-
-export class MemoryWorkspaceStore implements WorkspaceStore {
-  private snapshot?: WorkspaceSnapshot;
-
-  async load(): Promise<WorkspaceSnapshot | undefined> {
-    return this.snapshot ? clone(this.snapshot) : undefined;
-  }
-
-  async save(snapshot: WorkspaceSnapshot): Promise<void> {
-    this.snapshot = clone(validateWorkspaceSnapshot(snapshot));
-  }
-
-  async remove(): Promise<void> {
-    this.snapshot = undefined;
-  }
-}
-
-export class LocalStorageWorkspaceStore implements WorkspaceStore {
-  constructor(private readonly storage: Pick<Storage, "getItem" | "setItem" | "removeItem">, private readonly key = "agent-go-round.workspace") {}
-
-  async load(): Promise<WorkspaceSnapshot | undefined> {
-    let raw: string | null;
-    try {
-      raw = this.storage.getItem(this.key);
-    } catch (error) {
-      throw new WorkspacePersistenceError("Unable to read workspace storage", { cause: error });
-    }
-    if (raw === null) return undefined;
-    try {
-      return clone(validateWorkspaceSnapshot(JSON.parse(raw)));
-    } catch (error) {
-      if (error instanceof WorkspacePersistenceError) throw error;
-      throw new WorkspacePersistenceError("Stored workspace snapshot is not valid JSON", { cause: error });
-    }
-  }
-
-  async save(snapshot: WorkspaceSnapshot): Promise<void> {
-    const valid = validateWorkspaceSnapshot(snapshot);
-    try {
-      this.storage.setItem(this.key, JSON.stringify(valid));
-    } catch (error) {
-      throw new WorkspacePersistenceError("Unable to write workspace storage", { cause: error });
-    }
-  }
-
-  async remove(): Promise<void> {
-    try {
-      this.storage.removeItem(this.key);
-    } catch (error) {
-      throw new WorkspacePersistenceError("Unable to remove workspace storage", { cause: error });
-    }
-  }
 }

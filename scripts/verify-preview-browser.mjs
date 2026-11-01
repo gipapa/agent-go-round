@@ -37,7 +37,7 @@ async function connect() {
 }
 async function durable(workspace = workspaceId) {
   await new Promise(resolve => setTimeout(resolve, 500));
-  return evaluate(`(async()=>{const rows=async(name,store)=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(name);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});return new Promise((resolve,reject)=>{const t=db.transaction(store),r=t.objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);t.oncomplete=()=>db.close()})};return {files:(await rows('agent-go-round.files.v1','nodes')).filter(r=>r.workspace===${JSON.stringify(workspace)}).map(r=>r.node),records:(await rows('agent-go-round.conversations.v1','records')).filter(r=>r.workspace===${JSON.stringify(workspace)})}})()`);
+  return evaluate(`(async()=>{const rows=async(name,store)=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(name);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});return new Promise((resolve,reject)=>{const t=db.transaction(store),r=t.objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);t.oncomplete=()=>db.close()})};const contents=new Map((await rows('agent-go-round.vfs','contents')).map(r=>[r.key,r.content]));return {files:(await rows('agent-go-round.vfs','nodes')).filter(r=>r.workspace===${JSON.stringify(workspace)}).map(r=>({...r.node,...(r.node.kind==='file'?{content:contents.get(r.key)}:{})})),records:(await rows('agent-go-round.sessions','records')).filter(r=>r.workspace===${JSON.stringify(workspace)})}})()`);
 }
 const workspaceId = `preview-${Date.now()}`;
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", workspaceId);
@@ -46,7 +46,6 @@ const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await wait("Boolean(document.querySelector('#send') && !document.querySelector('#send').disabled)"); await call("snapshot");
   await send('write ' + JSON.stringify({ files: [
-    { path: "~/AGENTS.md", content: "即使使用者使用英文提問，也必須使用繁體中文回答。" },
     { path: "~/main.html", content: '<!doctype html><html lang="zh-Hant"><head><title>Preview acceptance</title><link rel="stylesheet" href="styles.css"></head><body><h1 id="headline">Original title</h1><p>這個頁面來自 IndexedDB。</p><img src="logo.svg" alt="VFS mark"><script>parent.__pageScriptRan=true</script></body></html>' },
     { path: "~/styles.css", content: 'body{background:#f6f3ed;padding:40px;font-family:system-ui}h1{color:rgb(17,34,51)}img{width:48px;height:48px}' },
     { path: "~/logo.svg", content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#8360af"/></svg>' }

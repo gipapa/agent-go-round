@@ -50,7 +50,7 @@ try {
   assert(await evaluate("(() => {const result=JSON.parse([...document.querySelectorAll('#terminal .line-content')].at(-1).textContent);return result.path==='/home/user/Case.MD'&&result.content==='MiXeD';})()"), "Mixed-case commands changed path or content");
   check("mixed-case file commands preserve path and content case");
   await send("ls");
-  assert(await evaluate("[...document.querySelectorAll('#terminal .line-content')].at(-1).textContent.split(String.fromCharCode(10)).join(',')==='Case.MD,bin'"), "ls did not list current directory names");
+  assert(await evaluate("[...document.querySelectorAll('#terminal .line-content')].at(-1).textContent.split(String.fromCharCode(10)).join(',')==='Case.MD,agents.md,bin,skills'"), "ls did not list current directory names");
   await send("cat Case.MD");
   assert(await evaluate("[...document.querySelectorAll('#terminal .line-content')].at(-1).textContent==='MiXeD'"), "cat did not display raw content");
   for (const command of ["ls", "ai", "edit", "preview", "history", "demo"]) {

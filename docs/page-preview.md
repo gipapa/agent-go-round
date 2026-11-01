@@ -29,7 +29,7 @@ Page view 同樣有 Pi launcher。「工作區」連結可另開 shell/editor。
 
 手機／窄螢幕與 popup 僅顯示直式 tab 列，提供新增、切換及關閉；桌面工作區僅顯示橫式列。Popup loader 傳入 `tabs=vertical`，即使加寬 popup 也維持直式。兩種版面都保留 provider settings 入口。
 
-Terminal 會列出簡易 bash 支援的內建指令及 ~/bin 檔案工具。指令名稱不分大小寫，例如 `LS`、`Read`、`AI --NEW`、`Preview`；路徑、內容、搜尋文字與 session ID 保留大小寫。啟動 agent 使用 `ai`，另開／恢復對話使用 `ai --new`、`ai --resume ID`；`/exit` 返回 shell。技能仍放在 `~/.pi/skills`。
+Terminal 會列出簡易 bash 支援的內建指令及 ~/bin 檔案工具。指令名稱不分大小寫，例如 `LS`、`Read`、`AI --NEW`、`Preview`；路徑、內容、搜尋文字與 session ID 保留大小寫。啟動 agent 使用 `ai`，另開／恢復對話使用 `ai --new`、`ai --resume ID`；`/exit` 返回 shell。技能仍放在 `~/skills`。
 
 手機與觸控裝置的輸入欄位採 16px。鍵盤縮小可視區時，保留直式 tab 列並暫時隱藏額外標題，把 composer 收成一列，保留可捲動的 terminal。App 和 popup 同時跟隨 visual viewport 的高度、寬度與位移；popup iframe 只調整尺寸，保留草稿和對話。鍵盤收起時恢復原版面。
 

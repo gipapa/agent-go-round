@@ -9,10 +9,10 @@
 | 項目 | 已完成內容 | 驗證與邊界 |
 |---|---|---|
 | F0：歷史與 identity | 每 tab provider／session；reload、重連、關 tab 後可恢復，提供 history／resume | 檢查實際 provider request 保留舊問題與回答；恢復不重播副作用 |
-| F1：IndexedDB VFS | 共用 async filesystem、路徑與目錄、revision、批次交易、workspace 隔離；對話與事件亦遷入 IndexedDB | CRUD、衝突、rollback、migration；主要處理 UTF-8 文字檔 |
+| F1：IndexedDB VFS | 共用 async filesystem、路徑與目錄、revision、批次交易、workspace 隔離；對話與事件統一使用 IndexedDB | CRUD、衝突、rollback；主要處理 UTF-8 文字檔 |
 | F2：shell／editor／agent | 新 tab 位於 `~`；簡易 bash、文字 editor、`ai`／`/exit`；九個預設 bin 工具與 JS 擴充 | 六個檔案工具加 skill_load、read_host_page、help；Worker／capability boundary，非完整作業系統 bash |
 | F3：檔案式規則與 skills | AGENTS.md／agents.md、skill catalog／按需載入、references、來源 revision；active skill 每輪刷新 | 單獨 AGENTS.md 的英文問中文答，以及 rules／skills 變更驗證 |
-| F4：笑話驗收 | 五檔讀取與評分、修改後 reload／重連再評分、agent 建五檔後讀回 | SDK 使用 GPT-OSS 120B，production browser 使用 Qwen，三任務均通過；不同模型的 quota failure 另存 |
+| F4：笑話驗收 | 五檔讀取與評分、修改後 reload／重連再評分、agent 建五檔後讀回 | 最新加強驗收仍有漏讀參考檔與 quota 失敗，見笑話驗收文件 |
 | F5：主頁與 popup | main.html／相對 CSS／SVG 預覽、獨立 page view、workspace／surface binding、agent 改頁面後刷新 | Groq GPT-OSS 20B 的七項整合檢查通過；刷新與切 tab 保留 popup，reload 可續聊 |
 | 指令操作補齊 | 啟動關鍵字統一為 `ai`；內建與自訂工具名稱、AI options、固定子命令不分大小寫 | `LS`、`Read`、`AI --NEW`、`DeMo JoKeS` 等可用；路徑、內容、JSON、session ID 保留大小寫 |
 | 手機鍵盤修正 | 16px 輸入、可視區寬高與位移同步、精簡 composer／chrome；popup 保留草稿 | 瀏覽器模擬通過；iPhone Safari 原生鍵盤與觸控仍待實機驗收 |
@@ -27,11 +27,35 @@ Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動�
 
 `read_host_page` 與 AI `help` 已統一放進 ~/bin 的 JS／manifest，shell 與 AI 共用執行入口；bridge 只提供受控 capability。無宿主時明確回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」。Terminal 新增 shell 輸出、工具結果或 AI 串流時自動捲到底部，沒有新內容時保留手動捲動位置。
 
-工具 `.js` 留在 `~/bin`，說明與 JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`。安裝／rehash 自動搬移舊 manifest，自訂內容保留，新舊路徑同名時回報衝突；restore-bin 使用新目錄。新增搬移可重入與衝突保留回歸，總計 115 項測試。
+工具 `.js` 留在 `~/bin`，說明與 JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`。安裝只補缺檔，rehash 只載入目前工具，restore-bin 明確重設所選工具。
+
+## 程式精簡與資料策略
+
+這是新專案，開發期間可直接拋棄舊工作區，不維護 migration 或舊格式 fallback。檔案只使用 `agent-go-round.vfs`，對話／layout／events 只使用 `agent-go-round.sessions`，皆從目前 schema 建立；舊命名空間不讀取。
+
+本輪盤點已移除：skills 舊目錄搬移、LocalStorage 對話匯入及三套 LocalStorage store、舊 IndexedDB 補欄位、manifest 搬移、內建 read／write 舊版本比對升級、舊 find 語法，以及另一套記憶體 skill loader／prompt 組裝。Workspace 測試改用正式 IndexedDB adapter；重複的 snapshot 驗證已合併。
+
+目前保留的儲存路徑為 IndexedDB；LocalStorage 只保存使用者選擇記住的 provider 設定。Memory session／event／filesystem 供 SDK 或離線測試使用。交易、revision／writer lease、恢復時不重播副作用與 iframe bridge identity 驗證，都是目前功能所需的檢查。
+
+## VFS 與 Terminal 的早期重構
+
+2026-11-01 實作完成：136 項功能回歸及 TypeScript strict／unused 檢查通過。以 VFS 存取檔案、tools、skills 與 Terminal 維護為主，已整理下列邊界；維持現有功能與單一 Pi loop。
+
+| 項目 | 原問題 | 重構結果與驗收 |
+|---|---|---|
+| VFS 合約 | metadata 與正文混在一起；ls -l 讀全文計算大小。 | `FileStat` 僅含 metadata／UTF-8 byte size；`FileNode` 才有正文。`workspace-bootstrap.ts` 管理預設檔案。驗證 Unicode bytes、metadata 不帶 content。 |
+| IndexedDB 存取 | 寫檔、寫事件先掃整個 workspace。 | nodes／contents／usage 分開儲存；transaction 只存取必要 keys，配額按差額更新。Session 使用精確 key 與 prefix index。驗證配額回收、滿額 rename、回滾、跨視窗衝突、寫檔不讀其他正文，以及事件追加不掃對話。 |
+| Terminal 顯示與控制 | 串流重建全畫面，命令與 DOM 混在 main。 | `terminal/view.ts` 保留訊息節點、按 frame 合併串流；`terminal/controller.ts` 分派 UI actions。驗證 500 行歷史、文字選取、工具展開、捲動與切 tab 時取消待更新 frame。 |
+| 命令與工具邊界 | 重複解析，help／options／capability 名單分散。 | `shell-command.ts` 解析一次；`command-definitions.ts` 統一 action、選項、參數數量與 help。`file-capabilities.ts` 統一 VFS RPC 名單、型別及 host validation；Worker 使用同一名單。VFS manifest 繼續提供工具說明。 |
+
+重構前，以 fake-indexeddb 建立 100 個各 4096 字元的 ASCII 檔案，覆寫其中一檔為單一字元會先載入 409600 字元；列目錄仍回傳全部正文。重構後的回歸驗證寫入不呼叫 workspace getAll、不讀 contents；stat／list 也不讀正文。這是資料存取量驗證，不是耗時 benchmark。
+
+二進位檔案、通用 plugin framework、mount 與完整 POSIX shell 留待實際需求，不加入 migration。TypeScript 已啟用 noUnusedLocals／noUnusedParameters。正式 Chrome 的手機／popup 十一項檢查，以及 `test:vfs:browser` 的五項原生儲存／串流／reload 檢查通過；原生 iPhone 鍵盤仍待實機驗收。
 
 ## 目前驗證基線
 
-- 本次本機回歸為 23 個檔案、115 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI／部署結果於 push 後另行確認。
+- 本次本機回歸為 25 個檔案、136 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI／部署結果於 push 後另行確認。
+- `npm run test:vfs:browser` 五項通過：100 檔情境的單字元覆寫與 ls -l 均為 0 次正文讀取／workspace 掃描、skill 路徑、串流 DOM／選取保存、reload 的對話／revision 保存；報告為 `test-results/vfs-terminal-browser.json`，不需 API key。
 - `npm run test:mobile:browser` 的十一項檢查通過，涵蓋桌面／手機單一 tab 列與操作、ls／cat／help、混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
 - `npm run test:host:browser` 的六項檢查通過：bin JS／manifest、shell 分頁與新訊息自動捲動；popup 檔案隔離；錯誤 instance 拒絕；真實 Groq GPT-OSS 20B 經 bin／Worker／bridge 讀取 HTML 並辨識 gipapa；宿主 reload 保留 workspace 與檔案；直接開 app 的無宿主錯誤。報告為 `test-results/host-browser.json`，畫面為 `test-results/host-popup.png`；無 key 時 live 任務明列 skipped。
 - [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md) 分別記錄真實模型、任務、限制與重跑方式。報告由 runner 寫入本機 `test-results/`，不納入 Git。
@@ -55,7 +79,7 @@ MCP、遠端磁碟、policy-gated 模型跨 tab 詢問、ChatGPT 訂閱 adapter�
 
 ## 早期規劃與實作紀錄（2026-10-31）
 
-以下保留原始 M0–M4 設計與當時狀態，其中的「下一個」「待完成」及舊 storage／UI 描述屬歷史紀錄。當前完成項目與後續順序以上方表格為準；外部 provider／授權規格在實作前需重新查核。
+以下保留原始 M0–M4 設計與當時狀態，其中的「下一個」「待完成」及舊 storage／UI 描述屬歷史紀錄。LocalStorage 對話 store、舊資料匯入及記憶體 skill loader 已移除。當前完成項目與後續順序以上方表格為準；外部 provider／授權規格在實作前需重新查核。
 
 <details>
 <summary>展開早期 M0–M4 規劃與當時驗收紀錄</summary>
@@ -74,7 +98,7 @@ MCP、遠端磁碟、policy-gated 模型跨 tab 詢問、ChatGPT 訂閱 adapter�
 - `master` 使用獨立根提交，從本規劃、README 與必要 repository metadata 開始。
 - 舊版 gate 的 pending/failure 保持原狀，不因重建而改列通過。新版依自己的產品範圍建立驗收條件。
 - 舊版不是新版依賴。移植任何模組前，確認其依賴、保留行為與回歸案例；禁止為沿用一個 helper 搬入整個 App。
-- 不承諾新版能直接讀取舊版資料。若未來需要 migration，另訂格式與恢復方案；不得隱性覆寫舊 browser storage。
+- 開發期間直接使用目前格式的工作區，不提供舊資料 migration 或相容分支。
 
 優先評估的舊版資產：
 

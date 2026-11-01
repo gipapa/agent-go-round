@@ -8,7 +8,7 @@
 
 - 啟動 agent 統一使用 `ai`，另提供 `ai --new`、`ai --resume ID` 和 `/exit`。Terminal 明列「簡易 bash」與支援指令，內建及自訂工具名稱不分大小寫；AI options、固定子命令與 agent 控制指令亦可混用大小寫。路徑、內容、搜尋文字、JSON 欄位、skill 名稱及 session ID 不改寫。
 - 手機與觸控輸入採 16px；手機與 popup 僅保留直式 tab 列、桌面僅保留橫式列；鍵盤縮小可視區時保留直式列並精簡標題與 composer，app 和 popup 跟隨可視區寬高及位移，保留捲動、草稿與對話。模擬鍵盤回歸通過，原生 iPhone Safari 實機驗收尚未完成。
-- 最新回歸共 115 項通過；production 瀏覽器的混合大小寫／手機檢查十一項通過。Host browser 的 bin／shell／分頁／捲動、workspace 隔離、bridge identity、真實模型讀取、reload 保存、無宿主錯誤六項檢查通過。真實任務的模型、quota 差異與證據見對應驗收文件。
+- 最新回歸共 136 項通過；先前 production 瀏覽器的混合大小寫／手機檢查十一項通過。Host browser 的 bin／shell／分頁／捲動、workspace 隔離、bridge identity、真實模型讀取、reload 保存、無宿主錯誤六項檢查通過。真實任務的模型、quota 差異與證據見對應驗收文件。
 - 外部 popup 未指定 workspace 時建立獨立 `popup-*` 工作區，直接開啟 app 使用 `default`；宿主 sessionStorage 依 URL／掛載順序恢復身份。VFS 預覽明確綁定 workspace，維持原共享檔案契約。以工作區隔離承載來源頁面，不新增專用 tab。
 - Popup 的 `read_host_page` 可按需讀取實際呼叫頁面 HTML；一般頁面排除 widget、script／style 與表單控制項，VFS 預覽回傳目前 entry 的原始 HTML／revision。Host page demo 包含「這一頁的作者是gipapa」，已由 Groq GPT-OSS 20B 實際讀取並回答；報告見 `test-results/host-browser.json`。
 - F5 首輪僅支援文字 HTML／CSS／SVG。頁面 JavaScript、二進位資源、VFS 匯出／發布、完整長對話 compaction 與進階歷史管理尚未實作。
@@ -68,16 +68,16 @@ IndexedDB 適合這個需求，因為它可保存結構化資料與檔案內容�
 
 ### 儲存與一致性
 
-檔案使用 `agent-go-round.files.v1` database（schema 2）的 nodes store，key 包含 workspaceId／path，並建立 parent-path 索引。Session、workspace layout、writer lease 與 lifecycle events 使用 `agent-go-round.conversations.v1`（schema 1）的 records store；不同 surface 分開保存 layout，同一 workspace 共用歷史及檔案。
+檔案使用 `agent-go-round.vfs` database（schema 1）：nodes 保存 metadata，contents 保存正文，usage 保存各 workspace 的節點數與 byte 配額。Key 包含 workspaceId／path，目錄使用 parent-path 索引。Session、workspace layout、writer lease 與 lifecycle events 使用 `agent-go-round.sessions`（schema 1）的 records store，依 workspace／id 建索引；不同 surface 分開保存 layout，同一 workspace 共用歷史及檔案。
 
-- 檔案節點保存 kind、content、revision、createdAt、updatedAt；目錄與索引變更在同一 transaction 提交。
+- `FileStat` 保存 path、kind、size（UTF-8 bytes）、revision、createdAt、updatedAt；stat／list／write 回傳 metadata，readFile 才回傳帶正文的 `FileNode`。metadata、正文、配額在同一 transaction 提交，寫入僅計算該檔案的配額差額。
 - 寫入／rename 的 revision 檢查也在 transaction 內完成，成功 commit 後才能向 shell / agent 回報成功。
 - Editor 保存記錄讀取時 revision；衝突時保留未保存內容並提示重新讀取／比對。
 - 多個 browser tabs 的 session writer ownership 需有 revision／lease 檢查；通知只用於刷新 UI，不能取代資料庫內的衝突檢查。
 - 模型或工具網路等待不放在 IndexedDB transaction 裡。記錄已提交工具結果，但 reload 不自動重做 mutation。
 - storage quota、transaction abort、DB upgrade blocked 與資料損壞均顯示錯誤；正式模式不靜默改成 memory 並聲稱已保存。
-- 目前 localStorage workspace / sessions 透過可重入 migration 匯入，成功驗證後才寫 migration marker；保留原資料以便回復。v2 資料不自動覆寫，之後另做明確匯入。
-- DB ready 且 migration 完成後才啟用指令輸入，避免啟動時的預設空 workspace 覆蓋原資料。
+- 只使用目前的 IndexedDB 命名空間，不讀舊 database 或匯入 LocalStorage 對話；開發期間直接重建舊工作區。
+- DB ready 且預設檔案初始化完成後才啟用指令輸入。
 
 驗收：CRUD、中文／空白／相對路徑、空目錄、同名衝突、revision conflict、transaction failure、多 tab 共用、reload 保存，以及獨立 session 保存不被其他 running tab 阻擋。
 
@@ -122,7 +122,7 @@ AGENTS.md  documents/  jokes/
   AGENTS.md
   documents/
   jokes/
-  .pi/skills/
+  skills/
 ```
 
 操作範例：
@@ -161,17 +161,17 @@ IndexedDB 內容目前屬於該瀏覽器／origin 的本機工作區。供其他
 ### AGENTS.md
 
 - `ai` 啟動及每個 user run 前，沿 home 到 session cwd 的路徑收集 AGENTS.md，由上層到下層組合；同層只載入一次。
-- 標準檔名為 `AGENTS.md`，也接受使用者提到的 `agents.md`；同層兩者同時存在時回報歧義，不隨機選一個。
+- 新工作區預設建立 `~/agents.md`，內容為「請回覆繁體中文」。同時支援 `AGENTS.md`；既有規則不覆寫，同層兩者同時存在時回報歧義。
 - 將工作區規則作為具來源標記的 agent instructions 注入。普通 document / joke 檔案作為工具讀取資料，不能自動提升成工作區指示。
 - 每次 run 固定 instructions snapshot，保存來源路徑與 revision；檔案改動在下一個 user run 生效，畫面可檢閱本次載入來源。
 - 不因恢復 session 的舊 system prompt 而重複附加規則；組裝時替換對應來源區塊，保留原始歷史。
 
 ### Skill 結構與載入
 
-第一版產品約定全域 skill 位置為 `~/.pi/skills/<name>/SKILL.md`；這是本產品的目錄決策，後續需要時再增加專案級 discovery。
+全域 skill 位置為 `~/skills/<name>/SKILL.md`；工作區啟動時先建立空白 `~/skills/`，不預裝示例 skill。只載入目前位置，不搬移舊目錄。後續需要時再增加專案級 discovery。
 
 ```text
-~/.pi/skills/joke-master/
+~/skills/joke-master/
   SKILL.md
   references/
     scoring.md
@@ -185,7 +185,7 @@ IndexedDB 內容目前屬於該瀏覽器／origin 的本機工作區。供其他
 ```
 
 - SKILL.md 用 frontmatter 宣告 name / description，正文保存指示，相對資源路徑以 skill 目錄為基準。
-- VFS-backed loader 取代只靠 `MemorySkillLoader` 的產品路徑；Memory loader 可留作獨立 SDK / 測試用途。
+- Skill 只保留 VFS-backed loader，同一套 catalog／load 流程供 UI 與驗收使用。
 - 啟動時只提供 skill metadata catalog；符合任務時，模型呼叫 `skill_load` 從 VFS 讀入 SKILL.md，接著用 `read` 讀需要的 references 與工作檔案。
 - 同時支援 `/skill joke-master <task>` 明確選用；明確選用先載入指示，任務仍交給同一個 Pi loop。
 - `skill_load` 與 `read` 留下 path / revision / runId / toolCallId 的讀取紀錄，讀取失敗不能假裝成功。前置載入 instructions 也需留下可檢閱紀錄。
@@ -207,7 +207,7 @@ IndexedDB 內容目前屬於該瀏覽器／origin 的本機工作區。供其他
 即使使用者使用英文提問，也必須使用繁體中文回答。
 ```
 
-`~/.pi/skills/joke-master/SKILL.md`：
+`~/skills/joke-master/SKILL.md`：
 
 ```markdown
 ---
@@ -235,7 +235,7 @@ description: 讀取笑話檔案，逐一評分並選出最好笑的笑話。
 
 ### 驗證分層
 
-- Deterministic regression：VFS／IDB transactions、migration、revision conflict、shell mode、instructions 組裝、skill discovery、五檔讀取與失敗路徑；使用可記錄 request 與 tool call 的 scripted model。
+- Deterministic regression：VFS／IDB transactions、revision conflict、shell mode、instructions 組裝、skill discovery、五檔讀取與失敗路徑；使用可記錄 request 與 tool call 的 scripted model。
 - Browser smoke：正式 IndexedDB、既有 tabs、shell/editor/agent 切換、跨 tab 共用檔案、reload/resume；桌面與手機均操作。
 - 明確觸發的 Groq live acceptance：執行上述英文任務，記錄模型、讀寫檔案、版本、工具步數、語言與評分結果。區分執行契約通過與模型是否遵循指示，不把 scripted 結果當成真實模型結果。
 
@@ -244,7 +244,7 @@ description: 讀取笑話檔案，逐一評分並選出最好笑的笑話。
 | 階段 | 可驗收交付 | 依賴 | 目前狀態 |
 |---|---|---|---|
 | F0 | Groq 歷史接續、每 session provider、最小歷史重開 | 現有 core / store | 已完成，含 request boundary 驗證 |
-| F1 | IndexedDB VFS、session/workspace repositories、migration | F0 的 identity 契約 | 已完成，含交易與衝突回歸 |
+| F1 | IndexedDB VFS、session/workspace repositories | F0 的 identity 契約 | 已完成，含交易與衝突回歸 |
 | F2 | 新 tab 在 `~`、檔案指令與編輯、`ai` / `/exit`、agent 檔案工具 | F1 | 已完成，含 JS 擴充與大小寫規則 |
 | F3 | VFS AGENTS.md、skill catalog / load / references | F1 + F2 | 已完成，含來源 revision 與規則驗收 |
 | F4 | 五笑話英文問中文答、逐檔評分、agent 建檔讀回、reload 續聊 | F0–F3 | SDK／production browser 均通過 |

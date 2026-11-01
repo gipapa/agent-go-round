@@ -1,7 +1,9 @@
+import { initializeWorkspace } from "../core/workspace-bootstrap";
 // @vitest-environment node
 import { loadEnvFile } from "node:process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
+import "fake-indexeddb/auto";
 import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 import { BinRegistry } from "../core/bin";
@@ -12,7 +14,7 @@ import { installJokeDemo, JOKE_PROMPT } from "../core/joke-demo";
 import { createGroqRuntime, DEFAULT_GROQ_MODEL } from "../core/provider";
 import { AgentSession } from "../core/session";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "../core/conversations";
-import { validateJokeAnswer } from "./joke-validation";
+import { jokeContextFromFiles, validateJokeAnswer } from "./joke-validation";
 
 try { loadEnvFile(".env.local"); } catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error; }
 
@@ -22,6 +24,7 @@ describe("Groq real-model file/skill joke acceptance", () => {
     if (!apiKey) throw new Error("Set AGENT_GO_ROUND_GROQ_API_KEY in .env.local before running test:jokes");
     const factory = new IDBFactory();
     let fs = new IndexedDbFileSystem(factory, "joke-acceptance");
+    await initializeWorkspace(fs);
     await installDefaultBin(fs); await installJokeDemo(fs);
     const records = new IndexedWorkspaceRecords(factory, "joke-acceptance");
     const events = new IndexedDbSessionEventStore(records); await events.hydrate();
@@ -43,7 +46,14 @@ describe("Groq real-model file/skill joke acceptance", () => {
     let session = new AgentSession({ sessionId: "joke-live", model: runtime.model, streamFn, eventStore: events, maxToolCalls: 32, deadlineMs: 360_000 });
     const report = { provider: "groq", model: runtime.model.id, piVersion: "0.84.4", startedAt: new Date().toISOString(), tasks: [] as Array<Record<string, unknown>>, status: "running" };
     async function task(id: string, prompt: string, directory: string) {
+      const contextFiles = [];
+      for (const contextDirectory of ["~", "~/skills/joke-master", "~/skills/joke-master/references"]) {
+        for (const entry of await fs.listDirectory(contextDirectory)) if (entry.kind === "file") contextFiles.push(await fs.readFile(entry.path));
+      }
+      const context = jokeContextFromFiles(contextFiles);
       await configureFileAgent(session, fs, "/home/user", bin);
+      const requestStart = requests.length;
+      if (!session.activeSkill) expect(session.agent.state.systemPrompt).not.toContain(context.skill.content.split("---").slice(2).join("---").trim());
       const started = Date.now();
       const result = await session.prompt(prompt);
       await events.flush();
@@ -56,7 +66,8 @@ describe("Groq real-model file/skill joke acceptance", () => {
       try {
         if (result.status !== "success") throw new Error(result.error || result.status);
         if (Object.keys(files).length !== 5) throw new Error("Expected five actual joke files");
-        validateJokeAnswer(result.text, files, events.list(session.sessionId), result.runId);
+        validateJokeAnswer(result.text, files, events.list(session.sessionId), result.runId, context);
+        expect(requests[requestStart].systemPrompt).toContain(context.agents.content);
       } catch (error) { failure = error instanceof Error ? error.message : String(error); }
       const trace = events.list(session.sessionId).filter((event) => event.runId === result.runId && ["file_access", "context_loaded", "tool_finished"].includes(event.type));
       report.tasks.push({ id, status: failure ? "fail" : "pass", elapsedMs: Date.now() - started, runStatus: result.status, text: result.text, trace, ...(failure ? { failure, finalAssistant: session.agent.state.messages.filter((message) => message.role === "assistant").at(-1), toolErrors: session.agent.state.messages.filter((message) => message.role === "toolResult" && message.isError) } : {}) });

@@ -1,12 +1,13 @@
+import { executeFileCapability, FILE_METHODS, BIN_CAPABILITIES, type BinCapability, type FileMethod, type BinFileAccess } from "./file-capabilities";
 import { validateToolArguments, type TSchema } from "@earendil-works/pi-ai";
-import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, migrateBinManifests, BIN_CAPABILITIES, type BinManifest, type FileMethod, type BinCapability } from "./bin-defaults";
-import { resolvePath, VFS_HOME, type VirtualFileSystem } from "./fs";
-import { ToolOutcomeUnknownError, type SessionTool } from "./session";
+import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, type BinManifest } from "./bin-defaults";
+import { VFS_HOME, type FileNode, type VirtualFileSystem } from "./fs";
+import { ToolOutcomeUnknownError, type SessionTool, type FileReadRange } from "./session";
 import type { BinExecutor } from "./bin-sandbox";
 import { commandHelp } from "./shell-help";
 
 type LoadedBin = { manifest: BinManifest; source: string };
-export type BinFileAccess = { method: FileMethod; path: string; revision?: number };
+export type { BinFileAccess } from "./file-capabilities";
 export const NO_HOST_PAGE = "目前沒有連接宿主頁，請從 Host page 開啟 popup。";
 export type BinHostContext = { sessionId?: string; toolCallId?: string };
 export class BinRegistry {
@@ -17,7 +18,6 @@ export class BinRegistry {
 
   /** Load source + metadata once while idle; a running tool sees an immutable definition. */
   async reload(): Promise<void> {
-    await migrateBinManifests(this.fs);
     const next = new Map<string, LoadedBin>();
     const files = await this.fs.listDirectory(BIN_MANIFEST_DIRECTORY);
     for (const file of files) {
@@ -50,6 +50,7 @@ export class BinRegistry {
     const validated = validateToolArguments({ name, description: manifest.description, parameters: manifest.parameters as TSchema }, { type: "toolCall", id: "bin", name, arguments: args as Record<string, unknown> });
     let active = true;
     let mutations = 0;
+    const reads: FileNode[] = [];
     const execution = new AbortController();
     const abort = () => execution.abort();
     if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
@@ -71,49 +72,41 @@ export class BinRegistry {
         if (!Array.isArray(values) || typeof values[0] !== "string" || !loadSkill) throw new Error("Skill runtime unavailable; enter Pi to load a catalog skill");
         return loadSkill(values[0], execution.signal);
       }
-      if (method === "writeFiles") {
-        if (!Array.isArray(values) || !Array.isArray(values[0]) || !values[0].length || values[0].length > 32) throw new Error("Invalid file write batch");
-        const files = values[0].map((entry: { path?: unknown; content?: unknown; expectedRevision?: unknown }) => {
-          if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string" || (entry.expectedRevision !== undefined && (!Number.isInteger(entry.expectedRevision) || (entry.expectedRevision as number) < 0))) throw new Error("Invalid file in write batch");
-          return { path: resolvePath(entry.path, cwd), content: entry.content, expectedRevision: entry.expectedRevision as number | undefined };
-        });
-        mutations++;
-        try {
-          const result = await this.fs.writeFiles(files);
-          for (const file of result) accessed({ method: "writeFile", path: file.path, revision: file.revision });
-          return result;
-        } catch (error) { mutations--; throw error; }
-      }
-      if (!Array.isArray(values) || typeof values[0] !== "string") throw new Error("Invalid filesystem arguments");
-      const path = resolvePath(values[0], cwd);
-      if (method === "stat") { const node = await this.fs.stat(path); return { ...node, content: "" }; }
-      if (method === "listDirectory") return (await this.fs.listDirectory(path)).map((node) => ({ ...node, content: "" }));
-      if (method === "readFile") {
-        const file = await this.fs.readFile(path);
-        accessed({ method, path, revision: file.revision });
-        return file;
-      }
-      // Validate in the trusted host, not only inside user-editable JS.
-      if (method === "writeFile") {
-        if (typeof values[1] !== "string") throw new Error("File content must be text");
-        const options = values[2] as { expectedRevision?: unknown } | undefined;
-        const expectedRevision = options?.expectedRevision;
-        if (expectedRevision !== undefined && (!Number.isInteger(expectedRevision) || (expectedRevision as number) < 0)) throw new Error("Invalid expectedRevision");
-        mutations++;
-        try {
-          const file = await this.fs.writeFile(path, values[1], { expectedRevision: expectedRevision as number | undefined });
-          accessed({ method, path, revision: file.revision });
-          return file;
+      if (!(FILE_METHODS as readonly string[]).includes(method)) throw new Error(`Unknown file capability: ${method}`);
+      return executeFileCapability(method as FileMethod, values, {
+        fs: this.fs, cwd, onAccess: accessed, onRead: file => reads.push(file),
+        async mutation(operation) {
+          mutations++;
+          try { return await operation(); } catch (error) { mutations--; throw error; }
         }
-        catch (error) { mutations--; throw error; }
-      }
-      mutations++;
-      try {
-        if (method === "mkdir") return await this.fs.mkdir(path, { recursive: (values[1] as { recursive?: unknown } | undefined)?.recursive === true });
-        return await this.fs.remove(path);
-      } catch (error) { mutations--; throw error; }
+      });
     };
-    try { return await this.executor.execute(source, validated, rpc, execution.signal); }
+    try {
+      const result = await this.executor.execute(source, validated, rpc, execution.signal);
+      // An RPC read alone does not prove the tool returned the content to the model.
+      const output = result as { files?: unknown[] } | null;
+      const items = output && Array.isArray(output.files) ? output.files : [result];
+      for (const file of reads) {
+        let readRange: FileReadRange | undefined;
+        for (const item of items) {
+          if (!item || typeof item !== "object") continue;
+          const returned = item as { path?: unknown; revision?: unknown; content?: unknown; totalLines?: unknown; nextOffset?: unknown };
+          if (returned.path !== file.path || returned.revision !== file.revision || typeof returned.content !== "string") continue;
+          const lines = file.content.split("\n");
+          if (returned.totalLines === undefined && returned.content === file.content) {
+            readRange = { startLine: 1, endLine: lines.length, totalLines: lines.length };
+          } else if (returned.totalLines === lines.length) {
+            const startLine = (validated as { offset?: number }).offset ?? 1;
+            const endLine = startLine + returned.content.split("\n").length - 1;
+            if (startLine >= 1 && endLine <= lines.length && returned.content === lines.slice(startLine - 1, endLine).join("\n") && returned.nextOffset === (endLine < lines.length ? endLine + 1 : undefined)) {
+              readRange = { startLine, endLine, totalLines: lines.length };
+            }
+          }
+        }
+        if (readRange) accessed({ method: "readFile", path: file.path, revision: file.revision, readRange });
+      }
+      return result;
+    }
     catch (error) {
       if (mutations > 0) throw new ToolOutcomeUnknownError(`Tool did not finish after a filesystem mutation; read back before retrying. ${error instanceof Error ? error.message : String(error)}`);
       throw error;

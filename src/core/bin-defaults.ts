@@ -1,12 +1,11 @@
+import type { BinCapability } from "./file-capabilities";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import type { VirtualFileSystem } from "./fs";
 
 export const BIN_DIRECTORY = "~/bin";
 export const BIN_MANIFEST_DIRECTORY = "~/bin/manifests";
-export const FILE_METHODS = ["stat", "readFile", "listDirectory", "writeFile", "writeFiles", "mkdir", "remove"] as const;
-export type FileMethod = typeof FILE_METHODS[number];
-export const BIN_CAPABILITIES = [...FILE_METHODS, "loadSkill", "readHostPage", "commandHelp"] as const;
-export type BinCapability = typeof BIN_CAPABILITIES[number];
+export { FILE_METHODS, BIN_CAPABILITIES } from "./file-capabilities";
+export type { FileMethod, BinCapability } from "./file-capabilities";
 export type BinManifest = {
   version: 1;
   name: string;
@@ -20,7 +19,7 @@ const revision = Type.Optional(Type.Integer({ minimum: 0 }));
 const limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 500 }));
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 
-const READ_V1_SOURCE = `async function main(args, api) {
+const READ_ONE_SOURCE = `async function main(args, api) {
   const file = await api.fs.readFile(args.path);
   const lines = file.content.split("\\n");
   const start = (args.offset || 1) - 1;
@@ -32,13 +31,13 @@ const READ_V1_SOURCE = `async function main(args, api) {
   return { path: file.path, revision: file.revision, content, totalLines: lines.length, ...(end < lines.length ? { nextOffset: end + 1 } : {}) };
 }`;
 
-const WRITE_V2_SOURCE = `async function main(args, api) {
+const WRITE_ONE_SOURCE = `async function main(args, api) {
   if (args.createParents) {
     const slash = args.path.lastIndexOf("/");
     if (slash > 0) await api.fs.mkdir(args.path.slice(0, slash), { recursive: true });
   }
   const file = await api.fs.writeFile(args.path, args.content, { expectedRevision: args.expectedRevision === undefined ? 0 : args.expectedRevision });
-  return { path: file.path, revision: file.revision, characters: file.content.length };
+  return { path: file.path, revision: file.revision, bytes: file.size };
 }`;
 
 export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
@@ -61,7 +60,7 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
     version: 1, name: "read", description: "Read UTF-8 files with revisions. path accepts one path string or an array of up to 32 paths; use an array to read independent files together. offset is a 1-based line number and limit defaults to 200. Follow nextOffset for more.",
     parameters: object({ path: Type.Union([path, Type.Array(path, { minItems: 1, maxItems: 32 })]), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit }), capabilities: ["readFile"],
     source: `async function main(args, api) {
-  const readOne = ${READ_V1_SOURCE};
+  const readOne = ${READ_ONE_SOURCE};
   if (!Array.isArray(args.path)) return readOne(args, api);
   const files = [];
   for (const path of args.path) files.push(await readOne({ ...args, path }, api));
@@ -72,7 +71,7 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
     version: 1, name: "write", description: "Write UTF-8 files. Use path/content for one file or files:[{path,content,expectedRevision?}] to create several files atomically in one call. Existing files require expectedRevision. createParents=true creates missing parent directories.",
     parameters: Type.Object({ path: Type.Optional(path), content: Type.Optional(Type.String({ maxLength: 524288 })), expectedRevision: revision, createParents: Type.Optional(Type.Boolean()), files: Type.Optional(Type.Array(object({ path, content: Type.String({ maxLength: 524288 }), expectedRevision: revision }), { minItems: 1, maxItems: 32 })) }, { additionalProperties: false, anyOf: [{ required: ["path", "content"] }, { required: ["files"] }] }), capabilities: ["writeFile", "writeFiles", "mkdir"],
     source: `async function main(args, api) {
-  const writeOne = ${WRITE_V2_SOURCE};
+  const writeOne = ${WRITE_ONE_SOURCE};
   if (!args.files) return writeOne(args, api);
   if (args.path !== undefined || args.content !== undefined) throw new Error("Use files or path/content, not both");
   if (args.createParents) {
@@ -82,7 +81,7 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
     }
   }
   const files = await api.fs.writeFiles(args.files.map(file => ({ ...file, expectedRevision: file.expectedRevision === undefined ? 0 : file.expectedRevision })));
-  return { files: files.map(file => ({ path: file.path, revision: file.revision, characters: file.content.length })) };
+  return { files: files.map(file => ({ path: file.path, revision: file.revision, bytes: file.size })) };
 }`
   },
   {
@@ -161,51 +160,10 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
   }
 ];
 
-/** Atomic renames preserve user metadata, including malformed manifests for recovery. */
-export async function migrateBinManifests(fs: VirtualFileSystem): Promise<void> {
-  await fs.mkdir(BIN_MANIFEST_DIRECTORY, { recursive: true });
-  for (const file of await fs.listDirectory(BIN_DIRECTORY)) {
-    if (file.kind !== "file" || !file.path.endsWith(".tool.json")) continue;
-    const target = `${BIN_MANIFEST_DIRECTORY}/${file.path.split("/").pop()}`;
-    try {
-      await fs.rename(file.path, target, { expectedRevision: file.revision });
-    } catch (error) {
-      // A second surface may already have moved the same file.
-      if (error instanceof Error && "code" in error && error.code === "not_found") {
-        await fs.stat(target);
-        continue;
-      }
-      throw new Error(`Cannot migrate ${file.path} to ${target}; existing files were preserved. Resolve conflicting manifests before rehash.`, { cause: error });
-    }
-  }
-}
-
-/** Seed only missing files. User edits and new bin tools survive upgrades and reloads. */
+/** Seed missing tool files; user edits survive reloads. */
 export async function installDefaultBin(fs: VirtualFileSystem): Promise<void> {
-  await migrateBinManifests(fs);
+  await fs.mkdir(BIN_MANIFEST_DIRECTORY, { recursive: true });
   for (const { source, ...manifest } of DEFAULT_BIN_TOOLS) {
-    if (manifest.name === "read") {
-      try {
-        const oldSource = await fs.readFile(`${BIN_DIRECTORY}/read.js`);
-        const oldMetadata = await fs.readFile(`${BIN_MANIFEST_DIRECTORY}/read.tool.json`);
-        const expected = { ...manifest, description: "Read UTF-8 file content and its revision. offset is a 1-based line number; limit defaults to 200. Follow nextOffset to read more.", parameters: object({ path, offset: Type.Optional(Type.Integer({ minimum: 1 })), limit }) };
-        if (oldSource.content === READ_V1_SOURCE && JSON.stringify(JSON.parse(oldMetadata.content)) === JSON.stringify(expected)) {
-          await fs.writeFiles([{ path: `${BIN_DIRECTORY}/read.js`, content: source, expectedRevision: oldSource.revision }, { path: `${BIN_MANIFEST_DIRECTORY}/read.tool.json`, content: JSON.stringify(manifest, null, 2), expectedRevision: oldMetadata.revision }]);
-        }
-      } catch (error) { if (!(error instanceof Error && "code" in error && error.code === "not_found")) throw error; }
-    }
-    if (manifest.name === "write") {
-      try {
-        const oldSource = await fs.readFile(`${BIN_DIRECTORY}/write.js`);
-        const oldMetadata = await fs.readFile(`${BIN_MANIFEST_DIRECTORY}/write.tool.json`);
-        const v2 = { ...manifest, description: "Create or replace a UTF-8 file. For an existing file read it first and supply expectedRevision. Set createParents=true to create missing parent directories.", parameters: object({ path, content: Type.String({ maxLength: 524288 }), expectedRevision: revision, createParents: Type.Optional(Type.Boolean()) }), capabilities: ["writeFile", "mkdir"] };
-        const v1 = { ...manifest, description: "Create or replace a UTF-8 file. For an existing file read it first and supply expectedRevision. Parent directories must exist.", parameters: object({ path, content: Type.String({ maxLength: 524288 }), expectedRevision: revision }), capabilities: ["writeFile"] };
-        const parents = '  if (args.createParents) {\n    const slash = args.path.lastIndexOf("/");\n    if (slash > 0) await api.fs.mkdir(args.path.slice(0, slash), { recursive: true });\n  }\n';
-        const exactV2 = oldSource.content === WRITE_V2_SOURCE && JSON.stringify(JSON.parse(oldMetadata.content)) === JSON.stringify(v2);
-        const exactV1 = oldSource.content === WRITE_V2_SOURCE.replace(parents, "") && JSON.stringify(JSON.parse(oldMetadata.content)) === JSON.stringify(v1);
-        if (exactV1 || exactV2) await fs.writeFiles([{ path: `${BIN_DIRECTORY}/write.js`, content: source, expectedRevision: oldSource.revision }, { path: `${BIN_MANIFEST_DIRECTORY}/write.tool.json`, content: JSON.stringify(manifest, null, 2), expectedRevision: oldMetadata.revision }]);
-      } catch (error) { if (!(error instanceof Error && "code" in error && error.code === "not_found")) throw error; }
-    }
     for (const [path, content] of [[`${BIN_DIRECTORY}/${manifest.name}.js`, source], [`${BIN_MANIFEST_DIRECTORY}/${manifest.name}.tool.json`, JSON.stringify(manifest, null, 2)]]) {
       try { await fs.writeFile(path, content, { expectedRevision: 0 }); }
       catch (error) { if (!(error instanceof Error && "code" in error && error.code === "conflict")) throw error; }

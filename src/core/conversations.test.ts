@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
-import { IDBFactory } from "fake-indexeddb";
+import { describe, expect, it, vi } from "vitest";
+import "fake-indexeddb/auto";
+import { IDBFactory, IDBIndex, IDBObjectStore } from "fake-indexeddb";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./conversations";
-import { MemoryWorkspaceStore, type WorkspaceSnapshot } from "./workspace-store";
+import type { WorkspaceSnapshot } from "./workspace-store";
 import { createScriptedSession } from "./scripted";
 
 function snapshot(): WorkspaceSnapshot {
@@ -26,20 +27,17 @@ describe("IndexedDB conversations", () => {
     await expect(popup.claim("conversation-a")).rejects.toThrow("another browser");
     await workspace.release("conversation-a");
   });
-  it("migrates once, preserves history after tab close, and isolates workspaces", async () => {
+  it("preserves history after tab close and isolates workspaces", async () => {
     const factory = new IDBFactory();
-    const legacy = new MemoryWorkspaceStore();
     const initial = snapshot();
-    await legacy.save(initial);
     const store = new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory));
-    await store.migrate(legacy);
+    await store.save(initial);
     expect(await store.load()).toEqual(initial);
     const changed = structuredClone(initial);
     changed.tabs[0].draft = "new draft";
     changed.tabs[0].session = createScriptedSession([], { sessionId: "conversation-b" }).snapshot();
     await store.save(changed);
     const reopened = new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory));
-    await reopened.migrate(legacy);
     expect((await reopened.load())?.tabs[0].draft).toBe("new draft");
     expect((await reopened.history()).map((tab) => tab.session.sessionId).sort()).toEqual(["conversation-a", "conversation-b"]);
     expect((await reopened.resume("conversation-a")).session.sessionId).toBe("conversation-a");
@@ -65,8 +63,8 @@ describe("IndexedDB conversations", () => {
   it("rolls back failed transactions and persists recovery/source metadata without replay", async () => {
     const factory = new IDBFactory();
     const records = new IndexedWorkspaceRecords(factory);
-    await expect(records.access(true, (rows) => { rows.set("partial", true); throw new Error("abort"); })).rejects.toThrow("abort");
-    expect(await records.access(false, (rows) => rows.has("partial"))).toBe(false);
+    await expect(records.transaction(true, async rows => { await rows.set("partial", true); throw new Error("abort"); })).rejects.toThrow("abort");
+    expect(await records.transaction(false, async rows => (await rows.get("partial")) !== undefined)).toBe(false);
     const events = new IndexedDbSessionEventStore(records);
     await events.hydrate();
     events.append({ version: 1, sessionId: "s", type: "run_started", runId: "r", input: "hello" });
@@ -83,4 +81,20 @@ describe("IndexedDB conversations", () => {
     await again.hydrate();
     expect(again.list("s")).toHaveLength(3);
   });
+});
+
+it("appends events without reading or scanning unrelated conversations", async () => {
+  const records = new IndexedWorkspaceRecords(new IDBFactory());
+  await records.transaction(true, async tx => { await tx.set("session:unrelated", { payload: "x".repeat(100_000) }); });
+  const events = new IndexedDbSessionEventStore(records); await events.hydrate();
+  const indexScan = vi.spyOn(IDBIndex.prototype, "getAll");
+  const bodyScan = vi.spyOn(IDBObjectStore.prototype, "getAll");
+  const get = vi.spyOn(IDBObjectStore.prototype, "get");
+  try {
+    for (let index = 0; index < 100; index++) events.append({ version: 1, sessionId: "new", runId: String(index), type: "run_started", input: "hello" });
+    await events.flush();
+    expect(indexScan).not.toHaveBeenCalled(); expect(bodyScan).not.toHaveBeenCalled(); expect(get).not.toHaveBeenCalled();
+  } finally { indexScan.mockRestore(); bodyScan.mockRestore(); get.mockRestore(); }
+  const restored = new IndexedDbSessionEventStore(records); await restored.hydrate();
+  expect(restored.list("new")).toHaveLength(100);
 });

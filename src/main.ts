@@ -1,34 +1,25 @@
+import { TerminalView, type TerminalLine as TranscriptLine } from "./terminal/view";
+import { initializeWorkspace } from "./core/workspace-bootstrap";
 import "./styles.css";
 import { PreviewSurface, type PreviewConfig } from "./preview-surface";
 import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath, FileSystemError } from "./core/fs";
 import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
-import { executeShell, shellWords, SHELL_NOTICE, requestedHelp } from "./core/shell";
+import { executeTerminalInput, type AgentStart } from "./terminal/controller";
 import { configureFileAgent } from "./core/file-context";
-import { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
 import type { SessionSnapshot } from "./core/persistence";
 import type { ProviderRuntime } from "./core/provider";
 import type { TSchema } from "@earendil-works/pi-ai";
 import { createGroqRuntime, DEFAULT_GROQ_BASE_URL, DEFAULT_GROQ_MODEL } from "./core/provider";
 import { createScriptedSession } from "./core/scripted";
-import { AgentSession, inspectSessionRecovery, LocalStorageSessionEventStore, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
+import { AgentSession, inspectSessionRecovery, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
 import { TabRouter, type TabRouteEvent } from "./core/tab-router";
-import { LocalStorageWorkspaceStore, type WorkspaceSnapshot, type WorkspaceTabSnapshot } from "./core/workspace-store";
+import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
 type TabStatus = "working" | "idle" | "done" | "blocked" | "error";
-type TranscriptRole = "system" | "input" | "assistant";
-
-type TranscriptLine = {
-  id: string;
-  role: TranscriptRole;
-  text: string;
-  streaming?: boolean;
-  toolCallId?: string;
-};
-
 type AgentTab = {
   id: string;
   name: string;
@@ -96,7 +87,6 @@ const state = {
   nextTabNumber: 2
 };
 const tabRouter = new TabRouter();
-const legacyWorkspaceStore = new LocalStorageWorkspaceStore(browserStorage);
 let workspaceStore: IndexedDbConversationStore | undefined;
 let durableEvents: IndexedDbSessionEventStore | undefined;
 const sessionEventStore = {
@@ -116,7 +106,6 @@ const filesReady = (async () => {
     if (!window.indexedDB) throw new Error("IndexedDB is unavailable");
     const records = new IndexedWorkspaceRecords(window.indexedDB, workspaceId);
     workspaceStore = new IndexedDbConversationStore(records, surfaceId === "workspace" ? "layout" : `layout:${surfaceId}`);
-    if (workspaceId === "default" && surfaceId === "workspace") await workspaceStore.migrate(legacyWorkspaceStore, new LocalStorageSessionEventStore(browserStorage));
     durableEvents = new IndexedDbSessionEventStore(records);
     await durableEvents.hydrate();
     const fs = new IndexedDbFileSystem(window.indexedDB, workspaceId);
@@ -127,6 +116,7 @@ const filesReady = (async () => {
       }
     });
     fileRuntime = { fs, bin };
+    await initializeWorkspace(fs);
     await installDefaultBin(fs);
     await bin.reload();
   } catch (error) { fileRuntimeError = error instanceof Error ? error.message : String(error); }
@@ -227,7 +217,7 @@ get<HTMLInputElement>("model").value = storedModel || configuredModel;
 get<HTMLInputElement>("api-key").value = storedApiKey;
 get<HTMLInputElement>("remember-key").checked = true;
 
-const terminal = get<HTMLDivElement>("terminal");
+const terminalView = new TerminalView(get<HTMLDivElement>("terminal"));
 const promptElement = get<HTMLTextAreaElement>("prompt");
 const sendButton = get<HTMLButtonElement>("send");
 const stopButton = get<HTMLButtonElement>("stop");
@@ -478,7 +468,7 @@ function hostTool(spec: HostToolSpec, sessionId: string): SessionTool {
 function currentHostTools(sessionId = "pending-session", includeBin = true): SessionTool[] {
   const findTab = () => state.tabs.find((tab) => tab.session.sessionId === sessionId);
   const cwd = () => findTab()?.agentCwd ?? findTab()?.cwd ?? VFS_HOME;
-  const local = includeBin ? fileRuntime?.bin.sessionTools(cwd, (access, toolCallId) => findTab()?.session.recordFileAccess(toolCallId, access.method, access.path, access.revision)) ?? [] : [];
+  const local = includeBin ? fileRuntime?.bin.sessionTools(cwd, (access, toolCallId) => findTab()?.session.recordFileAccess(toolCallId, access.method, access.path, access.revision, access.readRange)) ?? [] : [];
   const names = new Set(fileRuntime?.bin.list().map((tool) => tool.name) ?? []);
   const host = [...hostToolSpecs.values()].filter(spec => spec.name !== "read_host_page").map((spec) => {
     if (names.has(spec.name)) throw new Error(`Host tool conflicts with ~/bin: ${spec.name}`);
@@ -556,10 +546,9 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
   }
 }
 
-async function enterAi(tab: AgentTab, args: string[]): Promise<void> {
-  if (!args.length) { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; return; }
-  const option = args[0].toLowerCase();
-  if (option === "--new" && args.length === 1) {
+async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
+  if (start.kind === "continue") { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; return; }
+  if (start.kind === "new") {
     await conversations().remember(workspaceTabSnapshot(tab));
     const runtime = tab.runtime;
     const next = runtime
@@ -576,10 +565,10 @@ async function enterAi(tab: AgentTab, args: string[]): Promise<void> {
     tab.transcript.push({ id: makeId("new-session"), role: "system", text: `New conversation ${next.sessionId}` });
     return;
   }
-  if (option === "--resume" && args.length === 2) {
-    const existing = state.tabs.find((candidate) => candidate.session.sessionId === args[1]);
+  if (start.kind === "resume") {
+    const existing = state.tabs.find((candidate) => candidate.session.sessionId === start.sessionId);
     if (existing) { existing.mode = "agent"; selectTab(existing.id); return; }
-    const saved = await conversations().resume(args[1]);
+    const saved = await conversations().resume(start.sessionId);
     await conversations().remember(workspaceTabSnapshot(tab));
     tab.detach(); tab.unregisterRoute();
     const replacement = restoreTab({ ...saved, id: tab.id, mode: "agent" });
@@ -587,7 +576,6 @@ async function enterAi(tab: AgentTab, args: string[]): Promise<void> {
     replacement.transcript.push({ id: makeId("resume"), role: "system", text: `Resumed ${saved.session.sessionId}` });
     return;
   }
-  throw new Error("Usage: ai | ai --new | ai --resume SESSION_ID");
 }
 
 async function openFileEditor(tab: AgentTab, path: string): Promise<void> {
@@ -697,6 +685,8 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
     const line = tab.transcript.find((candidate) => candidate.id === tab.activeLineId);
     if (line) line.text += event.delta;
     postEmbedMessage("prompt", { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, sessionId: tab.session.sessionId, runId: event.runId, phase: "delta", delta: event.delta });
+    if (tab.id === state.activeTabId) terminalView.schedule({ ...tab, messages: tab.session.agent.state.messages });
+    return;
   }
   if (event.type === "run_finished") {
     const line = tab.transcript.find((candidate) => candidate.id === tab.activeLineId);
@@ -718,7 +708,7 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
     tab.transcript.push({ id: makeId("context"), role: "system", text: `loaded ${displayPath(event.source.path)} · revision ${event.source.revision}` });
   }
   if (event.type === "file_access") {
-    tab.transcript.push({ id: makeId("file"), role: "system", text: `${event.method} ${displayPath(event.path)}${event.revision !== undefined ? ` · revision ${event.revision}` : ""}` });
+    tab.transcript.push({ id: makeId("file"), role: "system", text: `${event.method} ${displayPath(event.path)}${event.revision !== undefined ? ` · revision ${event.revision}` : ""}${event.readRange ? ` · returned lines ${event.readRange.startLine}–${event.readRange.endLine}/${event.readRange.totalLines}` : ""}` });
   }
   if (event.type === "tool_started" || event.type === "tool_finished") {
     tab.transcript.push({ id: makeId("tool"), role: "system", text: `${event.toolName} · ${event.type === "tool_started" ? "running" : event.isError ? "failed" : "finished"}`, ...(event.type === "tool_finished" ? { toolCallId: event.toolCallId } : {}) });
@@ -891,58 +881,6 @@ function renderTabs(): void {
   }
 }
 
-function appendTerminalLine(line: TranscriptLine, tab: AgentTab): void {
-  const row = document.createElement("div");
-  row.className = `terminal-line ${line.role}${line.streaming ? " streaming" : ""}`;
-  const marker = document.createElement("span");
-  marker.className = "line-marker";
-  marker.textContent = line.role === "input" ? "❯" : line.role === "assistant" ? (line.streaming ? "⠇" : "●") : "·";
-  const content = document.createElement("div");
-  content.className = "line-content";
-  content.textContent = line.text;
-  if (line.toolCallId) {
-    const call = tab.session.agent.state.messages.flatMap((message) => message.role === "assistant" ? message.content.filter((block) => block.type === "toolCall" && block.id === line.toolCallId) : []).at(-1);
-    const result = tab.session.agent.state.messages.find((message) => message.role === "toolResult" && message.toolCallId === line.toolCallId);
-    const details = document.createElement("details"), summary = document.createElement("summary"), pre = document.createElement("pre");
-    summary.textContent = line.text;
-    pre.textContent = JSON.stringify({ arguments: call && call.type === "toolCall" ? call.arguments : undefined, result: result?.role === "toolResult" ? result.content : "pending" }, null, 2);
-    details.open = tab.expandedTools.has(line.toolCallId);
-    details.addEventListener("toggle", () => { if (details.isConnected) { if (details.open) tab.expandedTools.add(line.toolCallId!); else tab.expandedTools.delete(line.toolCallId!); } });
-    details.append(summary, pre); content.replaceChildren(details);
-  }
-  row.append(marker, content);
-  terminal.append(row);
-}
-
-let renderedTranscript: { id: string; text: string }[] = [];
-function renderTerminal(tab: AgentTab): void {
-  const previousTop = terminal.scrollTop;
-  const follow = terminal.dataset.tabId !== tab.id || renderedTranscript.length !== tab.transcript.length || tab.transcript.some((line, index) => line.id !== renderedTranscript[index]?.id || line.text !== renderedTranscript[index]?.text);
-  renderedTranscript = tab.transcript.map(({ id, text }) => ({ id, text }));
-  terminal.dataset.tabId = tab.id;
-  terminal.replaceChildren();
-  const intro = document.createElement("div");
-  intro.className = "terminal-intro";
-  const logo = document.createElement("span");
-  logo.className = "terminal-logo";
-  logo.textContent = "▐▛███▜▌";
-  const label = document.createElement("span");
-  label.textContent = tab.mode === "shell" ? "簡易 bash · 虛擬檔案系統" : "AgentGoRound · Pi runtime";
-  intro.append(logo, label);
-  terminal.append(intro);
-  if (tab.mode === "shell") {
-    const notice = document.createElement("p");
-    notice.className = "shell-notice";
-    notice.textContent = SHELL_NOTICE;
-    terminal.append(notice);
-  }
-  for (const line of tab.transcript) appendTerminalLine(line, tab);
-  terminal.scrollTop = follow ? terminal.scrollHeight : previousTop;
-  if (follow) requestAnimationFrame(() => {
-    if (terminal.isConnected && terminal.dataset.tabId === tab.id) terminal.scrollTop = terminal.scrollHeight;
-  });
-}
-
 function renderPane(tab: AgentTab): void {
   get<HTMLSpanElement>("pane-title").textContent = tab.name;
   get<HTMLSpanElement>("pane-type").textContent = tab.mode === "shell" ? "簡易 bash" : tab.mode === "editor" ? "檔案編輯" : tab.mode === "preview" ? "頁面預覽" : "AI agent";
@@ -966,7 +904,7 @@ function renderPane(tab: AgentTab): void {
   routeButton.disabled = state.tabs.length < 2;
   const editing = tab.mode === "editor" && !!tab.editor;
   const previewing = tab.mode === "preview" && !!tab.preview;
-  terminal.hidden = editing || previewing;
+  get<HTMLDivElement>("terminal").hidden = editing || previewing;
   get<HTMLElement>("terminal-form").hidden = editing || previewing;
   get<HTMLElement>("file-editor").hidden = !editing;
   const previewPanel = get<HTMLElement>("page-previews");
@@ -983,7 +921,7 @@ function renderPane(tab: AgentTab): void {
     const editor = get<HTMLTextAreaElement>("editor-content");
     if (editor.dataset.identity !== `${tab.id}:${tab.editor!.path}`) { editor.value = tab.editor!.content; editor.dataset.identity = `${tab.id}:${tab.editor!.path}`; }
   }
-  renderTerminal(tab);
+  terminalView.render({ ...tab, messages: tab.session.agent.state.messages });
 }
 
 function render(): void {
@@ -1045,7 +983,7 @@ function addTab(): void {
 
 function restoreTab(snapshot: WorkspaceTabSnapshot): AgentTab {
   const tab = createTab(snapshot.id, snapshot.name, ["Restored workspace tab."], snapshot.branch, snapshot.path);
-  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text: streaming ? `${text}\n[Interrupted by reload]` : role === "system" && text === "Virtual shell · IndexedDB files · type help, ls ~/bin, or pi" ? shellBootHint : text, ...(toolCallId ? { toolCallId } : {}) }));
+  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text: streaming ? `${text}\n[Interrupted by reload]` : text, ...(toolCallId ? { toolCallId } : {}) }));
   tab.draft = snapshot.draft;
   tab.mode = snapshot.mode ?? "shell";
   tab.cwd = snapshot.cwd ?? VFS_HOME;
@@ -1161,34 +1099,16 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
     if (controller.signal.aborted) throw new Error("Command cancelled");
     if (!fileRuntime) throw new Error(`Files unavailable: ${fileRuntimeError}`);
     if (tab.mode === "shell") {
-      const structured = /^\S+\s+\{/.test(input);
-      const words = structured ? [input.split(/\s/, 1)[0], input.slice(input.search(/\s/) + 1)] : shellWords(input);
-      const command = words[0]?.toLowerCase();
-      const help = structured ? undefined : requestedHelp(words, fileRuntime.bin, [...hostToolSpecs.values()]);
-      if (help !== undefined) {
-        tab.transcript.push({ id: makeId("help"), role: "system", text: help });
-      } else if (command === "preview") {
-        if (words.length > 2) throw new Error("Usage: preview [PATH]");
-        openPreview(resolvePath(words[1] || "~/main.html", tab.cwd));
-      } else if (command === "ai") {
-        await enterAi(tab, words.slice(1));
-      } else if (command === "history") {
-        if (words.length !== 1) throw new Error("Usage: history; use history --help");
-        const history = await conversations().history();
-        tab.transcript.push({ id: makeId("history"), role: "system", text: history.map((entry) => `${entry.session.sessionId} · ${entry.name} · ${entry.provider ?? entry.session.model.provider} · ${new Date(entry.session.savedAt).toLocaleString()}`).join("\n") || "No saved conversations" });
-      } else if (command === "demo" && words[1]?.toLowerCase() === "jokes") {
-        if (words.length !== 2) throw new Error("Usage: demo jokes; use demo --help");
-        const installed = await installJokeDemo(fileRuntime.fs);
-        tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} files created, ${installed.kept.length} existing files kept.\nRun ai, then ask:\n${JOKE_PROMPT}` });
-      } else if (command === "edit" && words.length === 2 && !structured) {
-        await openFileEditor(tab, words[1]);
-      } else {
-      const result = await executeShell(input, fileRuntime.fs, fileRuntime.bin, tab.cwd, controller.signal);
+      const result = await executeTerminalInput(input, {
+        ...fileRuntime, cwd: tab.cwd, signal: controller.signal, extraTools: [...hostToolSpecs.values()],
+        history: () => conversations().history(),
+        openPreview,
+        openEditor: path => openFileEditor(tab, path),
+        enterAgent: args => enterAi(tab, args)
+      });
       if (result.cwd) tab.cwd = result.cwd;
-      if (result.mode) tab.mode = result.mode;
       if (result.clear) tab.transcript = [];
       if (result.text) tab.transcript.push({ id: makeId("shell"), role: "system", text: result.text });
-      }
       tab.status = "idle";
     } else if (/^\/exit$/i.test(input)) {
       tab.mode = "shell";
@@ -1208,7 +1128,7 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
     tab.commandAbort = undefined;
     render();
     scheduleWorkspaceSave();
-    promptElement.focus();
+    if (!terminalView.hasSelection()) promptElement.focus();
   }
 });
 

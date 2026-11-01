@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { BinRegistry } from "./bin";
+import { BinRegistry, type BinFileAccess } from "./bin";
 import { DEFAULT_BIN_TOOLS, FILE_METHODS, installDefaultBin } from "./bin-defaults";
 import { MemoryFileSystem } from "./fs";
 import type { BinExecutor, FileRpc } from "./bin-sandbox";
@@ -27,14 +27,13 @@ async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}
 }
 
 describe("VFS ~/bin JavaScript tools", () => {
-  it("moves legacy manifests without changing custom JS or JSON and is restart-safe", async () => {
+  it("preserves custom tool JS and manifests across installation and reloads", async () => {
     const { fs, bin } = await setup();
     const definition = { ...DEFAULT_BIN_TOOLS.find(tool => tool.name === "read")!, description: "My custom read description" };
     const { source: _source, ...manifest } = definition;
-    await fs.rename("~/bin/manifests/read.tool.json", "~/bin/read.tool.json");
     const customJson = JSON.stringify(manifest, null, 4);
     const customJs = 'async function main(args, api) { return { custom: true }; }';
-    await fs.writeFile("~/bin/read.tool.json", customJson);
+    await fs.writeFile("~/bin/manifests/read.tool.json", customJson);
     await fs.writeFile("~/bin/read.js", customJs);
     await installDefaultBin(fs);
     await bin.reload();
@@ -47,14 +46,6 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect((await fs.readFile("~/bin/manifests/read.tool.json")).revision).toBe(revision);
   });
 
-  it("preserves both files and reports conflicts when old and new manifests coexist", async () => {
-    const { fs, bin } = await setup();
-    const existing = (await fs.readFile("~/bin/manifests/read.tool.json")).content;
-    await fs.writeFile("~/bin/read.tool.json", "legacy custom content");
-    await expect(bin.reload()).rejects.toThrow("existing files were preserved");
-    expect((await fs.readFile("~/bin/read.tool.json")).content).toBe("legacy custom content");
-    expect((await fs.readFile("~/bin/manifests/read.tool.json")).content).toBe(existing);
-  });
   it("runs host reads from editable bin JS for both shell and AI, with explicit no-host errors", async () => {
     const plain = await setup();
     await expect(executeShell("read_host_page", plain.fs, plain.bin, "/home/user")).rejects.toThrow("目前沒有連接宿主頁");
@@ -171,6 +162,23 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await bin.execute("grep", { path: "jokes", pattern: "笑話", limit: 2 })).toMatchObject({ matches: expect.any(Array), truncated: true });
   });
 
+  it("records delivered read ranges only when output matches the actual VFS content", async () => {
+    const { fs, bin } = await setup();
+    await fs.writeFile("~/pages.md", "第一行\n第二行\n第三行");
+    const accesses: BinFileAccess[] = [];
+    const read = () => bin.sessionTools("/home/user", access => accesses.push(access)).find(tool => tool.name === "read")!;
+    await read().execute("page", { path: "pages.md", offset: 2, limit: 1 });
+    expect(accesses.filter(access => access.readRange).map(access => access.readRange)).toEqual([{ startLine: 2, endLine: 2, totalLines: 3 }]);
+    for (const output of ["return { path: file.path, revision: file.revision };", "return { path: file.path, revision: file.revision, content: '虛構內容', totalLines: 3 };", "throw new Error('failed after read');"]) {
+      accesses.length = 0;
+      await fs.writeFile("~/bin/read.js", `async function main(args, api) { const file = await api.fs.readFile(args.path); ${output} }`);
+      await bin.reload();
+      try { await read().execute("withheld", { path: "pages.md" }); } catch (error) { expect(String(error)).toContain("failed after read"); }
+      expect(accesses).toHaveLength(1);
+      expect(accesses[0]).not.toHaveProperty("readRange");
+    }
+  });
+
   it("creates a batch of files atomically, with real per-file write traces", async () => {
     const { bin, fs } = await setup();
     const accesses: string[] = [];
@@ -199,7 +207,6 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await executeShell('cat "space name.md"', fs, bin, "/home/user")).toMatchObject({ text: expect.stringContaining("hello\\nworld") });
     await executeShell("mkdir jokes", fs, bin, "/home/user");
     expect(await executeShell("cd jokes", fs, bin, "/home/user")).toMatchObject({ cwd: "/home/user/jokes" });
-    expect(await executeShell("ai", fs, bin, "/home/user")).toMatchObject({ mode: "agent" });
     await expect(executeShell("missing", fs, bin, "/home/user")).rejects.toThrow(/not found/);
     expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "help", "ls", "read", "read_host_page", "skill_load", "write"]);
   });
@@ -230,7 +237,6 @@ describe("VFS ~/bin JavaScript tools", () => {
     await expect(fs.stat("~/Mixed Dir/Empty.MD")).rejects.toThrow("Not found");
     await shell("restore-bin", name("read"));
     expect(await shell("rehash")).toMatchObject({ text: expect.stringContaining("read") });
-    expect(await shell("ai")).toMatchObject({ mode: "agent" });
     expect(await shell("clear")).toEqual({ text: "", clear: true });
   });
 

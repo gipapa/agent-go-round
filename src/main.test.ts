@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IDBFactory } from "fake-indexeddb";
@@ -68,9 +69,18 @@ describe("main workspace UI", () => {
     await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
     terminal.scrollTop = 0;
     send("Hello");
+    document.querySelector<HTMLTextAreaElement>("#prompt")!.blur();
+    const selected = terminal.querySelector(".line-content")!;
+    const range = document.createRange(); range.selectNodeContents(selected.firstChild!);
+    const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+    const selectedText = selection.toString();
+    const focus = vi.spyOn(document.querySelector<HTMLTextAreaElement>("#prompt")!, "focus");
     await vi.waitFor(() => expect(document.querySelector("#run-status")!.textContent).toBe("done"));
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
     expect(terminal.scrollTop).toBe(1000);
+    expect(selection.toString()).toBe(selectedText);
+    expect(focus).not.toHaveBeenCalled();
+    focus.mockRestore();
   });
   it("opens the provider surface and restores focus after Escape", async () => {
     await loadApp();

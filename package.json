@@ -19,6 +19,7 @@
     "test:jokes:browser": "node --experimental-strip-types scripts/verify-jokes-browser.mjs",
     "test:preview:browser": "node scripts/verify-preview-browser.mjs",
     "test:mobile:browser": "node scripts/verify-mobile-browser.mjs",
+    "test:vfs:browser": "node scripts/verify-vfs-browser.mjs",
     "test:host:browser": "node scripts/verify-host-browser.mjs"
   },
   "dependencies": {

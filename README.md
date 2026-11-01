@@ -69,15 +69,17 @@ Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入
 
 ## AGENTS.md、skills 與工具
 
-工作區以 `/home/user` 對應 `~`，典型結構如下：
+工作區以 `/home/user` 對應 `~`。啟動時預先建立空白的 `~/skills/` 與 `~/agents.md`，規則內容為「請回覆繁體中文」；既有規則不覆寫，也不另建大小寫重複檔。開發期間直接使用目前格式的新工作區，不匯入或搬移舊資料。
+
+安裝 joke demo 後的典型結構如下：
 
 ```text
 ~/
-  AGENTS.md
+  agents.md
   main.html
   documents/
   jokes/
-  .pi/skills/joke-master/
+  skills/joke-master/
     SKILL.md
     references/scoring.md
   bin/
@@ -88,13 +90,13 @@ Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入
       …
 ```
 
-每個 user run 從 home 到 agent cwd 載入 AGENTS.md，也接受小寫的 agents.md；同層兩者並存時會回報歧義。Skill 先提供 metadata catalog，模型透過 `skill_load` 按需讀取 SKILL.md，再以 `read` 取得 references 和工作檔案。Active skill 在下一輪從檔案刷新。
+每個 user run 從 home 到 agent cwd 載入 AGENTS.md，也接受小寫的 agents.md；skill 檔也接受小寫的 skill.md。同層大小寫兩者並存時會回報歧義。Skill 先提供 metadata catalog，模型透過 `skill_load` 按需讀取 SKILL.md，再以 `read` 取得 references 和工作檔案。Active skill 在下一輪從檔案刷新。
 
-預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`，shell 與 AI 共用。指令 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後執行 `rehash`。舊版根目錄的 manifest 會自動搬移並保留自訂內容；若新舊位置同名，保留兩份並回報衝突。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`，shell 與 AI 共用。指令 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後執行 `rehash`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
 
 快速體驗檔案式 skill：
 
-1. 在 shell 輸入 `demo jokes`，建立中文 AGENTS.md、joke-master skill、評分參考與五個笑話，既有檔案不覆寫。
+1. 在 shell 輸入 `demo jokes`，沿用預設 agents.md，建立 joke-master skill、評分參考與五個笑話，既有檔案不覆寫；已有小寫 agents.md／skill.md 時沿用原檔。
 2. 在 settings 連接 Groq，輸入 `ai`。
 3. 用英文詢問：`Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.`
 4. 檢閱中文評分、冠軍原文、讀檔來源與 revision；修改檔案後可要求重新讀取與評分。
@@ -130,12 +132,13 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 115 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動，以及 manifest 搬移與衝突保留。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 136 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
 | 指令 | 驗證範圍與需求 |
 |---|---|
+| `npm run test:vfs:browser` | 原生 IndexedDB 讀取量、metadata、skill 路徑、串流選取及 reload；先啟動 production preview，不需 API key |
 | `npm run test:mobile:browser` | 混合大小寫工具、模擬鍵盤、捲動、設定表單與 popup 草稿；先啟動 production preview，不需 API key |
 | `npm run test:host:browser` | Popup workspace 隔離、reload 保存與真實模型讀取 Host page 作者；先啟動 production preview，有 `.env.local` key 時執行 live 任務 |
 | `npm run test:jokes` | 真實 Groq 的五檔評分、歷史恢復、建立五檔並讀回；使用 `.env.local` 的 key |
