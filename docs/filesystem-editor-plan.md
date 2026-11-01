@@ -1,8 +1,17 @@
-# Pi 編輯器：以虛擬檔案系統為核心的下一輪規劃
+# Pi 編輯器：虛擬檔案系統實作與驗收規劃
 
 日期：2026-10-31；更新：2026-11-01。F0–F5 已完成：歷史接續與最小 history／resume、IndexedDB session／workspace／events migration、VFS／檔案工具、文字 editor、AGENTS.md／skills 與來源版本紀錄、SDK Groq／production browser 的三段笑話驗收，以及 main.html／相對 CSS／SVG 主頁預覽、可恢復且共享 workspace 的 Pi popup。操作與證據見 [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md)。
 
 本文件取代 [前一輪缺口規劃](poc-gap-plan.md) 的交付優先順序，保留其中的問題盤點。新目標是可處理檔案的純前端 Pi 編輯器：開啟 tab 先進入 `~` 的 shell，使用者可以瀏覽、建立與編輯檔案，執行 `ai` 後，agent 在同一個檔案系統中工作。
+
+## 交付後補齊與目前限制
+
+- 啟動 agent 統一使用 `ai`，另提供 `ai --new`、`ai --resume ID` 和 `/exit`。Terminal 明列「簡易 bash」與支援指令，內建及自訂工具名稱不分大小寫；AI options、固定子命令與 agent 控制指令亦可混用大小寫。路徑、內容、搜尋文字、JSON 欄位、skill 名稱及 session ID 不改寫。
+- 手機與觸控輸入採 16px；鍵盤縮小可視區時精簡標題／側欄與 composer，app 和 popup 跟隨可視區寬高及位移，保留捲動、草稿與對話。模擬鍵盤回歸通過，原生 iPhone Safari 實機驗收尚未完成。
+- 最新回歸共 94 項通過；production 瀏覽器的混合大小寫／手機檢查七項通過。真實笑話與頁面修改任務的模型、quota 差異與證據見對應驗收文件。
+- F5 首輪僅支援文字 HTML／CSS／SVG。頁面 JavaScript、二進位資源、VFS 匯出／發布、完整長對話 compaction 與進階歷史管理尚未實作。
+
+後續建議優先完成真機鍵盤驗收，再處理 context budget／compaction、工作區備份、歷史閱讀與頁面資源能力；完整順序與完成條件見 [主規劃](plan.md)。以下保留 F0–F5 的實作契約與驗收要求。
 
 ## 已確定的方向
 
@@ -43,7 +52,7 @@ IndexedDB 適合這個需求，因為它可保存結構化資料與檔案內容�
 
 ### 共用介面與路徑
 
-建議模組：`src/core/fs/`，公開 `VirtualFileSystem`、`MemoryFileSystem`、`IndexedDbFileSystem`。所有操作皆使用 async interface，core 不依賴 DOM 或全域資料庫。
+實作模組：`src/core/fs.ts`，公開 `VirtualFileSystem`、`MemoryFileSystem`、`IndexedDbFileSystem`。所有操作皆使用 async interface，core 不依賴 DOM 或全域資料庫。
 
 第一輪提供 `stat`、`listDirectory`、`readFile`、`writeFile`、`mkdir`、`remove`、`rename`；`writeFile` / `rename` 支援預期 revision，避免使用者與 agent 同時修改時靜默覆蓋。
 
@@ -55,7 +64,7 @@ IndexedDB 適合這個需求，因為它可保存結構化資料與檔案內容�
 
 ### 儲存與一致性
 
-IndexedDB database 使用新版 namespace 與明確 schema version，設置 nodes、sessions、workspace metadata 等 stores；檔案 key 包含 workspaceId / path，nodes 建 parent-path 索引。
+檔案使用 `agent-go-round.files.v1` database（schema 2）的 nodes store，key 包含 workspaceId／path，並建立 parent-path 索引。Session、workspace layout、writer lease 與 lifecycle events 使用 `agent-go-round.conversations.v1`（schema 1）的 records store；不同 surface 分開保存 layout，同一 workspace 共用歷史及檔案。
 
 - 檔案節點保存 kind、content、revision、createdAt、updatedAt；目錄與索引變更在同一 transaction 提交。
 - 寫入／rename 的 revision 檢查也在 transaction 內完成，成功 commit 後才能向 shell / agent 回報成功。
@@ -228,13 +237,13 @@ description: 讀取笑話檔案，逐一評分並選出最好笑的笑話。
 
 ## 交付切分與後續順序
 
-| 階段 | 可驗收交付 | 依賴 |
-|---|---|---|
-| F0 | Groq 歷史接續、每 session provider、最小歷史重開 | 現有 core / store |
-| F1 | IndexedDB VFS、session/workspace repositories、migration | F0 的 identity 契約 |
-| F2 | 新 tab 在 `~`、檔案指令與編輯、`ai` / `/exit`、agent 檔案工具 | F1 |
-| F3 | VFS AGENTS.md、skill catalog / load / references | F1 + F2 |
-| F4 | 五笑話英文問中文答、逐檔評分、agent 建檔讀回、reload 續聊 | F0–F3 |
-| F5 | VFS main.html／相對資源預覽、綁定 workspace 的 popup、agent 改頁面後刷新 | F1 + F2 + F3；保留 F4 驗收 |
+| 階段 | 可驗收交付 | 依賴 | 目前狀態 |
+|---|---|---|---|
+| F0 | Groq 歷史接續、每 session provider、最小歷史重開 | 現有 core / store | 已完成，含 request boundary 驗證 |
+| F1 | IndexedDB VFS、session/workspace repositories、migration | F0 的 identity 契約 | 已完成，含交易與衝突回歸 |
+| F2 | 新 tab 在 `~`、檔案指令與編輯、`ai` / `/exit`、agent 檔案工具 | F1 | 已完成，含 JS 擴充與大小寫規則 |
+| F3 | VFS AGENTS.md、skill catalog / load / references | F1 + F2 | 已完成，含來源 revision 與規則驗收 |
+| F4 | 五笑話英文問中文答、逐檔評分、agent 建檔讀回、reload 續聊 | F0–F3 | SDK／production browser 均通過 |
+| F5 | VFS main.html／相對資源預覽、綁定 workspace 的 popup、agent 改頁面後刷新 | F1 + F2 + F3；保留 F4 驗收 | 首輪文字預覽與 popup 驗收通過 |
 
 每階段完成相應 regression 後即交付實際操作路徑。F5 在檔案工具與基礎 skill 驗收後銜接，讓 popup 有可編輯的主頁。歷史全文搜尋、複雜檔案樹、完整 bash、遠端／本機磁碟 adapter、MCP、自動 delegation、voice 與多模態列後續。Context 預算與讀取大小限制跟隨檔案工具一起做，完整長對話 compaction 另列後續。

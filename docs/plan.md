@@ -1,12 +1,53 @@
 # AgentGoRound：輕量前端 harness 規劃
 
-日期：2026-10-31
+建立：2026-10-31；更新：2026-11-01。
 
-更新：2026-11-01。F0–F5 檔案式編輯器階段已完成，包含歷史、IndexedDB VFS、檔案工具／skills、笑話驗收，以及 [main.html 主頁與 Pi popup](page-preview.md)。目前實作狀態依連結中的驗收紀錄；下方 M0–M3 保留為歷史規劃。
+目前以 F0–F5 檔案式編輯器為交付基線。操作方式見 [README](../README.md)，實作契約見 [檔案編輯器規劃](filesystem-editor-plan.md)；[原始缺口盤點](poc-gap-plan.md) 與本文後半的 M0–M4 保留為歷史背景。
 
-下一輪以 [Pi 檔案編輯器規劃](filesystem-editor-plan.md) 為準：修復歷史接續，建立 IndexedDB VFS，讓現有 tab 從 `~` 的 shell 執行 `ai`，並從檔案載入 AGENTS.md／skills，以五笑話任務驗收。[原始缺口盤點](poc-gap-plan.md) 保留參考。下列 M0–M3 為歷史實作紀錄，不代表新規劃的檔案編輯器、Groq reload／reconnect 歷史接續已完成；與新規劃不同之處依新規劃執行。
+## 目前交付狀態
 
-狀態：M0-A 已建立；最小 browser harness、Pi 0.84.4、scripted regression 與 Groq adapter 已建立。M0-B 的 Herdr-inspired tab shell 與第一版使用者觸發跨 tab 訊息／關聯回覆已建立；M0-B.1 的手機／popup 共用直式 surface 已完成第一輪實作與 browser smoke，待使用者實際視覺確認。M3 的 JS loader／iframe bridge 第一輪已完成，並以不同 localhost origin 驗證 iframe handshake／host tool catalog；完整嵌入驗收仍待補齊。
+| 項目 | 已完成內容 | 驗證與邊界 |
+|---|---|---|
+| F0：歷史與 identity | 每 tab provider／session；reload、重連、關 tab 後可恢復，提供 history／resume | 檢查實際 provider request 保留舊問題與回答；恢復不重播副作用 |
+| F1：IndexedDB VFS | 共用 async filesystem、路徑與目錄、revision、批次交易、workspace 隔離；對話與事件亦遷入 IndexedDB | CRUD、衝突、rollback、migration；主要處理 UTF-8 文字檔 |
+| F2：shell／editor／agent | 新 tab 位於 `~`；簡易 bash、文字 editor、`ai`／`/exit`；七個預設 bin 工具與 JS 擴充 | 六個檔案工具加 skill_load；Worker／capability boundary，非完整作業系統 bash |
+| F3：檔案式規則與 skills | AGENTS.md／agents.md、skill catalog／按需載入、references、來源 revision；active skill 每輪刷新 | 單獨 AGENTS.md 的英文問中文答，以及 rules／skills 變更驗證 |
+| F4：笑話驗收 | 五檔讀取與評分、修改後 reload／重連再評分、agent 建五檔後讀回 | SDK 使用 GPT-OSS 120B，production browser 使用 Qwen，三任務均通過；不同模型的 quota failure 另存 |
+| F5：主頁與 popup | main.html／相對 CSS／SVG 預覽、獨立 page view、workspace／surface binding、agent 改頁面後刷新 | Groq GPT-OSS 20B 的七項整合檢查通過；刷新與切 tab 保留 popup，reload 可續聊 |
+| 指令操作補齊 | 啟動關鍵字統一為 `ai`；內建與自訂工具名稱、AI options、固定子命令不分大小寫 | `LS`、`Read`、`AI --NEW`、`DeMo JoKeS` 等可用；路徑、內容、JSON、session ID 保留大小寫 |
+| 手機鍵盤修正 | 16px 輸入、可視區寬高與位移同步、精簡 composer／chrome；popup 保留草稿 | 瀏覽器模擬通過；iPhone Safari 原生鍵盤與觸控仍待實機驗收 |
+
+Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動多代理編排或隱藏補做迴圈。跨 tab 回覆由使用者明確觸發，保留來源並在下一輪帶入，回傳不自動啟動來源模型。
+
+## 目前驗證基線
+
+- 最近程式回歸為 22 個檔案、94 項測試通過；typecheck、production build、dist 檢查及 GitHub Pages CI 通過。
+- `npm run test:mobile:browser` 的七項檢查通過，涵蓋混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
+- [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md) 分別記錄真實模型、任務、限制與重跑方式。報告由 runner 寫入本機 `test-results/`，不納入 Git。
+- Harness／provider、模型決策、網路與 quota 失敗分別記錄。額度失敗不列為 PASS，既有 SDK 與 browser 的模型／儲存／執行器差異保留於報告。
+
+## 後續工作順序（待排期）
+
+下列為建議優先順序，尚未宣告完成或開始實作。
+
+| 順序 | 工作 | 完成條件 |
+|---|---|---|
+| P0 | iPhone Safari 真機驗收與必要修正 | 實際開啟／收起鍵盤，確認主畫面與 popup 的輸入、送出、中文輸入、捲動、旋轉與 settings；草稿及對話保留 |
+| P1 | 模型 context budget 與可檢閱的 compaction | 超限可辨識；保留原始歷史與 tool call/result 配對；摘要範圍有紀錄，失敗不靜默丟棄歷史 |
+| P2 | 工作區備份與搬移 | 明確匯出／匯入檔案與必要 metadata；驗證格式、大小與衝突，不含 credentials；另訂 v2 匯入規則 |
+| P3 | 歷史管理與閱讀體驗 | 補搜尋、重新命名、封存／刪除及 Markdown／程式碼呈現；維持 session identity 與閱讀位置 |
+| P4 | 頁面資源與發布能力 | 二進位資源、頁面 JavaScript 的隔離／權限及 HTML 匯出分項驗收；本機預覽與訪客可見的發布保持明確區分 |
+
+MCP、遠端磁碟、policy-gated 模型跨 tab 詢問、ChatGPT 訂閱 adapter、自動 delegation、voice 與多模態仍為選配 backlog，需有具體需求與獨立驗收。現有 VFS 為瀏覽器／origin 本機資料，尚無雲端同步、完整 bash 或任意頁面腳本執行。
+
+新工作先定義可重現的操作與成功條件，再補相應回歸或裝置證據；已完成 F0–F5 的驗收不得因新增功能而退化。
+
+## 早期規劃與實作紀錄（2026-10-31）
+
+以下保留原始 M0–M4 設計與當時狀態，其中的「下一個」「待完成」及舊 storage／UI 描述屬歷史紀錄。當前完成項目與後續順序以上方表格為準；外部 provider／授權規格在實作前需重新查核。
+
+<details>
+<summary>展開早期 M0–M4 規劃與當時驗收紀錄</summary>
 
 ## 目標
 
@@ -237,7 +278,7 @@ Groq 是第一個真實 provider 與早期對話驗收目標；日常回歸仍�
 
 評估 ChatGPT 訂閱 adapter、MCP discovery、context compaction 與 follow-up。模型可呼叫的跨 tab 詢問工具需沿用早期 router，加入授權、allow-list 與有限往返預算。Tree UI、steering、多模態、codemode、自動多代理編排及 voice 需有實際需求與獨立驗收後才加入。
 
-## TODO：未完成與後續工作
+## 歷史 TODO（2026-10-31，非目前待辦清單）
 
 ### Release gate
 
@@ -254,3 +295,5 @@ Groq 是第一個真實 provider 與早期對話驗收目標；日常回歸仍�
 - [ ] 只有在有明確需求時才做 tree UI、steering、多模態、codemode、自動多代理編排與 voice。
 
 目前已完成 M0-B 視覺與互動第一版、M0-B.1 手機／popup 共用直式 surface 第一輪實作與 browser smoke、M1 typed tool boundary 第一輪 deterministic regression、M2 persistence／workspace／skills／recovery 第一輪 regression，以及 M3 embed loader／iframe bridge／host-tool 第一輪 regression：Herdr-inspired sidebar、workspace tabs、獨立 agent pane、provider dialog、responsive surface、focus／Escape、使用者觸發跨 tab route、Pi-owned tool loop、approval／limit policy、versioned event sink、outcome-unknown handling、memory/local snapshot store、workspace reload、recovery review notice、on-demand skills composition、script embed、iframe isolation、origin-checked postMessage handshake、allow-listed host tools、approval-token permission boundary、bridge v2／SDK 0.2.0 exact-match compatibility 與 widget lifecycle 已建立。Groq live tool acceptance 與公開 URL 已完成外部驗證；仍需使用者實際視覺／觸控接受度，不宣稱完整產品驗收已通過。
+
+</details>
