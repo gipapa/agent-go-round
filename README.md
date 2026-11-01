@@ -11,7 +11,7 @@ Pi 擁有唯一的模型／工具循環，使用 Groq 的 OpenAI 相容 Chat Com
 - `~/bin` 提供可擴充的 JavaScript 檔案工具；從 VFS 載入 AGENTS.md 與 skills，記錄實際讀寫的路徑和 revision。
 - 歷史對話可在 reload、重新連接 Groq 或關閉 tab 後恢復；不會自動重送未完成的模型請求或工具副作用。
 - `~/main.html` 支援 HTML／CSS／SVG 預覽，popup 使用同一 workspace 的檔案；刷新預覽保留 popup 對話與草稿。
-- 使用者可明確向另一個 tab 提問並接收回覆；目前沒有模型自動 delegation。
+- `~/bin/agents.js` 讓 shell 與 AI 列出 agents、向指定 tab 發送任務並讀取實際回覆；另保留手動跨 tab 提問 UI。
 
 [線上版本](https://gipapa.github.io/agent-go-round/) · [檔案工具](docs/bin-tools.md) · [主頁與 popup](docs/page-preview.md) · [笑話驗收](docs/joke-acceptance.md) · [實作規劃](docs/filesystem-editor-plan.md)
 
@@ -54,6 +54,7 @@ Provider settings 會從 Base URL 下的 `/models` 取得模型清單，並帶�
 | `ai` | 啟動或接續目前 tab 的 agent |
 | `ai --new` | 另開對話，保留舊對話於歷史 |
 | `history`、`ai --resume SESSION_ID` | 列出或恢復已保存的對話 |
+| `agents list`、`agents send TAB_ID "MESSAGE"`、`agents read REQUEST_ID` | 列出 tabs／AI 狀態、向指定 AI 下指令並讀取回覆 |
 | `rehash`、`restore-bin NAME` | 載入新增／修改的工具，或還原預設工具 |
 | `demo jokes`、`clear` | 建立笑話範例，或清空目前 terminal 顯示 |
 
@@ -72,6 +73,22 @@ GREP "World" Notes.md
 Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入 JSON 參數時保留結構化結果。`mkdir` 預設不建立父目錄，需使用 `-p`。未支援的選項會回報錯誤，不會靜默忽略；`touch` 不更新既有時間戳、`mv` 不覆寫既有目的檔案等差異均列於各指令的 `--help`。
 
 所有 bin 工具都接受 JSON 參數，可提供分頁、批次讀寫、revision 與搜尋選項，詳見 [bin 工具說明](docs/bin-tools.md)。
+
+## 跨 tab 的 agent 溝通
+
+在同一頁面開兩個 app tabs，連接 Groq，並各輸入 `ai`。在第一個 tab 對 AI 說「請另一個 tab 講一個笑話，讀取回覆後告訴我」，AI 即可透過 `agents` 工具自行找出目的 tab、發送任務和讀取對方的真實回覆。切換目前顯示的 tab 不會改變工具的來源身分；兩個 tabs 各自保有原本對話與工作目錄。
+
+Shell 也能呼叫相同的 `~/bin/agents.js`：
+
+```text
+agents list
+agents send agent-2 "請講一個繁體中文笑話"
+agents read message-回傳的ID
+```
+
+`send` 回傳 `requestId`，`read` 預設最多等待 5 秒。若仍為 `pending`，繼續讀取同一 ID；不要再次 `send`。AI 使用 JSON 形式，例如 `{"action":"send","target":"agent-2","text":"請講一個笑話"}`，接著 `{"action":"read","requestId":"message-…"}`。`list` 也列出本 tab 的請求 ID 與狀態，可在中斷後找回。
+
+目標必須已進入 AI 且已連線。自己的 tab、忙碌或已關閉的目標會明確拒絕，沒有隱藏佇列。停止來源 tab 的等待不會重送或取消已接收的目標任務；可切到目標按 Stop。請求索引保存在目前頁面記憶體，保留最近 200 筆且不淘汰進行中的請求；reload 後失效，已保存的對話與工具結果仍可從歷史查看。此功能處理同一 app instance 的 tabs，未連接其他瀏覽器分頁或 popup instances。
 
 ## AGENTS.md、skills 與工具
 
@@ -98,7 +115,7 @@ Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入
 
 每個 user run 從 home 到 agent cwd 載入 AGENTS.md，也接受小寫的 agents.md；skill 檔也接受小寫的 skill.md。同層大小寫兩者並存時會回報歧義。Skill 先提供 metadata catalog，模型透過 `skill_load` 按需讀取 SKILL.md，再以 `read` 取得 references 和工作檔案。Active skill 在下一輪從檔案刷新。
 
-預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`，shell 與 AI 共用。指令 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後執行 `rehash`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`、`agents`，shell 與 AI 共用。指令 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後執行 `rehash`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
 
 快速體驗檔案式 skill：
 
@@ -138,7 +155,7 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 150 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、context usage、auto compact、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 157 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、context usage、auto compact、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
@@ -147,6 +164,7 @@ npm run verify:dist
 | `npm run test:vfs:browser` | 原生 IndexedDB 讀取量、metadata、skill 路徑、串流選取及 reload；先啟動 production preview，不需 API key |
 | `npm run test:mobile:browser` | 混合大小寫工具、模擬鍵盤、捲動、設定表單與 popup 草稿；先啟動 production preview，不需 API key |
 | `npm run test:host:browser` | Popup workspace 隔離、reload 保存與真實模型讀取 Host page 作者；先啟動 production preview，有 `.env.local` key 時執行 live 任務 |
+| `npm run test:tabs:browser` | 同頁雙 AI tabs：tab1 發送笑話任務給 tab2、讀取並轉述原文；切換 tab 的來源身分、shell 讀取與 reload；先啟動 production preview，使用 `.env.local` 的 key |
 | `npm run test:jokes` | 真實 Groq 的五檔評分、歷史恢復、建立五檔並讀回；使用 `.env.local` 的 key |
 | `npm run test:jokes:browser` | 真正瀏覽器 UI／IndexedDB／Worker 的笑話驗收；先啟動 dev server，使用 `.env.local` 的 key，Node 需支援 TypeScript stripping |
 | `npm run test:preview:browser` | 真實 Groq 修改頁面、刷新、歷史、工作區隔離；先啟動 production preview，使用 `.env.local` 的 key |

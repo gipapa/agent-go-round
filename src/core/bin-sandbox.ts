@@ -40,7 +40,8 @@ function workerBootstrap(main: (args: unknown, api: unknown) => Promise<unknown>
   const skills = Object.freeze({ load: (name: string) => call("loadSkill", [name]) });
   const host = Object.freeze({ readPage: (options: unknown) => call("readHostPage", [options]) });
   const tools = Object.freeze({ help: (command?: string) => call("commandHelp", [command]) });
-  Promise.resolve().then(() => main(args, Object.freeze({ fs: Object.freeze(fs), skills, host, tools }))).then(
+  const agents = Object.freeze({ execute: (options: unknown) => call("tabAgents", [options]) });
+  Promise.resolve().then(() => main(args, Object.freeze({ fs: Object.freeze(fs), skills, host, tools, agents }))).then(
     (result) => self.postMessage({ type: "done", result }),
     (error) => self.postMessage({ type: "error", error: error instanceof Error ? error.message : String(error) })
   );

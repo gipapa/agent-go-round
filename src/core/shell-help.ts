@@ -1,7 +1,7 @@
 import { SHELL_COMMANDS, commandDefinition } from "./command-definitions";
 import type { BinRegistry } from "./bin";
 
-export const SHELL_NOTICE = "簡易 bash：操作目前工作區的虛擬檔案。指令名稱不分大小寫，路徑與內容保留大小寫。\n檔案工具：read／cat、write、edit、grep、find、ls。\n其他指令：pwd、cd、mkdir、touch、rm、rmdir、mv、preview、history、clear、help、rehash、restore-bin、demo jokes。\n輸入 ai 啟動 agent；ai --new 開新對話，ai --resume ID 接續歷史。\nhelp COMMAND 或 COMMAND --help 查看語法、選項與簡化範圍。不支援管線、重導向或作業系統程式。";
+export const SHELL_NOTICE = "簡易 bash：操作目前工作區的虛擬檔案。指令名稱不分大小寫，路徑與內容保留大小寫。\n檔案工具：read／cat、write、edit、grep、find、ls。\n其他指令：pwd、cd、mkdir、touch、rm、rmdir、mv、preview、history、agents、clear、help、rehash、restore-bin、demo jokes。\n輸入 ai 啟動 agent；ai --new 開新對話，ai --resume ID 接續歷史。\nhelp COMMAND 或 COMMAND --help 查看語法、選項與簡化範圍。不支援管線、重導向或作業系統程式。";
 
 
 export type HelpTool = { name: string; description: string; parameters: unknown };

@@ -15,7 +15,7 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 const testExecutor: BinExecutor = {
   async execute(source, args, rpc: FileRpc) {
     const main = runInNewContext(`(${source})`, {}, { timeout: 1000 });
-    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]) } }));
+    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]) }, agents: { execute: (options: unknown) => rpc("tabAgents", [options]) } }));
   }
 };
 async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}) {
@@ -27,6 +27,42 @@ async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}
 }
 
 describe("VFS ~/bin JavaScript tools", () => {
+  it("routes shell and AI through editable agents bin JS with trusted caller context", async () => {
+    const calls: unknown[] = [];
+    const { fs, bin } = await setup({ tabAgents: async (args, _signal, context) => { calls.push({ args, context }); return { status: "pending", requestId: "request-a" }; } });
+    expect(JSON.parse((await executeShell("AgEnTs LiSt", fs, bin, "/home/user", undefined, { tabId: "main" })).text)).toMatchObject({ requestId: "request-a" });
+    await executeShell('agents send other "請講一個笑話"', fs, bin, "/home/user", undefined, { tabId: "main" });
+    await bin.sessionTools("/home/user", undefined, undefined, "session-b").find(tool => tool.name === "agents")!.execute("call-b", { action: "read", requestId: "request-a", waitMs: 0 });
+    expect(calls).toEqual([
+      { args: { action: "list" }, context: { tabId: "main" } },
+      { args: { action: "send", target: "other", text: "請講一個笑話" }, context: { tabId: "main" } },
+      { args: { action: "read", requestId: "request-a", waitMs: 0 }, context: { sessionId: "session-b", toolCallId: "call-b" } }
+    ]);
+    await fs.writeFile("~/bin/agents.js", 'async function main(args, api) { return { custom: true }; }'); await bin.reload();
+    expect(JSON.parse((await executeShell("agents list", fs, bin, "/home/user")).text)).toEqual({ custom: true });
+    expect(await bin.sessionTools().find(tool => tool.name === "agents")!.execute("edited", { action: "list" })).toMatchObject({ details: { custom: true } });
+  });
+
+  it("validates cross-tab RPCs after JS edits and requires the declared capability", async () => {
+    let dispatched = 0;
+    const { fs, bin } = await setup({ tabAgents: async () => { dispatched++; return {}; } });
+    await fs.writeFile("~/bin/agents.js", 'async function main(args, api) { return api.agents.execute({action:"send",target:"other",text:"hi",sourceTabId:"spoofed"}); }'); await bin.reload();
+    await expect(bin.execute("agents", { action: "list" })).rejects.toThrow();
+    expect(dispatched).toBe(0);
+    await fs.writeFile("~/bin/agents.js", 'async function main(args, api) { return api.agents.execute({action:"list"}); }');
+    const manifest = JSON.parse((await fs.readFile("~/bin/manifests/agents.tool.json")).content);
+    await fs.writeFile("~/bin/manifests/agents.tool.json", JSON.stringify({ ...manifest, capabilities: [] })); await bin.reload();
+    await expect(bin.execute("agents", { action: "list" })).rejects.toThrow("capability");
+    expect(dispatched).toBe(0);
+  });
+
+  it("marks a lost dispatch result unknown and includes the existing requestId for recovery", async () => {
+    const { fs } = await setup();
+    const bin = new BinRegistry(fs, { async execute(_source, _args, rpc) { await rpc("tabAgents", [{ action: "send", target: "other", text: "hi" }]); throw new Error("worker stopped"); } }, { tabAgents: async () => ({ status: "pending", requestId: "recover-me" }) });
+    await bin.reload();
+    await expect(bin.execute("agents", { action: "send", target: "other", text: "hi" })).rejects.toMatchObject({ code: "outcome_unknown", message: expect.stringContaining("recover-me") });
+  });
+
   it("preserves custom tool JS and manifests across installation and reloads", async () => {
     const { fs, bin } = await setup();
     const definition = { ...DEFAULT_BIN_TOOLS.find(tool => tool.name === "read")!, description: "My custom read description" };
@@ -208,7 +244,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     await executeShell("mkdir jokes", fs, bin, "/home/user");
     expect(await executeShell("cd jokes", fs, bin, "/home/user")).toMatchObject({ cwd: "/home/user/jokes" });
     await expect(executeShell("missing", fs, bin, "/home/user")).rejects.toThrow(/not found/);
-    expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "help", "ls", "read", "read_host_page", "skill_load", "write"]);
+    expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["agents", "edit", "find", "grep", "help", "ls", "read", "read_host_page", "skill_load", "write"]);
   });
 
   it.each(["upper", "mixed"])("accepts %s-case shell commands without changing file paths, content or JSON", async (style) => {

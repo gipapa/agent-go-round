@@ -17,6 +17,7 @@
   skill_load.js
   read_host_page.js
   help.js
+  agents.js
   manifests/
     read.tool.json
     write.tool.json
@@ -27,6 +28,7 @@
     skill_load.tool.json
     read_host_page.tool.json
     help.tool.json
+    agents.tool.json
 ```
 
 | 工具 | 參數與行為 |
@@ -40,6 +42,7 @@
 | skill_load | `name`；經由 `api.skills.load` 載入本輪 catalog 中的 SKILL.md，記錄來源與 active skill。與其他工具一樣從 ~/bin 載入 JS／manifest |
 | read_host_page | 選填 `offset`／`limit`；經 `api.host.readPage` 讀取呼叫頁面 HTML，無宿主時回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」；shell／AI 共用 bin JS |
 | help | 選填 `command`；經 `api.tools.help` 取得指令說明與 schema；AI 的 help 同樣從 bin JS 載入 |
+| agents | `action:list` 列出本頁工作區 tabs、來源 ID、模式／provider／可用狀態與本 tab 的請求 ID；`action:send` 搭配 `target`、`text` 發送至指定 AI 並取得 `requestId`；`action:read` 搭配 `requestId` 讀回結果，選填 `waitMs:0–5000`（預設 5000）。`pending` 時讀同一 ID；成功後回傳對方實際的 `text`，亦保留 error／aborted 狀態 |
 
 VFS 的 `stat`／`listDirectory`／寫入結果只提供 `FileStat`；只有 `readFile` 取得正文。`ls -l` 直接使用 metadata 的 size，不會為了計算大小重讀檔案。Workspace 預設檔案由 `workspace-bootstrap.ts` 建立；檔案能力與 Worker 共用 `file-capabilities.ts` 的名單及 VFS 型別。
 
@@ -54,6 +57,10 @@ Shell 的 `ls` 預設列出目前 cwd 的直接子項名稱，隱藏點檔；`ls
 每個指令支援 `COMMAND --help`／`help COMMAND`，列出語法、支援選項與簡化範圍；自訂工具顯示自己的 description 與 JSON schema。AI 另有唯讀 `help` 工具（可傳 `command`）查閱同一份說明，名稱 `help` 保留給此工具。Help 不會啟動 agent、開 editor／preview 或執行 mutation。不支援的選項與多餘參數會報錯；管線、重導向與指令替換明確拒絕，沒有環境變數或路徑 glob 展開。
 
 Shell 與 Pi 使用相同 BinRegistry、schemas、JS 與 filesystem API。Shell 是內建指令解析器；目前不支援 pipes、redirects 或作業系統程式。
+
+跨 tab 指令同樣從 bin 執行：`agents list`、`agents send agent-2 "請講一個笑話"`、`agents read REQUEST_ID`。目標需先在其 tab 輸入 `ai` 且已連線；忙碌、自己的 tab 或已關閉的目標會明確拒絕。AI 與 shell 都使用相同 JS，可自行修改後 `rehash`，或 `restore-bin agents` 還原。原有手動提問 UI 也沿用相同 router。
+
+發送與等待分開，單次 read 最多等待 5 秒，符合 bin 的 10 秒執行上限。取消 read 只停止來源等待，已接收的任務繼續執行，可用 `agents list` 找回請求 ID；要停止目標需切到該 tab 按 Stop。請求索引保留在目前頁面記憶體，最近 200 筆且不淘汰進行中請求；reload 後明確回報查無請求。對話與工具結果仍保存於歷史，不會自動重播。溝通範圍是同一頁面的 app tabs，未涵蓋其他瀏覽器分頁／popup instances。
 
 Shell 指令名稱不分大小寫，例如 `LS`、`Read`、`AI --NEW`、`Preview`、`DeMo JoKeS` 都可使用，包含自訂 bin 工具。`restore-bin READ` 也接受大小寫混用；路徑、檔案內容、搜尋字串、JSON 欄位和 session ID 仍保留原本大小寫。
 
@@ -113,6 +120,8 @@ async function main(args, api) {
 
 `api.skills.load(name)` 需要 manifest 的 `loadSkill` capability，並只在 Pi 配置過的本輪 skill catalog 中解析名稱。工具 JS 無法自行把任意文字當作工作區指示。
 
+`api.agents.execute({action,target?,text?,requestId?,waitMs?})` 需要 `tabAgents` capability。宿主再次驗證參數，來源 tab 由執行中的 session 或 shell context 決定，工具無法傳入來源 ID 冒充另一個 tab。只有發起請求的 tab 可讀其結果；模型收到的跨 tab 回覆是任務資料，不是 system instructions。
+
 `api.host.readPage({offset?,limit?})` 需要 `readHostPage` capability，經可信任 bridge 取得宿主資料；宿主不存在時明確報錯，參數由 trusted host 再驗證。`api.tools.help(command?)` 需要 `commandHelp` capability。修改這些工具的 JS／manifest 後同樣以 `rehash` 套用，沒有另外繞過 bin 的同名工具。
 
 執行器使用 opaque-origin sandbox iframe 內的 Worker，透過 MessageChannel 呼叫受控的 VFS API。工具不直接取得 app DOM、IndexedDB 或 provider credentials；CSP 阻擋網路與外部程式載入。因此 JS 格式目前是自足的函式，不支援 ESM imports、npm packages 或 Node API。
@@ -123,6 +132,7 @@ async function main(args, api) {
 
 ## 驗證紀錄
 
+- 跨 tab 工具以 Groq `openai/gpt-oss-120b` 通過 production browser 驗收：兩個獨立 AI sessions，tab1 自行 list／send／read，tab2 講笑話，讀回文字與目標輸出逐字一致，切換可見 tab 不改變來源身分。也驗證 shell 讀取 AI 請求與 reload 後明確失效。可執行 `npm run test:tabs:browser` 重現；報告與雙 tab 截圖在 `test-results/cross-tab-browser.json`、`cross-tab-source.png`、`cross-tab-target.png`。模型行為與供應商額度會影響 live runner，API 錯誤不計為通過。
 - Regression 包含 IndexedDB reload／workspace 隔離／revision conflict、六工具與 Pi native loop、五檔讀取、新增 JS、capability 拒絕、取消後副作用分類與恢復命令。
 - 本機 Chrome browser smoke 已跑六工具、動態 JS 擴充、網路／IndexedDB 隔離、無限迴圈 Stop、跨 app tabs 共用與 shell／Pi 切換。
 - Production preview 已驗證 write／read／edit／grep、reload 後內容與 revision 保存，以及 390×844 手機寬度無水平溢出。`npm test`、`npm run build` 與 `npm run verify:dist` 通過。

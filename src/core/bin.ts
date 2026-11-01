@@ -5,15 +5,17 @@ import { VFS_HOME, type FileNode, type VirtualFileSystem } from "./fs";
 import { ToolOutcomeUnknownError, type SessionTool, type FileReadRange } from "./session";
 import type { BinExecutor } from "./bin-sandbox";
 import { commandHelp } from "./shell-help";
+import { AGENTS_PARAMETERS } from "./tab-agents";
 
 type LoadedBin = { manifest: BinManifest; source: string };
 export type { BinFileAccess } from "./file-capabilities";
 export const NO_HOST_PAGE = "目前沒有連接宿主頁，請從 Host page 開啟 popup。";
-export type BinHostContext = { sessionId?: string; toolCallId?: string };
+export type BinHostContext = { sessionId?: string; toolCallId?: string; tabId?: string };
 export class BinRegistry {
   private tools = new Map<string, LoadedBin>();
   constructor(readonly fs: VirtualFileSystem, private readonly executor: BinExecutor, private readonly services: {
     readHostPage?: (args: { offset?: number; limit?: number }, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
+    tabAgents?: (args: unknown, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
   } = {}) {}
 
   /** Load source + metadata once while idle; a running tool sees an immutable definition. */
@@ -38,10 +40,10 @@ export class BinRegistry {
 
   list(): readonly BinManifest[] { return [...this.tools.values()].map(({ manifest }) => structuredClone(manifest)); }
 
-  async execute(name: string, args: unknown, cwd = VFS_HOME, signal?: AbortSignal): Promise<unknown> {
+  async execute(name: string, args: unknown, cwd = VFS_HOME, signal?: AbortSignal, context: BinHostContext = {}): Promise<unknown> {
     const definition = this.tools.get(name);
     if (!definition) throw new Error(`Command not found in ~/bin: ${name}`);
-    return this.executeDefinition(definition, args, cwd, signal);
+    return this.executeDefinition(definition, args, cwd, signal, undefined, undefined, context);
   }
 
   private async executeDefinition(definition: LoadedBin, args: unknown, cwd: string, signal?: AbortSignal, onAccess?: (access: BinFileAccess) => void, loadSkill?: (name: string, signal: AbortSignal) => Promise<unknown>, context: BinHostContext = {}): Promise<unknown> {
@@ -50,6 +52,8 @@ export class BinRegistry {
     const validated = validateToolArguments({ name, description: manifest.description, parameters: manifest.parameters as TSchema }, { type: "toolCall", id: "bin", name, arguments: args as Record<string, unknown> });
     let active = true;
     let mutations = 0;
+    let tabDispatchStarted = false;
+    let tabRequestId: string | undefined;
     const reads: FileNode[] = [];
     const execution = new AbortController();
     const abort = () => execution.abort();
@@ -58,6 +62,17 @@ export class BinRegistry {
     const rpc = async (method: BinCapability, values: unknown[]): Promise<unknown> => {
       if (!active || execution.signal.aborted) throw new Error("Tool cancelled");
       if (!manifest.capabilities.includes(method) || !BIN_CAPABILITIES.includes(method)) throw new Error(`Tool lacks filesystem capability: ${method}`);
+      if (method === "tabAgents") {
+        if (!Array.isArray(values) || values.length !== 1) throw new Error("Invalid agents arguments");
+        const options = validateToolArguments({ name: "agents", description: "Cross-tab agents", parameters: AGENTS_PARAMETERS }, { type: "toolCall", id: "agents-rpc", name: "agents", arguments: values[0] as Record<string, unknown> });
+        if (!this.services.tabAgents) throw new Error("Cross-tab agent runtime unavailable");
+        const result = await this.services.tabAgents(options, execution.signal, context);
+        if ((options as { action: string }).action === "send") {
+          const requestId = (result as { requestId?: string }).requestId;
+          if (requestId) { tabRequestId = requestId; tabDispatchStarted = true; }
+        }
+        return result;
+      }
       if (method === "commandHelp") {
         if (!Array.isArray(values) || values[0] !== undefined && typeof values[0] !== "string") throw new Error("Invalid help arguments");
         return commandHelp(values[0] as string | undefined, this);
@@ -108,6 +123,7 @@ export class BinRegistry {
       return result;
     }
     catch (error) {
+      if (tabDispatchStarted) throw new ToolOutcomeUnknownError(`Cross-tab dispatch did not finish. The target may still be running; use agents ${tabRequestId ? `read with requestId ${tabRequestId}` : "list to recover the requestId"} before considering another send. ${error instanceof Error ? error.message : String(error)}`);
       if (mutations > 0) throw new ToolOutcomeUnknownError(`Tool did not finish after a filesystem mutation; read back before retrying. ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     } finally { active = false; execution.abort(); signal?.removeEventListener("abort", abort); }

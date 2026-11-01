@@ -22,6 +22,8 @@ export type { WorkspaceSnapshot, WorkspaceTabSnapshot, WorkspaceTranscriptLine }
 export { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, HostToolBridge, HostToolBridgeError, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion } from "./core/embed-bridge";
 export type { HostToolApprovalDecision, HostToolApprovalHandler, HostToolApprovalRequest, HostToolCall, HostToolHandler, HostToolRegistration, HostToolRequest, HostToolResult, HostToolSpec } from "./core/embed-bridge";
 export { TabRouter } from "./core/tab-router";
+export { TabAgents, AGENTS_PARAMETERS } from "./core/tab-agents";
+export type { AgentsArguments, TabAgentInfo } from "./core/tab-agents";
 export type {
   TabQuestion,
   TabReply,

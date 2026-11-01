@@ -1,4 +1,4 @@
-import type { BinRegistry } from "../core/bin";
+import type { BinRegistry, BinHostContext } from "../core/bin";
 import type { VirtualFileSystem } from "../core/fs";
 import { resolvePath } from "../core/fs";
 import { parseShellCommand } from "../core/shell-command";
@@ -14,6 +14,7 @@ export type TerminalContext = {
   bin: BinRegistry;
   cwd: string;
   signal?: AbortSignal;
+  binContext?: BinHostContext;
   extraTools?: readonly HelpTool[];
   history(): Promise<WorkspaceTabSnapshot[]>;
   openPreview(path: string): void;
@@ -55,5 +56,5 @@ export async function executeTerminalInput(input: string, context: TerminalConte
       case "editor": if (values.length <= 1) { await context.openEditor(values[0] ?? context.cwd); return { text: "" }; }
     }
   }
-  return executeShell(command, context.fs, context.bin, context.cwd, context.signal);
+  return executeShell(command, context.fs, context.bin, context.cwd, context.signal, context.binContext);
 }

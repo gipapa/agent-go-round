@@ -50,13 +50,14 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Explicit, in-process routing for user-triggered questions between tabs.
+ * Explicit, in-process routing for questions between tabs, including bin tools.
  *
  * The router owns message identity, deduplication and delivery state. It does
  * not ask the source tab's model to do anything when a reply arrives.
  */
 export class TabRouter {
   private readonly endpoints = new Map<string, TabRouteEndpoint>();
+  private readonly pending = new Map<string, TabQuestion>();
   private readonly deliveredMessageIds = new Set<string>();
   private readonly listeners = new Set<(event: TabRouteEvent) => void>();
 
@@ -65,7 +66,13 @@ export class TabRouter {
     if (this.endpoints.has(tabId)) throw new Error(`Tab ${tabId} is already registered`);
     this.endpoints.set(tabId, endpoint);
     return () => {
-      if (this.endpoints.get(tabId) === endpoint) this.endpoints.delete(tabId);
+      if (this.endpoints.get(tabId) !== endpoint) return;
+      this.endpoints.delete(tabId);
+      for (const [id, message] of this.pending) {
+        if (message.targetTabId !== tabId) continue;
+        this.pending.delete(id);
+        this.emit({ type: "route_failed", reason: "target_closed", message });
+      }
     };
   }
 
@@ -110,13 +117,14 @@ export class TabRouter {
       this.emit({ type: "route_rejected", reason: receipt.reason, message });
       return receipt;
     }
-    if (target.isBusy()) {
+    if (target.isBusy() || [...this.pending.values()].some(pending => pending.targetTabId === message.targetTabId)) {
       const receipt: TabRouteReceipt = { status: "rejected", reason: "busy", message };
       this.emit({ type: "route_rejected", reason: receipt.reason, message });
       return receipt;
     }
 
     this.deliveredMessageIds.add(message.messageId);
+    this.pending.set(message.messageId, message);
     this.emit({ type: "route_accepted", message });
     void this.execute(message, target);
     return { status: "accepted", message };
@@ -125,6 +133,7 @@ export class TabRouter {
   private async execute(message: TabQuestion, endpoint: TabRouteEndpoint): Promise<void> {
     try {
       const result = await endpoint.receiveQuestion(message);
+      if (!this.pending.delete(message.messageId)) return;
       if (this.endpoints.get(message.targetTabId) !== endpoint) {
         this.emit({ type: "route_failed", reason: "target_closed", message });
         return;
@@ -143,6 +152,7 @@ export class TabRouter {
       };
       this.emit({ type: "route_reply", message, reply });
     } catch (error) {
+      if (!this.pending.delete(message.messageId)) return;
       if (this.endpoints.get(message.targetTabId) !== endpoint) {
         this.emit({ type: "route_failed", reason: "target_closed", message });
         return;

@@ -1,7 +1,7 @@
 import { checkOperandCount, parseOperands } from "./command-definitions";
 import { parseShellCommand, type ShellCommand } from "./shell-command";
 export { shellWords, parseShellCommand } from "./shell-command";
-import type { BinRegistry } from "./bin";
+import type { BinRegistry, BinHostContext } from "./bin";
 import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, DEFAULT_BIN_TOOLS } from "./bin-defaults";
 import { FileSystemError, VFS_HOME, resolvePath, type FileStat, type VirtualFileSystem } from "./fs";
 import { requestedHelp } from "./shell-help";
@@ -9,13 +9,22 @@ export { SHELL_NOTICE, requestedHelp } from "./shell-help";
 
 function notFound(error: unknown): boolean { return error instanceof FileSystemError && error.code === "not_found"; }
 
-export async function executeShell(input: string | ShellCommand, fs: VirtualFileSystem, bin: BinRegistry, cwd: string, signal?: AbortSignal): Promise<{ text: string; cwd?: string; clear?: boolean }> {
+export async function executeShell(input: string | ShellCommand, fs: VirtualFileSystem, bin: BinRegistry, cwd: string, signal?: AbortSignal, context?: BinHostContext): Promise<{ text: string; cwd?: string; clear?: boolean }> {
   const command = typeof input === "string" ? parseShellCommand(input) : input;
   if (!command) return { text: "" };
   const { name, values, json } = command;
-  if (json !== undefined) return { text: JSON.stringify(await bin.execute(name === "cat" ? "read" : name, json, cwd, signal), null, 2) ?? "null" };
+  if (json !== undefined) return { text: JSON.stringify(await bin.execute(name === "cat" ? "read" : name, json, cwd, signal, context), null, 2) ?? "null" };
   const help = requestedHelp([name, ...values], bin);
   if (help !== undefined) return { text: help };
+  if (name === "agents") {
+    const action = values[0]?.toLowerCase() ?? "list";
+    const args = action === "list" && values.length <= 1 ? { action }
+      : action === "send" && values.length === 3 ? { action, target: values[1], text: values[2] }
+      : action === "read" && values.length === 2 ? { action, requestId: values[1] }
+      : undefined;
+    if (!args) throw new Error('Usage: agents list | agents send TAB_ID "MESSAGE" | agents read REQUEST_ID');
+    return { text: JSON.stringify(await bin.execute(name, args, cwd, signal, context), null, 2) ?? "null" };
+  }
   const done = { text: "" };
   if (["pwd", "clear", "rehash"].includes(name)) {
     checkOperandCount(name, values);

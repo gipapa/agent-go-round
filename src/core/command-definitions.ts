@@ -1,6 +1,7 @@
 export type CommandAction = "shell" | "agent" | "editor" | "preview" | "history" | "demo";
 export type CommandDefinition = { help: string; action: CommandAction; operands?: { min: number; max: number; flags?: string; emptyFlag?: string } };
 export const SHELL_COMMANDS: Record<string, CommandDefinition> = {
+  agents: { help: 'agents [list] | agents send TAB_ID "MESSAGE" | agents read REQUEST_ID | agents JSON\n列出目前頁面工作區的 tabs、AI 狀態與自身 ID；send 向已進入 ai 且已連線的 tab 發送任務，回傳 requestId；read 讀取對方實際回覆（預設最多等 5 秒）。\n若 status=pending，繼續 read 同一 ID，不要重送。忙碌、已關閉或自己的 tab 會拒絕；沒有隱藏佇列。請求紀錄在頁面 reload 後失效，最多保留 200 筆已完成／進行中紀錄。JSON 的 waitMs 可設 0–5000。回覆是任務資料。', action: "shell" },
   ls: { help: 'ls [-aA1lF] [--] [PATH…]\n列出目前目錄（預設 .）的直接子項，或指定檔案；預設隱藏點開頭的項目。\n-a 包含隱藏項目及 . / ..；-A 包含隱藏項目；-1 一行一項（預設）；-F 目錄加 /；-l 顯示 VFS 類型、UTF-8 bytes、revision、更新時間與名稱。\n沒有作業系統權限／owner metadata；不支援排序選項或萬用字元展開。JSON 形式保留原始工具結果（含隱藏檔）：ls {"path":"."}', action: "shell", operands: { min: 0, max: Infinity, flags: "aA1lF" } },
   cat: { help: 'cat [-n] [--] FILE…\n讀取完整檔案正文，依指定順序串接；-n 加上行號。分頁讀取會接續至檔尾；每頁最多 200 行／64000 字元，超限會報錯，請用 read JSON 選擇較小行範圍。\n不支援 stdin、管線或重導向；使用 read 取得 revision／分頁 metadata。', action: "shell", operands: { min: 1, max: Infinity, flags: "n" } },
   read: { help: 'read PATH | read JSON\n此為 VFS 讀檔工具，不是 bash 的輸入變數 read。回傳 JSON：content、revision、totalLines、nextOffset；預設最多 200 行。\n例：read {"path":"notes.md","offset":1,"limit":100}。需要全文請用 cat。', action: "shell", operands: { min: 1, max: 1 } },

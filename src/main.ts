@@ -17,6 +17,7 @@ import { createGroqRuntime, fetchProviderModels, normalizeBaseUrl, DEFAULT_GROQ_
 import { createScriptedSession } from "./core/scripted";
 import { AgentSession, DEFAULT_AUTO_COMPACT_PERCENT, inspectSessionRecovery, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
 import { TabRouter, type TabRouteEvent } from "./core/tab-router";
+import { TabAgents } from "./core/tab-agents";
 import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
@@ -93,6 +94,10 @@ const state = {
   nextTabNumber: 2
 };
 const tabRouter = new TabRouter();
+const tabAgents = new TabAgents(tabRouter, () => state.tabs.map(tab => ({
+  id: tab.id, name: tab.name, mode: tab.mode, provider: tab.provider, model: tab.session.agent.state.model.id,
+  cwd: tab.agentCwd ?? tab.cwd, busy: tab.session.isRunning || !!tab.commandAbort, connected: tab.connected
+})));
 let workspaceStore: IndexedDbConversationStore | undefined;
 let durableEvents: IndexedDbSessionEventStore | undefined;
 const sessionEventStore = {
@@ -116,6 +121,11 @@ const filesReady = (async () => {
     await durableEvents.hydrate();
     const fs = new IndexedDbFileSystem(window.indexedDB, workspaceId);
     const bin = new BinRegistry(fs, new SandboxedBinExecutor(), {
+      tabAgents: (args, signal, context) => {
+        const source = context.tabId ? state.tabs.find(tab => tab.id === context.tabId) : state.tabs.find(tab => tab.session.sessionId === context.sessionId);
+        if (!source) throw new Error("Cross-tab source session is no longer open");
+        return tabAgents.execute(source.id, args, signal);
+      },
       readHostPage: async (args, signal, context) => {
         if (!hostToolSpecs.has("read_host_page")) throw new Error(NO_HOST_PAGE);
         return requestHostTool(context.sessionId ?? activeTab().session.sessionId, context.toolCallId ?? makeId("host-read"), "read_host_page", args, signal);
@@ -620,7 +630,7 @@ function hostTool(spec: HostToolSpec, sessionId: string): SessionTool {
 function currentHostTools(sessionId = "pending-session", includeBin = true): SessionTool[] {
   const findTab = () => state.tabs.find((tab) => tab.session.sessionId === sessionId);
   const cwd = () => findTab()?.agentCwd ?? findTab()?.cwd ?? VFS_HOME;
-  const local = includeBin ? fileRuntime?.bin.sessionTools(cwd, (access, toolCallId) => findTab()?.session.recordFileAccess(toolCallId, access.method, access.path, access.revision, access.readRange)) ?? [] : [];
+  const local = includeBin ? fileRuntime?.bin.sessionTools(cwd, (access, toolCallId) => findTab()?.session.recordFileAccess(toolCallId, access.method, access.path, access.revision, access.readRange), undefined, sessionId) ?? [] : [];
   const names = new Set(fileRuntime?.bin.list().map((tool) => tool.name) ?? []);
   const host = [...hostToolSpecs.values()].filter(spec => spec.name !== "read_host_page").map((spec) => {
     if (names.has(spec.name)) throw new Error(`Host tool conflicts with ~/bin: ${spec.name}`);
@@ -1319,7 +1329,7 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
     if (!fileRuntime) throw new Error(`Files unavailable: ${fileRuntimeError}`);
     if (tab.mode === "shell") {
       const result = await executeTerminalInput(input, {
-        ...fileRuntime, cwd: tab.cwd, signal: controller.signal, extraTools: [...hostToolSpecs.values()],
+        ...fileRuntime, cwd: tab.cwd, signal: controller.signal, binContext: { tabId: tab.id }, extraTools: [...hostToolSpecs.values()],
         history: () => conversations().history(),
         openPreview,
         openEditor: path => openFileEditor(tab, path),
