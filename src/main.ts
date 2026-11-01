@@ -159,9 +159,10 @@ app.innerHTML = `
         <div id="terminal" class="terminal" role="log" aria-live="polite"></div>
         <div id="page-previews" class="page-previews" hidden></div>
 
-        <section id="file-editor" class="file-editor" hidden aria-label="File editor">
-          <div class="editor-toolbar"><strong id="editor-path"></strong><span id="editor-status" role="status"></span><button id="editor-save" type="button" class="terminal-button">Save ⌘S</button><button id="editor-cancel" type="button" class="terminal-button">Cancel</button></div>
-          <label for="editor-content" class="sr-only">File contents</label><textarea id="editor-content" spellcheck="false" aria-label="File contents"></textarea>
+        <section id="file-editor" class="file-editor" hidden aria-label="Human file editor">
+          <div class="editor-toolbar"><div class="editor-title"><span class="editor-kicker">HUMAN EDITOR</span><strong id="editor-path"></strong></div><span id="editor-status" role="status"></span><button id="editor-save" type="button" class="terminal-button">Save ⌘S</button><button id="editor-cancel" type="button" class="terminal-button">Back to terminal</button></div>
+          <div class="editor-help">Tab inserts indentation · ⌘/Ctrl+S saves · changes stay local until Save</div>
+          <div class="editor-surface"><pre id="editor-line-numbers" aria-hidden="true">1</pre><label for="editor-content" class="sr-only">File contents</label><textarea id="editor-content" spellcheck="false" aria-label="File contents"></textarea></div>
         </section>
         <form id="terminal-form" class="terminal-form">
           <span class="terminal-prompt" aria-hidden="true">❯</span>
@@ -233,6 +234,8 @@ const settingsDrawer = get<HTMLElement>("settings-drawer");
 const settingsBackdrop = get<HTMLDivElement>("settings-backdrop");
 const settingsStatus = get<HTMLParagraphElement>("settings-status");
 const workspaceStatus = get<HTMLSpanElement>("workspace-status");
+const editorContent = get<HTMLTextAreaElement>("editor-content");
+const editorLineNumbers = get<HTMLPreElement>("editor-line-numbers");
 let routeSourceTabId: string | null = null;
 let routeReturnFocus: HTMLElement | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
@@ -282,6 +285,30 @@ document.addEventListener("focusout", () => requestAnimationFrame(syncViewportHe
 
 function setWorkspaceStatus(message: string): void {
   workspaceStatus.textContent = message;
+}
+
+function syncEditorLineNumbers(): void {
+  const lineCount = Math.max(1, editorContent.value.split("\n").length);
+  editorLineNumbers.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join("\n");
+  editorLineNumbers.scrollTop = editorContent.scrollTop;
+}
+
+function indentEditorSelection(event: KeyboardEvent): void {
+  if (event.key !== "Tab" || event.altKey || event.metaKey || event.ctrlKey) return;
+  event.preventDefault();
+  const start = editorContent.selectionStart;
+  const end = editorContent.selectionEnd;
+  const value = editorContent.value;
+  if (!event.shiftKey) {
+    editorContent.setRangeText("\t", start, end, "end");
+    editorContent.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+  const lineStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+  const remove = value.startsWith("\t", lineStart) ? 1 : value.startsWith("  ", lineStart) ? 2 : 0;
+  if (!remove) return;
+  editorContent.setRangeText("", lineStart, lineStart + remove, "end");
+  editorContent.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function workspaceTabSnapshot(tab: AgentTab): WorkspaceTabSnapshot {
@@ -918,8 +945,8 @@ function renderPane(tab: AgentTab): void {
     get<HTMLElement>("editor-path").textContent = displayPath(tab.editor!.path);
     get<HTMLElement>("editor-status").textContent = tab.editor!.status ?? "";
     get<HTMLButtonElement>("editor-save").disabled = !!tab.editor!.saving;
-    const editor = get<HTMLTextAreaElement>("editor-content");
-    if (editor.dataset.identity !== `${tab.id}:${tab.editor!.path}`) { editor.value = tab.editor!.content; editor.dataset.identity = `${tab.id}:${tab.editor!.path}`; }
+    if (editorContent.dataset.identity !== `${tab.id}:${tab.editor!.path}`) { editorContent.value = tab.editor!.content; editorContent.dataset.identity = `${tab.id}:${tab.editor!.path}`; }
+    syncEditorLineNumbers();
   }
   terminalView.render({ ...tab, messages: tab.session.agent.state.messages });
 }
@@ -1132,14 +1159,17 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
   }
 });
 
-get<HTMLTextAreaElement>("editor-content").addEventListener("input", (event) => {
+editorContent.addEventListener("input", (event) => {
   const editor = activeTab().editor;
   if (editor) editor.content = (event.currentTarget as HTMLTextAreaElement).value;
   if (editor) editor.status = "Unsaved";
   get<HTMLElement>("editor-status").textContent = "Unsaved";
+  syncEditorLineNumbers();
   scheduleWorkspaceSave();
 });
-get<HTMLTextAreaElement>("editor-content").addEventListener("keydown", (event) => {
+editorContent.addEventListener("scroll", syncEditorLineNumbers);
+editorContent.addEventListener("keydown", (event) => {
+  indentEditorSelection(event);
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveFileEditor(); }
 });
 get<HTMLButtonElement>("editor-save").addEventListener("click", () => void saveFileEditor());

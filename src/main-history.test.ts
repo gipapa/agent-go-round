@@ -161,6 +161,11 @@ describe("UI history at the real provider request boundary", () => {
     await fs.writeFile("~/code.ts", "original");
     await send("edit code.ts");
     const editor = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
+    expect(document.querySelector("#editor-line-numbers")?.textContent).toBe("1");
+    editor.value = "first\nsecond"; editor.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(document.querySelector("#editor-line-numbers")?.textContent).toBe("1\n2");
+    editor.setSelectionRange(0, 0); editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(editor.value).toBe("\tfirst\nsecond");
     editor.value = "unsaved edit"; editor.dispatchEvent(new Event("input", { bubbles: true }));
     await saved(); await loadApp();
     expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("unsaved edit");

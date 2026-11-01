@@ -191,9 +191,15 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 [hidden] { display: none !important; }
 .file-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: hidden; }
 .editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-#editor-path { overflow-wrap: anywhere; margin-right: auto; }
+.editor-title { display: grid; min-width: 0; gap: 3px; margin-right: auto; }
+.editor-kicker { color: #b89bdf; font-size: 9px; letter-spacing: .16em; }
+#editor-path { overflow-wrap: anywhere; }
 #editor-status { font-size: 12px; color: #b8a8cb; }
-#editor-content { flex: 1; width: 100%; min-height: 140px; resize: none; border: 1px solid #474052; padding: 12px; background: #111116; color: #e4dfed; font: 13px/1.6 ui-monospace, monospace; tab-size: 2; }
+.editor-help { color: #777283; font-size: 10px; }
+.editor-surface { display: grid; min-height: 0; flex: 1; grid-template-columns: 48px minmax(0, 1fr); overflow: hidden; border: 1px solid #474052; background: #111116; }
+#editor-line-numbers { min-width: 0; margin: 0; overflow: hidden; border-right: 1px solid #302c3d; color: #6c657c; padding: 12px 10px; text-align: right; user-select: none; font: 13px/1.6 ui-monospace, monospace; }
+#editor-content { width: 100%; min-height: 140px; resize: none; border: 0; outline: 0; padding: 12px 14px; background: #111116; color: #e4dfed; font: 13px/1.6 ui-monospace, monospace; tab-size: 2; }
+#editor-content:focus { box-shadow: inset 0 0 0 1px #8f6aba; }
 .line-content details summary { cursor: pointer; }
 .line-content details pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; border-left: 1px solid #474052; color: #d0c4df; }
 
