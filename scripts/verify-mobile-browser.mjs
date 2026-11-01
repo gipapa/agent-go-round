@@ -31,7 +31,11 @@ try {
   await call("open", url.href); await call("set", "viewport", "390", "844");
   await wait("!!document.querySelector('#send')&&!document.querySelector('#send').disabled"); await call("snapshot");
   assert(await evaluate("document.querySelector('.shell-notice').textContent.includes('簡易 bash')&&document.querySelector('.shell-notice').textContent.includes('read／cat、write、edit、grep、find、ls')"), "Missing shell capabilities");
-  await send("help"); await send("help");
+  await send('WrItE ' + JSON.stringify({ path: "Case.MD", content: "MiXeD" }));
+  await send("ReAd Case.MD");
+  assert(await evaluate("(() => {const result=JSON.parse([...document.querySelectorAll('#terminal .line-content')].at(-1).textContent);return result.path==='/home/user/Case.MD'&&result.content==='MiXeD';})()"), "Mixed-case commands changed path or content");
+  check("mixed-case file commands preserve path and content case");
+  await send("HELP"); await send("hElP");
   await call("focus", "#prompt");
   await evaluate("(() => {window.__nativeVisualViewport=Object.getOwnPropertyDescriptor(window,'visualViewport');window.__keyboardViewport=Object.assign(new EventTarget(),{width:390,height:844,offsetTop:0,offsetLeft:0});Object.defineProperty(window,'visualViewport',{configurable:true,value:window.__keyboardViewport});return true;})()");
   await viewport(360, 60);
@@ -42,8 +46,8 @@ try {
   assert(await evaluate("(() => {const t=document.querySelector('#terminal');t.scrollTop=0;const first=t.scrollTop;t.scrollTop=t.scrollHeight;return t.scrollTop>first;})()"), "Transcript cannot scroll with keyboard open");
   report.compact = compact; check("360px visible viewport keeps composer visible and transcript scrollable");
   await call("screenshot", "test-results/mobile-keyboard-simulated.png");
-  await send("ai"); assert(await evaluate("document.querySelector('#pane-type').textContent==='AI agent'"), "ai did not enter agent mode");
-  await send("/exit"); await send("ai --new"); await send("/exit");
+  await send("AI"); assert(await evaluate("document.querySelector('#pane-type').textContent==='AI agent'"), "ai did not enter agent mode");
+  await send("/ExIt"); await send("Ai --NeW"); await send("/EXIT");
   check("ai, ai --new and /exit work with compact composer");
   await viewport(844);
   assert(await evaluate("!document.documentElement.classList.contains('keyboard-open')&&getComputedStyle(document.querySelector('.sidebar')).display!=='none'"), "Keyboard close did not restore layout");
@@ -52,7 +56,7 @@ try {
   assert(await evaluate("(() => {const input=document.querySelector('#api-key'),button=document.querySelector('button[form=provider-form]'),a=input.getBoundingClientRect(),b=button.getBoundingClientRect();return getComputedStyle(input).fontSize==='16px'&&a.top>=60&&a.bottom<=420&&b.bottom<=420;})()"), "Settings controls covered by keyboard");
   await call("click", "#close-settings"); await viewport(844);
   check("provider inputs and connect action fit the visible viewport");
-  await send("preview");
+  await send("PrEvIeW");
   await wait("[...document.querySelectorAll('.preview-toolbar button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
   await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('我的 Pi 主頁')");

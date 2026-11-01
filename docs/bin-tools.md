@@ -29,6 +29,8 @@
 
 Shell 與 Pi 使用相同 BinRegistry、schemas、JS 與 filesystem API。Shell 是內建指令解析器；目前不支援 pipes、redirects 或作業系統程式。
 
+Shell 指令名稱不分大小寫，例如 `LS`、`Read`、`AI --NEW`、`Preview`、`DeMo JoKeS` 都可使用，包含自訂 bin 工具。`restore-bin READ` 也接受大小寫混用；路徑、檔案內容、搜尋字串、JSON 欄位和 session ID 仍保留原本大小寫。
+
 ```text
 ls ~/bin
 mkdir jokes

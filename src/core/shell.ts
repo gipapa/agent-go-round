@@ -2,7 +2,7 @@ import type { BinRegistry } from "./bin";
 import { BIN_DIRECTORY, DEFAULT_BIN_TOOLS } from "./bin-defaults";
 import { displayPath, resolvePath, type VirtualFileSystem } from "./fs";
 
-export const SHELL_NOTICE = "簡易 bash：僅支援下列內建指令與 ~/bin 擴充工具。\n檔案工具：read／cat、write、edit、grep、find、ls。\n其他指令：pwd、cd、mkdir、touch、rm、mv、preview、history、clear、help、rehash、restore-bin、demo jokes。\n輸入 ai 啟動 agent；ai --new 開新對話，ai --resume ID 接續歷史。不支援管線、重導向或作業系統程式。";
+export const SHELL_NOTICE = "簡易 bash：僅支援下列內建指令與 ~/bin 擴充工具。指令名稱不分大小寫，路徑與內容保留大小寫。\n檔案工具：read／cat、write、edit、grep、find、ls。\n其他指令：pwd、cd、mkdir、touch、rm、mv、preview、history、clear、help、rehash、restore-bin、demo jokes。\n輸入 ai 啟動 agent；ai --new 開新對話，ai --resume ID 接續歷史。不支援管線、重導向或作業系統程式。";
 
 /** Small bash-style tokenizer. Operators and command substitution are never evaluated. */
 export function shellWords(input: string): string[] {
@@ -24,14 +24,14 @@ export function shellWords(input: string): string[] {
 export async function executeShell(input: string, fs: VirtualFileSystem, bin: BinRegistry, cwd: string, signal?: AbortSignal): Promise<{ text: string; cwd?: string; mode?: "agent"; clear?: boolean }> {
   const match = input.trim().match(/^(\S+)(?:\s+([\s\S]*))?$/);
   if (!match) return { text: "" };
-  const name = match[1], tail = match[2] ?? "";
+  const name = match[1].toLowerCase(), tail = match[2] ?? "";
   if (name === "help") return { text: SHELL_NOTICE + '\n\npwd | cd PATH | mkdir PATH | touch PATH | rm PATH | mv FROM TO | clear | rehash\nls [PATH] | read PATH | write PATH "CONTENT" | edit PATH ["OLD" "NEW"]\ngrep "TEXT" [PATH] | find [PATH] [NAME_GLOB]\nedit PATH opens the file editor. preview [PATH] opens a page tab with AI popup (default ~/main.html).\nai | ai --new | history | ai --resume SESSION_ID\ndemo jokes creates the AGENTS.md, joke-master skill and five joke files.\nEvery bin tool also accepts JSON: write {"path":"demo.md","content":"hello"}\nread returns revision; supply expectedRevision when replacing an existing file. createParents:true creates missing directories.\nTools: ~/bin/NAME.js + NAME.tool.json. rehash loads new/changed tools.\nRecovery: restore-bin NAME resets one default tool. rm removes a broken custom manifest.\nIn AI: /exit returns to shell; /skill NAME TASK explicitly loads a skill.' };
   if (name === "pwd") return { text: cwd };
   if (name === "clear") return { text: "", clear: true };
   if (name === "rehash") { await bin.reload(); return { text: `Loaded: ${bin.list().map((tool) => tool.name).join(", ")}` }; }
   const values = tail.trim().startsWith("{") ? undefined : shellWords(tail);
   if (name === "restore-bin") {
-    const definition = DEFAULT_BIN_TOOLS.find((tool) => tool.name === values?.[0]);
+    const definition = DEFAULT_BIN_TOOLS.find((tool) => tool.name === values?.[0]?.toLowerCase());
     if (!definition) throw new Error("Usage: restore-bin read|write|edit|grep|find|ls (resets JS and manifest)");
     const { source, ...manifest } = definition;
     await fs.mkdir(BIN_DIRECTORY, { recursive: true });

@@ -550,8 +550,8 @@ function resolveHostToolApproval(payload: unknown): void {
 async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) {
   if (!tab.connected) throw new Error("Reconnect Groq before continuing. Your saved conversation is preserved.");
   if (!fileRuntime) throw new Error("Virtual filesystem is unavailable");
-  const explicit = input.match(/^\/skill\s+(\S+)\s+([\s\S]+)$/);
-  if (input.startsWith("/skill") && !explicit) throw new Error("Usage: /skill NAME TASK");
+  const explicit = input.match(/^\/skill\s+(\S+)\s+([\s\S]+)$/i);
+  if (/^\/skill(?:\s|$)/i.test(input) && !explicit) throw new Error("Usage: /skill NAME TASK");
   await configureFileAgent(tab.session, fileRuntime.fs, tab.agentCwd ?? tab.cwd, fileRuntime.bin, explicit?.[1], currentHostTools(tab.session.sessionId, false));
   if (signal?.aborted) throw new Error("Run cancelled before dispatch");
   await conversations().claim(tab.session.sessionId);
@@ -573,7 +573,8 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
 
 async function enterAi(tab: AgentTab, args: string[]): Promise<void> {
   if (!args.length) { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; return; }
-  if (args[0] === "--new" && args.length === 1) {
+  const option = args[0].toLowerCase();
+  if (option === "--new" && args.length === 1) {
     await conversations().remember(workspaceTabSnapshot(tab));
     const runtime = tab.runtime;
     const next = runtime
@@ -590,7 +591,7 @@ async function enterAi(tab: AgentTab, args: string[]): Promise<void> {
     tab.transcript.push({ id: makeId("new-session"), role: "system", text: `New conversation ${next.sessionId}` });
     return;
   }
-  if (args[0] === "--resume" && args.length === 2) {
+  if (option === "--resume" && args.length === 2) {
     const existing = state.tabs.find((candidate) => candidate.session.sessionId === args[1]);
     if (existing) { existing.mode = "agent"; selectTab(existing.id); return; }
     const saved = await conversations().resume(args[1]);
@@ -1155,18 +1156,19 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
     if (!fileRuntime) throw new Error(`Files unavailable: ${fileRuntimeError}`);
     if (tab.mode === "shell") {
       const words = shellWords(input);
-      if (words[0] === "preview") {
+      const command = words[0]?.toLowerCase();
+      if (command === "preview") {
         if (words.length > 2) throw new Error("Usage: preview [PATH]");
         openPreview(resolvePath(words[1] || "~/main.html", tab.cwd));
-      } else if (words[0] === "ai") {
+      } else if (command === "ai") {
         await enterAi(tab, words.slice(1));
-      } else if (words[0] === "history") {
+      } else if (command === "history") {
         const history = await conversations().history();
         tab.transcript.push({ id: makeId("history"), role: "system", text: history.map((entry) => `${entry.session.sessionId} · ${entry.name} · ${entry.provider ?? entry.session.model.provider} · ${new Date(entry.session.savedAt).toLocaleString()}`).join("\n") || "No saved conversations" });
-      } else if (words[0] === "demo" && words[1] === "jokes") {
+      } else if (command === "demo" && words[1]?.toLowerCase() === "jokes") {
         const installed = await installJokeDemo(fileRuntime.fs);
         tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} files created, ${installed.kept.length} existing files kept.\nRun ai, then ask:\n${JOKE_PROMPT}` });
-      } else if (words[0] === "edit" && words.length === 2) {
+      } else if (command === "edit" && words.length === 2) {
         await openFileEditor(tab, words[1]);
       } else {
       const result = await executeShell(input, fileRuntime.fs, fileRuntime.bin, tab.cwd, controller.signal);
@@ -1176,11 +1178,11 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
       if (result.text) tab.transcript.push({ id: makeId("shell"), role: "system", text: result.text });
       }
       tab.status = "idle";
-    } else if (input === "/exit") {
+    } else if (/^\/exit$/i.test(input)) {
       tab.mode = "shell";
       tab.status = "idle";
       tab.transcript.push({ id: makeId("shell"), role: "system", text: `${displayPath(tab.cwd)} $ · conversation preserved` });
-    } else if (input === "/skill off") {
+    } else if (/^\/skill\s+off$/i.test(input)) {
       tab.session.activeSkill = undefined;
       tab.status = "idle";
       tab.transcript.push({ id: makeId("skill"), role: "system", text: "Active skill cleared." });

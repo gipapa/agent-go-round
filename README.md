@@ -40,6 +40,8 @@ npm run verify:dist
 
 快速體驗：在 shell 輸入 `demo jokes`，建立不覆寫既有檔案的中文 AGENTS.md、joke-master skill、評分參考與五個笑話。連接 Groq 後執行 `ai`，使用英文請它讀取、評分並選出最好笑的笑話。`edit PATH` 開啟文字編輯器；`history` 與 `ai --resume SESSION_ID` 可重開對話，`ai --new` 開始新對話。
 
+簡易 bash 的指令名稱不分大小寫，`LS`、`Read`、`AI --NEW`、`Preview` 等寫法皆可；路徑、內容、搜尋文字與 session ID 保留原本大小寫。
+
 Groq live tool acceptance 是明確 opt-in：設定 `AGENT_GO_ROUND_GROQ_API_KEY` 後執行 `npm run test:groq`，會跑 read、mutation/read-back、tool-error correction 三個短任務，輸出 provider/model、工具呼叫與 `harness`／`provider`／`quota`／`network`／`model_decision` 失敗分類；可用 `AGENT_GO_ROUND_GROQ_REPORT` 另外保存 JSON report。一般 `npm test` 不會觸發網路或消耗額度。
 
 核心也提供第一輪 typed tool boundary：`AgentSession` 可注入 Pi `AgentTool`，由 Pi 負責 TypeBox schema validation 與唯一 tool loop；宿主可用 `requiresApproval`、`approval` callback、`maxToolCalls`、`deadlineMs` 與 `maxOutputCharacters` 限制副作用與資源。若工具已送出但結果不明，請丟出 `ToolOutcomeUnknownError`；session 會記錄 `outcome_unknown`、停止自動 follow-up，交由宿主明確讀回或請使用者決定。`MemorySessionEventStore` 可保存 version 1 session events，事件不保存 tool arguments 或 result details。

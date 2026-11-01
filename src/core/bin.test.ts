@@ -94,6 +94,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     await fs.writeFile("~/bin/hello.js", 'async function main(args, api) { return "first"; }');
     await bin.reload();
     const registered = bin.sessionTools().find((tool) => tool.name === "hello")!;
+    expect(await executeShell("HeLlO", fs, bin, "/home/user")).toEqual({ text: '"first"' });
     await fs.writeFile("~/bin/hello.js", 'async function main(args, api) { return api.fs.writeFile("~/oops", "bad"); }');
     await bin.reload();
     expect(await registered.execute("test", {})).toMatchObject({ details: "first" });
@@ -147,6 +148,36 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await executeShell("ai", fs, bin, "/home/user")).toMatchObject({ mode: "agent" });
     await expect(executeShell("missing", fs, bin, "/home/user")).rejects.toThrow(/not found/);
     expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["edit", "find", "grep", "ls", "read", "skill_load", "write"]);
+  });
+
+  it.each(["upper", "mixed"])("accepts %s-case shell commands without changing file paths, content or JSON", async (style) => {
+    const { fs, bin } = await setup();
+    const name = (value: string) => style === "upper" ? value.toUpperCase() : [...value].map((char, index) => index % 2 ? char.toLowerCase() : char.toUpperCase()).join("");
+    const shell = (command: string, args = "") => executeShell(`${name(command)} ${args}`, fs, bin, "/home/user");
+    expect(await shell("help")).toMatchObject({ text: expect.stringContaining("指令名稱不分大小寫") });
+    expect(await shell("pwd")).toEqual({ text: "/home/user" });
+    await shell("mkdir", '"Mixed Dir"');
+    expect(await shell("cd", '"Mixed Dir"')).toMatchObject({ cwd: "/home/user/Mixed Dir" });
+    await shell("touch", '"Mixed Dir/Empty.MD"');
+    await shell("write", '"Mixed Dir/Data.MD" "Token ABC"');
+    await shell("write", JSON.stringify({ path: "Mixed Dir/Other.MD", content: "Other XYZ", expectedRevision: 0 }));
+    expect((await fs.readFile("~/Mixed Dir/Other.MD")).content).toBe("Other XYZ");
+    expect(JSON.parse((await shell("read", '"Mixed Dir/Data.MD"')).text)).toMatchObject({ path: "/home/user/Mixed Dir/Data.MD", content: "Token ABC" });
+    expect(JSON.parse((await shell("cat", '"Mixed Dir/Data.MD"')).text)).toMatchObject({ content: "Token ABC" });
+    await shell("edit", '"Mixed Dir/Data.MD" "ABC" "XYZ"');
+    expect(JSON.parse((await shell("grep", '"XYZ" "Mixed Dir/Data.MD"')).text)).toMatchObject({ matches: [{ text: "Token XYZ" }] });
+    expect(JSON.parse((await shell("grep", '"xyz" "Mixed Dir/Data.MD"')).text)).toMatchObject({ matches: [] });
+    expect(JSON.parse((await shell("find", '"Mixed Dir" "Data.MD"')).text)).toMatchObject({ entries: [{ path: "/home/user/Mixed Dir/Data.MD" }] });
+    expect(JSON.parse((await shell("ls", '"Mixed Dir"')).text).entries).toHaveLength(3);
+    await shell("mv", '"Mixed Dir/Data.MD" "Mixed Dir/Renamed.MD"');
+    expect((await fs.readFile("~/Mixed Dir/Renamed.MD")).content).toBe("Token XYZ");
+    await expect(fs.readFile("~/mixed dir/renamed.md")).rejects.toThrow("Not found");
+    await shell("rm", '"Mixed Dir/Empty.MD"');
+    await expect(fs.stat("~/Mixed Dir/Empty.MD")).rejects.toThrow("Not found");
+    await shell("restore-bin", name("read"));
+    expect(await shell("rehash")).toMatchObject({ text: expect.stringContaining("read") });
+    expect(await shell("ai")).toMatchObject({ mode: "agent" });
+    expect(await shell("clear")).toEqual({ text: "", clear: true });
   });
 
   it("recovers broken bin manifests without depending on executable bin tools", async () => {
