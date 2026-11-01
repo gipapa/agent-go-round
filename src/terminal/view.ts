@@ -49,9 +49,9 @@ export class TerminalView {
     this.logo = document.createElement("span"); this.logo.className = "terminal-logo"; this.logo.textContent = "▐▛███▜▌";
     this.label = document.createElement("span");
     this.welcome = document.createElement("pre"); this.welcome.className = "terminal-welcome"; this.welcome.textContent = AI_WELCOME_ART; this.welcome.hidden = true;
-    this.intro.append(this.logo, this.label, this.welcome);
+    this.intro.append(this.logo, this.label);
     this.notice = document.createElement("p"); this.notice.className = "shell-notice"; this.notice.textContent = SHELL_NOTICE;
-    element.append(this.intro);
+    element.append(this.intro, this.welcome);
   }
   schedule(model: TerminalModel): void {
     this.pending = model;
@@ -69,6 +69,8 @@ export class TerminalView {
     let changed = this.tabId !== model.id || this.mode !== model.mode;
     this.tabId = model.id; this.mode = model.mode; this.element.dataset.tabId = model.id;
     const isAgent = model.mode === "agent";
+    const aiInput = isAgent ? model.transcript.find((line) => line.role === "input" && /^ai(?:\s|$)/i.test(line.text)) : undefined;
+    if (isAgent && !aiInput) this.element.insertBefore(this.welcome, this.intro.nextSibling);
     this.intro.classList.toggle("agent-welcome", isAgent);
     this.logo.hidden = isAgent;
     this.label.hidden = isAgent;
@@ -84,6 +86,7 @@ export class TerminalView {
     const ids = new Set(model.transcript.map(line => line.id));
     for (const [id, row] of this.rows) if (!ids.has(id)) { row.element.remove(); this.rows.delete(id); changed = true; }
     let cursor: ChildNode | null = (model.mode === "shell" ? this.notice : this.intro).nextSibling;
+    if (isAgent && !aiInput) cursor = this.welcome.nextSibling;
     for (const line of model.transcript) {
       let row = this.rows.get(line.id);
       if (!row) {
@@ -113,6 +116,10 @@ export class TerminalView {
           row.tool = tool;
         }
       }
+    }
+    if (aiInput) {
+      const anchor = aiInput ? this.rows.get(aiInput.id)?.element : undefined;
+      if (anchor) this.element.insertBefore(this.welcome, anchor.nextSibling);
     }
     this.element.scrollTop = changed ? this.element.scrollHeight : previousTop;
   }

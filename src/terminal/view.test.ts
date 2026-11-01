@@ -32,12 +32,14 @@ it("preserves historical DOM and selection while appending and updating a stream
 });
 it("shows the compact AI welcome carousel without horse eyes", () => {
   const { element, view, model } = setup();
+  model.transcript = [{ id: "command", role: "input", text: "ai" }, ...model.transcript];
   view.render(model);
   const welcome = element.querySelector(".terminal-welcome") as HTMLElement;
   expect(welcome.hidden).toBe(false);
   expect(welcome.textContent).toBe(AI_WELCOME_ART);
   expect(welcome.textContent).not.toContain("/o");
   expect(welcome.textContent).not.toContain("歡迎搭上旋轉木馬");
+  expect([...element.children].indexOf(welcome)).toBe([...element.children].indexOf(element.querySelector(".terminal-line")!) + 1);
   view.render({ ...model, mode: "shell" });
   expect(welcome.hidden).toBe(true);
 });

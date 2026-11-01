@@ -81,8 +81,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .terminal { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; padding: 19px 22px 28px; color: #c4c1cf; font-size: 12px; }
 .shell-notice { margin: 0 0 20px; white-space: pre-wrap; overflow-wrap: anywhere; color: #b1a7c4; font-size: 11px; line-height: 1.7; }
 .terminal-intro { display: flex; align-items: center; gap: 11px; margin-bottom: 22px; color: #858190; font-size: 11px; }
-.terminal-intro.agent-welcome { display: block; }
-.terminal-welcome { margin: 0; color: #c5a4f1; font: inherit; line-height: 1.08; white-space: pre; }
+.terminal-intro.agent-welcome { display: none; }
+.terminal-welcome { margin: 0 0 22px; color: #c5a4f1; font: inherit; line-height: 1.08; white-space: pre; }
 .terminal-logo { color: #bd9beb; font-size: 14px; letter-spacing: -3px; }
 .terminal-line { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; max-width: 880px; margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .line-marker { color: #8a82a0; }
