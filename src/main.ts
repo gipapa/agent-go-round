@@ -165,7 +165,7 @@ app.innerHTML = `
         <section id="file-editor" class="file-editor" hidden aria-label="Human file editor">
           <div class="editor-toolbar"><div class="editor-title"><span class="editor-kicker">HUMAN EDITOR</span><strong id="editor-path"></strong></div><span id="editor-status" role="status"></span><button id="editor-save" type="button" class="terminal-button">Save ⌘S</button><button id="editor-cancel" type="button" class="terminal-button">Back to terminal</button></div>
           <div class="editor-help">Tab inserts indentation · ⌘/Ctrl+S saves · changes stay local until Save</div>
-          <button id="editor-files" class="terminal-button" type="button" aria-controls="editor-browser" aria-expanded="true">檔案</button>
+          <div class="editor-navigation"><button id="editor-files" class="terminal-button" type="button" aria-controls="editor-browser" aria-expanded="true">檔案樹</button><button id="editor-close" class="terminal-button" type="button">關閉檔案</button></div>
           <div class="editor-layout"><aside id="editor-browser"></aside><div id="editor-document" class="editor-surface"><pre id="editor-line-numbers" aria-hidden="true">1</pre><label for="editor-content" class="sr-only">File contents</label><textarea id="editor-content" spellcheck="false" aria-label="File contents" wrap="off"></textarea></div></div>
         </section>
         <form id="terminal-form" class="terminal-form">
@@ -627,14 +627,14 @@ async function openFileEditor(tab: AgentTab, path: string): Promise<void> {
   const resolved = resolvePath(path, tab.cwd);
   const node = await fileRuntime.fs.stat(resolved).catch(error => { if (error instanceof FileSystemError && error.code === "not_found") return undefined; throw error; });
   if (node?.kind === "directory") {
-    tab.browserDirectory = resolved; tab.mode = "editor"; return;
+    tab.browserDirectory = resolved; tab.browserHidden = false; tab.mode = "editor"; return;
   }
-  if (tab.editor?.path === resolved) { tab.mode = "editor"; return; }
+  if (tab.editor?.path === resolved) { tab.browserHidden = compactEditor(); tab.mode = "editor"; return; }
   if (!await mayReplaceEditor(tab)) return;
   try { const file = await fileRuntime.fs.readFile(resolved); tab.editor = { path: resolved, content: file.content, revision: file.revision }; }
   catch (error) { if (error instanceof FileSystemError && error.code === "not_found") tab.editor = { path: resolved, content: "", revision: 0 }; else throw error; }
   tab.browserDirectory = resolved.slice(0, resolved.lastIndexOf("/"));
-  tab.browserHidden = document.documentElement.classList.contains("keyboard-open");
+  tab.browserHidden = compactEditor();
   tab.mode = "editor";
   if (activeTab() === tab) editorContent.dataset.identity = "";
 }
@@ -963,11 +963,18 @@ function browserContext(tab: AgentTab) {
   };
 }
 
+function compactEditor(): boolean {
+  return document.documentElement.classList.contains("keyboard-open") || window.matchMedia("(max-width: 760px)").matches;
+}
+
 function updateEditorLayout(tab: AgentTab): void {
   const browsing = !tab.editor || !tab.browserHidden;
   get<HTMLElement>("editor-browser").hidden = !browsing;
-  get<HTMLElement>("editor-document").hidden = !tab.editor || (browsing && document.documentElement.classList.contains("keyboard-open"));
+  get<HTMLElement>("editor-document").hidden = !tab.editor || (browsing && compactEditor());
   get<HTMLElement>("editor-files").setAttribute("aria-expanded", String(browsing));
+  get<HTMLElement>("editor-files").textContent = !tab.editor ? "檔案樹" : browsing ? "返回編輯" : "返回檔案樹";
+  get<HTMLButtonElement>("editor-files").disabled = !tab.editor;
+  get<HTMLButtonElement>("editor-close").disabled = !tab.editor || !!tab.editor.saving;
 }
 
 function renderPane(tab: AgentTab): void {
@@ -1241,6 +1248,16 @@ editorContent.addEventListener("keydown", (event) => {
 get<HTMLButtonElement>("editor-save").addEventListener("click", () => void saveFileEditor());
 get<HTMLButtonElement>("editor-files").addEventListener("click", () => {
   const tab = activeTab(); tab.browserHidden = !tab.browserHidden; updateEditorLayout(tab);
+});
+get<HTMLButtonElement>("editor-close").addEventListener("click", async () => {
+  const tab = activeTab(), editor = tab.editor;
+  try {
+    if (!await mayReplaceEditor(tab)) return;
+    if (tab.editor !== editor) return;
+    tab.editor = undefined; tab.browserHidden = false;
+    if (activeTab() === tab) render();
+    scheduleWorkspaceSave();
+  } catch (error) { setWorkspaceStatus(error instanceof Error ? error.message : String(error)); }
 });
 get<HTMLButtonElement>("editor-cancel").addEventListener("click", () => {
   activeTab().mode = "shell"; render(); scheduleWorkspaceSave(); promptElement.focus();

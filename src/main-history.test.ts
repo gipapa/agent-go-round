@@ -175,6 +175,11 @@ describe("UI history at the real provider request boundary", () => {
     confirm.mockReturnValue(true);
     await open("second.md"); expect(editor.value).toBe("second");
     editor.value = "draft after rename"; editor.dispatchEvent(new Event("input", { bubbles: true }));
+    confirm.mockReturnValue(false);
+    confirm.mockClear();
+    document.querySelector<HTMLButtonElement>("#editor-close")!.click();
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(editor.value).toBe("draft after rename");
     document.querySelector<HTMLButtonElement>('[aria-label="重新命名 second.md"]')!.click();
     const browser = document.querySelector("#editor-browser")!;
     browser.querySelector("input")!.value = "renamed.md"; browser.querySelector("form")!.requestSubmit();
@@ -183,6 +188,11 @@ describe("UI history at the real provider request boundary", () => {
     await vi.waitFor(() => expect(browser.hasAttribute("aria-busy")).toBe(false));
     document.querySelector<HTMLButtonElement>("#editor-save")!.click();
     await vi.waitFor(async () => expect((await fs.readFile("~/renamed.md")).content).toBe("draft after rename"));
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#editor-close")!.disabled).toBe(false));
+    document.querySelector<HTMLButtonElement>("#editor-close")!.click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#editor-document")!.hidden).toBe(true));
+    expect(document.querySelector<HTMLElement>("#editor-browser")!.hidden).toBe(false);
+    expect(document.querySelector("#pane-type")!.textContent).toBe("檔案編輯");
     confirm.mockRestore();
   });
 

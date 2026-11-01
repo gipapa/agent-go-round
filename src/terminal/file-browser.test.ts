@@ -48,3 +48,19 @@ it("keeps existing contents on collisions, invalid names, nonempty folders and r
   click("刪除 agents.md"); await vi.waitFor(() => expect(element.hasAttribute("aria-busy")).toBe(false));
   expect((await fs.readFile("~/agents.md")).content).toBe("規則");
 });
+it("expands nested folders in place, preserves siblings, and renames inside the correct parent", async () => {
+  const { fs, element, browser, click, submit } = await setup();
+  await fs.mkdir("~/skills/one"); await fs.mkdir("~/skills/two"); await fs.writeFile("~/skills/one/SKILL.md", "instructions");
+  const listing = vi.spyOn(fs, "listDirectory");
+  await browser.refresh();
+  expect(listing).not.toHaveBeenCalledWith("/home/user/skills/one");
+  click("▸ skills"); await vi.waitFor(() => expect(element.textContent).toContain("▸ one"));
+  click("▸ one"); await vi.waitFor(() => expect(element.textContent).toContain("· SKILL.md"));
+  expect(element.textContent).toContain("agents.md"); expect(element.textContent).toContain("▸ two");
+  click("▾ one"); await vi.waitFor(() => expect(element.textContent).not.toContain("· SKILL.md"));
+  expect(element.textContent).toContain("▸ one"); expect(element.textContent).toContain("▸ two");
+  click("▸ one"); await vi.waitFor(() => expect(element.textContent).toContain("· SKILL.md"));
+  click("重新命名 agents.md"); await submit("rules.md");
+  expect((await fs.readFile("~/rules.md")).content).toBe("規則");
+  await expect(fs.stat("~/skills/one/rules.md")).rejects.toMatchObject({ code: "not_found" });
+});

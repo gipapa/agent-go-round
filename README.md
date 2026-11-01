@@ -55,7 +55,7 @@ Groq 設定使用 password field。`Remember this key in this browser` 預設開
 
 進入 agent 後，`/exit` 返回 shell；`/skill NAME TASK` 明確選用 skill，`/skill off` 清除 active skill。這些控制指令也接受大小寫混用，skill 名稱與任務文字維持原樣。
 
-人類編輯檔案可輸入 `edit` 或 `edit ~/skills`：瀏覽器列出目前資料夾的全部項目（包含點檔），點資料夾進入、點檔案編輯。可用按鈕新增檔案／資料夾、重新命名和刪除；刪除前會確認，資料夾僅能刪除空目錄。切換檔案時會提醒未儲存內容，改名會保留正在編輯的草稿；Back to terminal 也保留草稿。儲存使用原本的 revision 衝突檢查。
+人類編輯檔案可輸入 `edit` 或 `edit ~/skills`：檔案樹從 `~` 展開，點資料夾可展開／收合並選擇新增位置，點檔案可編輯；包含點檔。可用按鈕新增檔案／資料夾、重新命名和刪除；刪除前會確認，資料夾僅能刪除空目錄。手機開檔後可按「返回檔案樹」，或按「關閉檔案」返回瀏覽；關閉／切換時會提醒未儲存內容。改名會保留正在編輯的草稿；Back to terminal 也保留草稿。儲存使用原本的 revision 衝突檢查。
 
 例如以下指令只會建立一個保留大小寫的 `Notes.md`：
 
