@@ -10,6 +10,24 @@ export type TerminalModel = {
   messages: readonly AgentMessage[];
   expandedTools: Set<string>;
 };
+export const AI_WELCOME_ART = `                 ⚑
+                 │
+            .────┴────.
+         .─╱   ╱ │ ╲   ╲─.
+        ╱_____╱__│__╲_____╲
+        ╰─┬─┬─┬─┬─┬─┬─┬─┬─╯
+          │      │      │
+       ___│      │   ___│
+      /  /└───────┘  /  /
+     /__/            /__/
+     \  \            /  /
+      \__\          /__/
+         │   │  │   │
+         └───┴──┴───┘
+
+          agent-go-round
+
+    › 輸入訊息，開始對話`;
 type ToolDetails = { args?: unknown; result?: unknown };
 type Row = { element: HTMLDivElement; marker: HTMLSpanElement; content: HTMLDivElement; text?: string; streaming?: boolean; details?: HTMLDetailsElement; pre?: HTMLPreElement; tool?: ToolDetails };
 
@@ -19,14 +37,18 @@ export class TerminalView {
   private tabId?: string;
   private mode?: string;
   private intro: HTMLDivElement;
+  private logo: HTMLSpanElement;
   private label: HTMLSpanElement;
+  private welcome: HTMLPreElement;
   private notice: HTMLParagraphElement;
   private pending?: TerminalModel;
   private frame?: number;
   constructor(private readonly element: HTMLDivElement) {
     this.intro = document.createElement("div"); this.intro.className = "terminal-intro";
-    const logo = document.createElement("span"); logo.className = "terminal-logo"; logo.textContent = "▐▛███▜▌";
-    this.label = document.createElement("span"); this.intro.append(logo, this.label);
+    this.logo = document.createElement("span"); this.logo.className = "terminal-logo"; this.logo.textContent = "▐▛███▜▌";
+    this.label = document.createElement("span");
+    this.welcome = document.createElement("pre"); this.welcome.className = "terminal-welcome"; this.welcome.textContent = AI_WELCOME_ART; this.welcome.hidden = true;
+    this.intro.append(this.logo, this.label, this.welcome);
     this.notice = document.createElement("p"); this.notice.className = "shell-notice"; this.notice.textContent = SHELL_NOTICE;
     element.append(this.intro);
   }
@@ -45,6 +67,11 @@ export class TerminalView {
     const previousTop = this.element.scrollTop;
     let changed = this.tabId !== model.id || this.mode !== model.mode;
     this.tabId = model.id; this.mode = model.mode; this.element.dataset.tabId = model.id;
+    const isAgent = model.mode === "agent";
+    this.intro.classList.toggle("agent-welcome", isAgent);
+    this.logo.hidden = isAgent;
+    this.label.hidden = isAgent;
+    this.welcome.hidden = !isAgent;
     this.label.textContent = model.mode === "shell" ? "簡易 bash · 虛擬檔案系統" : "AgentGoRound · Pi runtime";
     if (model.mode === "shell") { if (!this.notice.isConnected) this.intro.after(this.notice); }
     else this.notice.remove();
