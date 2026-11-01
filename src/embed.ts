@@ -172,6 +172,7 @@ export function mount(options: EmbedOptions = {}): AgentGoRoundWidget {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(value)) throw new Error(`Invalid ${name} identity`);
     appLocation.searchParams.set(name!, value);
   }
+  if (mode === "popup" && /^https?:$/.test(appLocation.protocol)) appLocation.searchParams.set("tabs", "vertical");
   const appUrl = appLocation.href;
   const appOrigin = new URL(appUrl).origin;
   const instanceId = makeId("widget");

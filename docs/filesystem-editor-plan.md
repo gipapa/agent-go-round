@@ -7,11 +7,13 @@
 ## 交付後補齊與目前限制
 
 - 啟動 agent 統一使用 `ai`，另提供 `ai --new`、`ai --resume ID` 和 `/exit`。Terminal 明列「簡易 bash」與支援指令，內建及自訂工具名稱不分大小寫；AI options、固定子命令與 agent 控制指令亦可混用大小寫。路徑、內容、搜尋文字、JSON 欄位、skill 名稱及 session ID 不改寫。
-- 手機與觸控輸入採 16px；鍵盤縮小可視區時精簡標題／側欄與 composer，app 和 popup 跟隨可視區寬高及位移，保留捲動、草稿與對話。模擬鍵盤回歸通過，原生 iPhone Safari 實機驗收尚未完成。
-- 最新回歸共 94 項通過；production 瀏覽器的混合大小寫／手機檢查七項通過。真實笑話與頁面修改任務的模型、quota 差異與證據見對應驗收文件。
+- 手機與觸控輸入採 16px；手機與 popup 僅保留直式 tab 列、桌面僅保留橫式列；鍵盤縮小可視區時保留直式列並精簡標題與 composer，app 和 popup 跟隨可視區寬高及位移，保留捲動、草稿與對話。模擬鍵盤回歸通過，原生 iPhone Safari 實機驗收尚未完成。
+- 最新回歸共 108 項通過；production 瀏覽器的混合大小寫／手機檢查十一項通過。真實笑話與頁面修改任務的模型、quota 差異與證據見對應驗收文件。
 - F5 首輪僅支援文字 HTML／CSS／SVG。頁面 JavaScript、二進位資源、VFS 匯出／發布、完整長對話 compaction 與進階歷史管理尚未實作。
 
 後續建議優先完成真機鍵盤驗收，再處理 context budget／compaction、工作區備份、歷史閱讀與頁面資源能力；完整順序與完成條件見 [主規劃](plan.md)。以下保留 F0–F5 的實作契約與驗收要求。
+
+Shell 的 ls／cat／grep／find 目前顯示一般文字結果，ls 預設列出 cwd 直接子項並隱藏點檔；已補常用選項與每指令 --help／help COMMAND，AI 也有唯讀 help 工具。簡化範圍見各指令說明與 [bin 工具](bin-tools.md)。
 
 ## 已確定的方向
 

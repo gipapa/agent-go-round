@@ -28,19 +28,42 @@ const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173
 const report = { url: url.href, simulatedVisualViewport: true, checks: [], status: "running" };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
-  await call("open", url.href); await call("set", "viewport", "390", "844");
+  await call("open", url.href); await call("set", "viewport", "1280", "900");
+  await wait("!!document.querySelector('#send')&&!document.querySelector('#send').disabled"); await call("snapshot");
+  assert(await evaluate("getComputedStyle(document.querySelector('.sidebar')).display==='none'&&getComputedStyle(document.querySelector('.tab-bar')).display!=='none'&&document.querySelector('#provider-toggle').getBoundingClientRect().width>0"), "Desktop should show horizontal tabs and accessible settings only");
+  await call("screenshot", "test-results/tabs-desktop.png");
+  check("desktop shows horizontal tabs only with accessible provider settings");
+  await call("set", "viewport", "390", "844");
+  assert(await evaluate("getComputedStyle(document.querySelector('.sidebar')).display!=='none'&&getComputedStyle(document.querySelector('.tab-bar')).display==='none'"), "Mobile should show vertical tabs only");
+  const initialTabs = await evaluate("document.querySelectorAll('#agent-list .agent-row').length");
+  await call("click", "#add-vertical-tab");
+  await wait(`document.querySelectorAll('#agent-list .agent-row').length===${initialTabs+1}`);
+  await call("click", "#agent-list .vertical-tab:last-child .vertical-close");
+  await wait(`document.querySelectorAll('#agent-list .agent-row').length===${initialTabs}`);
+  await call("click", "#agent-list .agent-row");
+  await call("screenshot", "test-results/tabs-mobile.png");
+  check("mobile has one vertical tab rail with working add, close and switch controls");
   await wait("!!document.querySelector('#send')&&!document.querySelector('#send').disabled"); await call("snapshot");
   assert(await evaluate("document.querySelector('.shell-notice').textContent.includes('簡易 bash')&&document.querySelector('.shell-notice').textContent.includes('read／cat、write、edit、grep、find、ls')"), "Missing shell capabilities");
   await send('WrItE ' + JSON.stringify({ path: "Case.MD", content: "MiXeD" }));
   await send("ReAd Case.MD");
   assert(await evaluate("(() => {const result=JSON.parse([...document.querySelectorAll('#terminal .line-content')].at(-1).textContent);return result.path==='/home/user/Case.MD'&&result.content==='MiXeD';})()"), "Mixed-case commands changed path or content");
   check("mixed-case file commands preserve path and content case");
+  await send("ls");
+  assert(await evaluate("[...document.querySelectorAll('#terminal .line-content')].at(-1).textContent.split(String.fromCharCode(10)).join(',')==='Case.MD,bin'"), "ls did not list current directory names");
+  await send("cat Case.MD");
+  assert(await evaluate("[...document.querySelectorAll('#terminal .line-content')].at(-1).textContent==='MiXeD'"), "cat did not display raw content");
+  for (const command of ["ls", "ai", "edit", "preview", "history", "demo"]) {
+    await send(`${command} --help`);
+    assert(await evaluate("document.querySelector('#pane-type').textContent==='簡易 bash'&&[...document.querySelectorAll('#terminal .line-content')].at(-1).textContent.length>40"), `${command} help performed an action or was empty`);
+  }
+  check("ls and cat show readable file data; UI command help does not trigger actions");
   await send("HELP"); await send("hElP");
   await call("focus", "#prompt");
   await evaluate("(() => {window.__nativeVisualViewport=Object.getOwnPropertyDescriptor(window,'visualViewport');window.__keyboardViewport=Object.assign(new EventTarget(),{width:390,height:844,offsetTop:0,offsetLeft:0});Object.defineProperty(window,'visualViewport',{configurable:true,value:window.__keyboardViewport});return true;})()");
   await viewport(360, 60);
   const compact = await evaluate("(() => {const box=el=>{const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,height:r.height}};return {shell:box(document.querySelector('.app-shell')),form:box(document.querySelector('#terminal-form')),send:box(document.querySelector('#send')),terminal:box(document.querySelector('#terminal')),font:getComputedStyle(document.querySelector('#prompt')).fontSize,compact:document.documentElement.classList.contains('keyboard-open'),sidebar:getComputedStyle(document.querySelector('.sidebar')).display};})()");
-  assert(compact.compact && compact.sidebar === "none", "Keyboard chrome did not compact");
+  assert(compact.compact && compact.sidebar !== "none", "Keyboard chrome did not compact or vertical tabs disappeared");
   assert(compact.font === "16px", "Mobile prompt could trigger focus zoom");
   assert(compact.form.bottom <= 420 && compact.send.bottom <= 420 && compact.form.height < 70 && compact.terminal.height >= 180, "Keyboard covers composer or leaves too little transcript space");
   assert(await evaluate("(() => {const t=document.querySelector('#terminal');t.scrollTop=0;const first=t.scrollTop;t.scrollTop=t.scrollHeight;return t.scrollTop>first;})()"), "Transcript cannot scroll with keyboard open");
@@ -52,7 +75,7 @@ try {
   await viewport(844);
   assert(await evaluate("!document.documentElement.classList.contains('keyboard-open')&&getComputedStyle(document.querySelector('.sidebar')).display!=='none'"), "Keyboard close did not restore layout");
   check("closing keyboard restores normal chrome");
-  await call("click", "#provider-toggle"); await viewport(360, 60);
+  await call("click", "#sidebar-provider-toggle"); await viewport(360, 60);
   assert(await evaluate("(() => {const input=document.querySelector('#api-key'),button=document.querySelector('button[form=provider-form]'),a=input.getBoundingClientRect(),b=button.getBoundingClientRect();return getComputedStyle(input).fontSize==='16px'&&a.top>=60&&a.bottom<=420&&b.bottom<=420;})()"), "Settings controls covered by keyboard");
   await call("click", "#close-settings"); await viewport(844);
   check("provider inputs and connect action fit the visible viewport");
@@ -63,6 +86,8 @@ try {
   const frame = 'document.querySelector(".preview-surface > div:last-child").shadowRoot.querySelector("iframe")';
   await wait(`!!(${frame}).contentDocument?.querySelector('#send')&&!(${frame}).contentDocument.querySelector('#send').disabled`);
   await evaluate(`(() => {document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.launcher').click();const w=(${frame}).contentWindow,d=w.document;w.__keyboardSentinel='keep';d.querySelector('#prompt').value='draft remains';d.querySelector('#prompt').focus();return true;})()`);
+  assert(await evaluate(`(() => {const d=(${frame}).contentDocument;return d.body.classList.contains('vertical-tabs')&&getComputedStyle(d.querySelector('.tab-bar')).display==='none'&&getComputedStyle(d.querySelector('.sidebar')).display!=='none';})()`), "Popup should show vertical tabs only");
+  check("popup shows vertical tabs only");
   await viewport(360, 60);
   await wait(`(${frame}).contentDocument.documentElement.classList.contains('keyboard-open')`);
   const popup = await evaluate(`(() => {const frame=${frame},d=frame.contentDocument,r=frame.getBoundingClientRect(),b=d.querySelector('#send').getBoundingClientRect();return {height:r.height,width:r.width,top:r.top,bottom:r.bottom,sendBottom:b.bottom,font:getComputedStyle(d.querySelector('#prompt')).fontSize,terminalHeight:d.querySelector('#terminal').clientHeight,preserved:frame.contentWindow.__keyboardSentinel==='keep'&&d.querySelector('#prompt').value==='draft remains'};})()`);

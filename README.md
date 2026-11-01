@@ -6,6 +6,7 @@ Pi 擁有唯一的模型／工具循環，使用 Groq 的 OpenAI 相容 Chat Com
 
 ## 目前功能
 
+- 桌面僅顯示橫式 tab 列；手機／窄螢幕與 popup 僅顯示直式 tab 列，提供新增、切換與關閉，鍵盤開啟時保留。
 - 既有 tabs 共用虛擬檔案系統，各自保有 cwd、草稿與對話；同一個 panel 可切換簡易 bash、文字編輯器與 agent。
 - `~/bin` 提供可擴充的 JavaScript 檔案工具；從 VFS 載入 AGENTS.md 與 skills，記錄實際讀寫的路徑和 revision。
 - 歷史對話可在 reload、重新連接 Groq 或關閉 tab 後恢復；不會自動重送未完成的模型請求或工具副作用。
@@ -35,15 +36,16 @@ Groq 設定使用 password field。`Remember this key in this browser` 預設開
 
 | 指令 | 用途 |
 |---|---|
-| `help` | 顯示支援指令與用法 |
+| `help [COMMAND]`、`COMMAND --help` | 顯示語法、支援選項與簡化範圍；AI 可呼叫 `help` 工具查閱 |
 | `pwd`、`cd PATH` | 查看或切換目前目錄 |
-| `ls [PATH]`、`find [PATH] [NAME_GLOB]` | 列出目錄或尋找檔案 |
-| `read PATH`／`cat PATH` | 讀取內容與 revision |
+| `ls [-aA1lF] [PATH…]` | 列出目前目錄或指定路徑；預設隱藏點檔，`-a` 顯示全部、`-F` 標示目錄 |
+| `find [PATH] [-name GLOB] [-type f\|d]` | 遞迴尋找檔案與目錄 |
+| `cat [-n] FILE…`、`read PATH` | `cat` 顯示全文，`read` 回傳含 revision／分頁的 JSON |
 | `write PATH "CONTENT"` | 建立文字檔；覆寫既有檔案需以 JSON 提供 expectedRevision |
 | `edit PATH` | 在目前 panel 開啟文字編輯器 |
 | `edit PATH "OLD" "NEW"` | 精確替換文字 |
-| `grep "TEXT" [PATH]` | 搜尋檔案內容 |
-| `mkdir PATH`、`touch PATH`、`mv FROM TO`、`rm PATH` | 建立目錄／空檔、搬移或刪除 |
+| `grep [-inrRFE] PATTERN [PATH…]` | 搜尋內容；`-r` 遞迴、`-n` 行號、`-i` 忽略大小寫、`-F` 純文字 |
+| `mkdir [-p] PATH…`、`touch FILE…`、`mv FROM TO`、`rm [-rf] PATH…`、`rmdir PATH…` | 建立目錄／空檔、搬移或刪除；刪目錄需 `-r`，`rmdir` 只刪空目錄 |
 | `preview [PATH]` | 開啟頁面預覽，預設為 `~/main.html` |
 | `ai` | 啟動或接續目前 tab 的 agent |
 | `ai --new` | 另開對話，保留舊對話於歷史 |
@@ -60,6 +62,8 @@ WrItE Notes.md "Hello World"
 READ Notes.md
 GREP "World" Notes.md
 ```
+
+Shell 的 `ls`／`cat`／`grep`／`find` 顯示文字；AI 工具與明確輸入 JSON 參數時保留結構化結果。`mkdir` 預設不建立父目錄，需使用 `-p`。未支援的選項會回報錯誤，不會靜默忽略；`touch` 不更新既有時間戳、`mv` 不覆寫既有目的檔案等差異均列於各指令的 `--help`。
 
 所有 bin 工具都接受 JSON 參數，可提供分頁、批次讀寫、revision 與搜尋選項，詳見 [bin 工具說明](docs/bin-tools.md)。
 
@@ -105,7 +109,7 @@ GREP "World" Notes.md
 
 目前支援 UTF-8 HTML、CSS、相對 CSS import 與 SVG 圖片。頁面在隔離 iframe 呈現，頁面腳本、外部網路資源與導航不執行；二進位圖片匯入、完整頁面 JavaScript、VFS 匯出／發布另列後續。詳見 [主頁預覽](docs/page-preview.md)。
 
-手機輸入欄位使用 16px；鍵盤縮小可視區時精簡標題列與側欄，保留輸入列及可捲動的對話區。Popup 跟隨宿主的可視區尺寸與位移，調整尺寸時保留草稿。已做瀏覽器可視區模擬，iPhone Safari 原生鍵盤仍需實機驗證。
+手機輸入欄位使用 16px；鍵盤縮小可視區時精簡標題列，保留直式 tab 列，保留輸入列及可捲動的對話區。Popup 跟隨宿主的可視區尺寸與位移，調整尺寸時保留草稿。已做瀏覽器可視區模擬，iPhone Safari 原生鍵盤仍需實機驗證。
 
 ## 儲存與工作區
 
@@ -124,7 +128,7 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 94 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽及 popup。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 108 項，涵蓋歷史接續、VFS、工具／skills、大小寫指令、預覽及 popup。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 

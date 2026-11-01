@@ -163,12 +163,12 @@ describe("VFS ~/bin JavaScript tools", () => {
     await shell("write", JSON.stringify({ path: "Mixed Dir/Other.MD", content: "Other XYZ", expectedRevision: 0 }));
     expect((await fs.readFile("~/Mixed Dir/Other.MD")).content).toBe("Other XYZ");
     expect(JSON.parse((await shell("read", '"Mixed Dir/Data.MD"')).text)).toMatchObject({ path: "/home/user/Mixed Dir/Data.MD", content: "Token ABC" });
-    expect(JSON.parse((await shell("cat", '"Mixed Dir/Data.MD"')).text)).toMatchObject({ content: "Token ABC" });
+    expect((await shell("cat", '"Mixed Dir/Data.MD"')).text).toBe("Token ABC");
     await shell("edit", '"Mixed Dir/Data.MD" "ABC" "XYZ"');
-    expect(JSON.parse((await shell("grep", '"XYZ" "Mixed Dir/Data.MD"')).text)).toMatchObject({ matches: [{ text: "Token XYZ" }] });
-    expect(JSON.parse((await shell("grep", '"xyz" "Mixed Dir/Data.MD"')).text)).toMatchObject({ matches: [] });
-    expect(JSON.parse((await shell("find", '"Mixed Dir" "Data.MD"')).text)).toMatchObject({ entries: [{ path: "/home/user/Mixed Dir/Data.MD" }] });
-    expect(JSON.parse((await shell("ls", '"Mixed Dir"')).text).entries).toHaveLength(3);
+    expect((await shell("grep", '"XYZ" "Mixed Dir/Data.MD"')).text).toBe("Token XYZ");
+    expect((await shell("grep", '"xyz" "Mixed Dir/Data.MD"')).text).toBe("");
+    expect((await shell("find", '"Mixed Dir" -name "Data.MD"')).text).toBe("Mixed Dir/Data.MD");
+    expect((await shell("ls", '"Mixed Dir"')).text.split("\n")).toEqual(["Data.MD", "Empty.MD", "Other.MD"]);
     await shell("mv", '"Mixed Dir/Data.MD" "Mixed Dir/Renamed.MD"');
     expect((await fs.readFile("~/Mixed Dir/Renamed.MD")).content).toBe("Token XYZ");
     await expect(fs.readFile("~/mixed dir/renamed.md")).rejects.toThrow("Not found");

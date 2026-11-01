@@ -19,7 +19,7 @@ button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 
 .app-shell { position: fixed; top: var(--viewport-offset-top); left: var(--viewport-offset-left); display: flex; width: var(--viewport-width); height: var(--viewport-height); min-width: 0; min-height: 0; background: #111116; }
-.sidebar { display: flex; width: 238px; min-width: 238px; flex-direction: column; border-right: 1px solid #2d2c35; background: #15151b; color: #aaa8b5; }
+.sidebar { display: none; width: 238px; min-width: 238px; flex-direction: column; border-right: 1px solid #2d2c35; background: #15151b; color: #aaa8b5; }
 .brand-row { display: flex; height: 54px; align-items: center; gap: 10px; border-bottom: 1px solid #2d2c35; padding: 0 17px; }
 .brand-mark { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #76689a; color: #c4a7f3; font-size: 16px; }
 .brand-name { color: #f0eff4; font-size: 14px; font-weight: 700; letter-spacing: -.03em; }
@@ -141,8 +141,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .status-dot.idle { color: #777583; }
 @keyframes blink { 50% { opacity: 0; } }
 
-@media (max-width: 760px) {
-  .sidebar { width: 58px; min-width: 58px; padding-top: env(safe-area-inset-top); }
+@media (max-width: 760px), (hover: none) and (pointer: coarse) {
+  .sidebar { display: flex; }
+  .tab-bar, .provider-toggle { display: none; }
   .brand-row { height: 54px; justify-content: center; padding: 0; }
   .brand-name, .brand-version, .sidebar-section-heading span:first-child, .space-copy, .agent-copy, .sidebar-action, .footer-button span:not(.footer-icon), .runtime-state span:not(.status-dot) { display: none; }
   .sidebar-section-heading { justify-content: center; padding: 0 0 8px; }
@@ -207,8 +208,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 @media (max-width: 760px), (pointer: coarse) {
   .terminal-form textarea, .provider-form input:not([type="checkbox"]), .provider-form textarea, .provider-form select, #editor-content { font-size: 16px; }
 }
-@media (max-width: 760px) {
-  .keyboard-open .sidebar, .keyboard-open .workspace-header, .keyboard-open .pane-header, .keyboard-open .terminal-footer { display: none; }
+@media (max-width: 760px), (hover: none) and (pointer: coarse) {
+  .keyboard-open .workspace-header, .keyboard-open .pane-header, .keyboard-open .terminal-footer { display: none; }
   .keyboard-open .pane { margin: 0; border: 0; }
   .keyboard-open .terminal { padding: 10px 12px; }
   .keyboard-open .terminal-intro { margin-bottom: 10px; }
@@ -219,3 +220,24 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .keyboard-open .file-editor { padding: 8px; gap: 6px; }
   .keyboard-open #editor-content { min-height: 0; }
 }
+
+/* One tab navigation per surface: a horizontal strip on desktop, a vertical rail on mobile/popup. */
+.provider-toggle { border: 1px solid #454151; background: transparent; color: #c4b4db; padding: 5px 8px; font-size: 11px; }
+.sidebar { width: 76px; min-width: 76px; padding-top: env(safe-area-inset-top); }
+.sidebar-body { min-height: 0; padding: 8px 4px; }
+.agent-list { gap: 6px; }
+.vertical-tab { position: relative; }
+.agent-row { min-height: 60px; flex-direction: column; gap: 3px; padding: 6px 18px 6px 3px; justify-content: center; }
+.agent-copy { display: grid; width: 100%; text-align: center; }
+.agent-copy strong { font-size: 10px; }
+.agent-copy small { display: none; }
+.agent-row .status-dot { flex: 0 0 auto; }
+.vertical-close { position: absolute; top: 0; right: 0; width: 26px; height: 44px; padding: 0; border: 0; background: transparent; color: #a39aaf; }
+.vertical-close:hover { color: white; }
+.vertical-add { width: 100%; min-height: 44px; margin-top: 6px; border: 1px dashed #454151; background: transparent; color: #c4a7f3; font-size: 20px; }
+.agent-row .unread-count { position: absolute; bottom: 2px; right: 2px; background: #211f2c; }
+.sidebar-footer { padding: 4px; }
+.sidebar-footer .footer-button { min-height: 44px; justify-content: center; }
+.vertical-tabs .sidebar { display: flex; }
+.vertical-tabs .tab-bar, .vertical-tabs .provider-toggle { display: none; }
+.page-view .sidebar { display: none; }

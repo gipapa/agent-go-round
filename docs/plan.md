@@ -19,20 +19,22 @@
 
 Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動多代理編排或隱藏補做迴圈。跨 tab 回覆由使用者明確觸發，保留來源並在下一輪帶入，回傳不自動啟動來源模型。
 
+手機與 popup 現僅保留直式 tab 列（含新增／切換／關閉），桌面僅保留橫式列；鍵盤開啟仍保留 tab 操作。Shell 的 ls／cat／grep／find 改為一般文字輸出，常用參數與每指令 --help 已補齊，AI 可呼叫 help 工具查閱；JSON 工具契約保留。
+
 ## 目前驗證基線
 
-- 最近程式回歸為 22 個檔案、94 項測試通過；typecheck、production build、dist 檢查及 GitHub Pages CI 通過。
-- `npm run test:mobile:browser` 的七項檢查通過，涵蓋混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
+- 本次本機回歸為 23 個檔案、108 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI 為前次交付紀錄，本次修改尚未提交部署。
+- `npm run test:mobile:browser` 的十一項檢查通過，涵蓋桌面／手機單一 tab 列與操作、ls／cat／help、混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
 - [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md) 分別記錄真實模型、任務、限制與重跑方式。報告由 runner 寫入本機 `test-results/`，不納入 Git。
 - Harness／provider、模型決策、網路與 quota 失敗分別記錄。額度失敗不列為 PASS，既有 SDK 與 browser 的模型／儲存／執行器差異保留於報告。
 
 ## 後續工作順序（待排期）
 
-下列為建議優先順序，尚未宣告完成或開始實作。
+下列為後續順序；P0 的 tab 版面與 shell 操作修正已實作，原生裝置驗收仍待完成，其餘 P1–P4 尚待排期。
 
 | 順序 | 工作 | 完成條件 |
 |---|---|---|
-| P0 | iPhone Safari 真機驗收與必要修正 | 實際開啟／收起鍵盤，確認主畫面與 popup 的輸入、送出、中文輸入、捲動、旋轉與 settings；草稿及對話保留 |
+| P0 | iPhone Safari 真機驗收與必要修正（tab 單列與 shell 操作已補齊） | 實際開啟／收起鍵盤，確認主畫面與 popup 的輸入、送出、中文輸入、捲動、旋轉與 settings；草稿及對話保留 |
 | P1 | 模型 context budget 與可檢閱的 compaction | 超限可辨識；保留原始歷史與 tool call/result 配對；摘要範圍有紀錄，失敗不靜默丟棄歷史 |
 | P2 | 工作區備份與搬移 | 明確匯出／匯入檔案與必要 metadata；驗證格式、大小與衝突，不含 credentials；另訂 v2 匯入規則 |
 | P3 | 歷史管理與閱讀體驗 | 補搜尋、重新命名、封存／刪除及 Markdown／程式碼呈現；維持 session identity 與閱讀位置 |

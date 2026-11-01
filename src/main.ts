@@ -4,7 +4,7 @@ import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath, FileSystemErro
 import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
-import { executeShell, shellWords, SHELL_NOTICE } from "./core/shell";
+import { executeShell, shellWords, SHELL_NOTICE, requestedHelp } from "./core/shell";
 import { configureFileAgent } from "./core/file-context";
 import { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
@@ -68,6 +68,7 @@ const pageView = locationParams.get("view") === "page";
 const surfaceId = locationParams.get("surface") || (pageView ? "page" : "workspace");
 if (!/^[a-zA-Z0-9_-]{1,64}$/.test(surfaceId)) throw new Error("Invalid surface identity");
 document.body.classList.toggle("page-view", pageView);
+document.body.classList.toggle("vertical-tabs", locationParams.get("tabs") === "vertical");
 const previews = new Map<string, PreviewSurface>();
 const shellBootHint = "輸入 help 查看用法；ai 啟動 agent，/exit 返回簡易 bash。";
 const browserStorage = window.localStorage;
@@ -133,45 +134,24 @@ const approvedHostToolTokens = new Map<string, string>();
 app.innerHTML = `
   <div class="app-shell">
     <aside class="sidebar" aria-label="AgentGoRound navigation">
-      <div class="brand-row">
-        <div class="brand-mark" aria-hidden="true">⌁</div>
-        <div class="brand-name">AgentGoRound</div>
-        <span class="brand-version">0.1</span>
-      </div>
-
       <div class="sidebar-body">
-        <div class="sidebar-section-heading">
-          <span>spaces</span>
-          <button id="add-space" class="sidebar-action" type="button" aria-label="Add space">+</button>
-        </div>
-        <button class="space-row selected" type="button">
-          <span class="space-glyph">⌂</span>
-          <span class="space-copy"><strong>agent-go-round</strong><small>master</small></span>
-        </button>
-
-        <div class="sidebar-section-heading agents-heading">
-          <span>agents</span>
-          <span id="agent-count" class="section-count">0</span>
-        </div>
-        <div id="agent-list" class="agent-list"></div>
+        <div id="agent-list" class="agent-list" role="tablist" aria-label="Agent tabs" aria-orientation="vertical"></div>
+        <button id="add-vertical-tab" class="vertical-add" type="button" aria-label="New agent tab">+</button>
+        <span id="agent-count" class="sr-only">0</span>
       </div>
-
       <div class="sidebar-footer">
-        <button id="provider-toggle" class="footer-button" type="button">
-          <span class="footer-icon">◌</span><span id="provider-label">scripted model</span><span class="footer-chevron">⌘,</span>
-        </button>
-        <div class="runtime-state"><span class="status-dot idle">○</span><span>local runtime</span><span class="runtime-version">Pi 0.84.4</span></div>
+        <button id="sidebar-provider-toggle" class="footer-button" type="button" aria-label="Provider settings" title="Provider settings">⚙</button>
       </div>
     </aside>
 
     <main class="workspace">
       <header class="workspace-header">
         <div class="workspace-context"><span class="context-symbol">◆</span><strong>agent-go-round</strong><span class="branch-label">master</span></div>
-        <div class="workspace-actions"><span class="connection-label"><span class="status-dot idle">○</span> connected</span><button id="command-hint" class="header-action" type="button">⌘K commands</button></div>
+        <div class="workspace-actions"><button id="provider-toggle" class="provider-toggle" type="button" aria-label="Provider settings"><span id="provider-label">scripted model</span> ⚙</button><span class="connection-label"><span class="status-dot idle">○</span> connected</span><button id="command-hint" class="header-action" type="button">⌘K commands</button></div>
       </header>
 
       <nav class="tab-bar" aria-label="Agent tabs">
-        <div id="tab-list" class="tab-list"></div>
+        <div id="tab-list" class="tab-list" role="tablist" aria-orientation="horizontal"></div>
         <button id="add-tab" class="add-tab" type="button" aria-label="New agent tab">+</button>
       </nav>
 
@@ -826,8 +806,14 @@ function renderSidebar(): void {
   const list = get<HTMLDivElement>("agent-list");
   list.replaceChildren();
   for (const tab of state.tabs) {
+    const row = document.createElement("div");
+    row.className = "vertical-tab";
     const button = document.createElement("button");
     button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(tab.id === state.activeTabId));
+    button.setAttribute("aria-label", tab.name);
+    button.title = tab.name;
     button.className = `agent-row${tab.id === state.activeTabId ? " selected" : ""}`;
     button.addEventListener("click", () => selectTab(tab.id));
 
@@ -848,7 +834,17 @@ function renderSidebar(): void {
       unread.textContent = String(tab.unread);
       button.append(unread);
     }
-    list.append(button);
+    row.append(button);
+    if (state.tabs.length > 1) {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "vertical-close";
+      close.textContent = "×";
+      close.setAttribute("aria-label", `Close ${tab.name}`);
+      close.addEventListener("click", () => closeTab(tab.id));
+      row.append(close);
+    }
+    list.append(row);
   }
   get<HTMLSpanElement>("agent-count").textContent = String(state.tabs.length);
 }
@@ -859,6 +855,8 @@ function renderTabs(): void {
   for (const tab of state.tabs) {
     const button = document.createElement("button");
     button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(tab.id === state.activeTabId));
     button.className = `tab${tab.id === state.activeTabId ? " active" : ""}`;
     button.addEventListener("click", () => selectTab(tab.id));
     const dot = document.createElement("span");
@@ -1155,20 +1153,26 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
     if (controller.signal.aborted) throw new Error("Command cancelled");
     if (!fileRuntime) throw new Error(`Files unavailable: ${fileRuntimeError}`);
     if (tab.mode === "shell") {
-      const words = shellWords(input);
+      const structured = /^\S+\s+\{/.test(input);
+      const words = structured ? [input.split(/\s/, 1)[0], input.slice(input.search(/\s/) + 1)] : shellWords(input);
       const command = words[0]?.toLowerCase();
-      if (command === "preview") {
+      const help = structured ? undefined : requestedHelp(words, fileRuntime.bin);
+      if (help !== undefined) {
+        tab.transcript.push({ id: makeId("help"), role: "system", text: help });
+      } else if (command === "preview") {
         if (words.length > 2) throw new Error("Usage: preview [PATH]");
         openPreview(resolvePath(words[1] || "~/main.html", tab.cwd));
       } else if (command === "ai") {
         await enterAi(tab, words.slice(1));
       } else if (command === "history") {
+        if (words.length !== 1) throw new Error("Usage: history; use history --help");
         const history = await conversations().history();
         tab.transcript.push({ id: makeId("history"), role: "system", text: history.map((entry) => `${entry.session.sessionId} · ${entry.name} · ${entry.provider ?? entry.session.model.provider} · ${new Date(entry.session.savedAt).toLocaleString()}`).join("\n") || "No saved conversations" });
       } else if (command === "demo" && words[1]?.toLowerCase() === "jokes") {
+        if (words.length !== 2) throw new Error("Usage: demo jokes; use demo --help");
         const installed = await installJokeDemo(fileRuntime.fs);
         tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} files created, ${installed.kept.length} existing files kept.\nRun ai, then ask:\n${JOKE_PROMPT}` });
-      } else if (command === "edit" && words.length === 2) {
+      } else if (command === "edit" && words.length === 2 && !structured) {
         await openFileEditor(tab, words[1]);
       } else {
       const result = await executeShell(input, fileRuntime.fs, fileRuntime.bin, tab.cwd, controller.signal);
@@ -1229,6 +1233,7 @@ promptElement.addEventListener("keydown", (event) => {
 
 stopButton.addEventListener("click", () => { activeTab().commandAbort?.abort(); activeTab().session.stop(); });
 get<HTMLButtonElement>("add-tab").addEventListener("click", addTab);
+get<HTMLButtonElement>("add-vertical-tab").addEventListener("click", addTab);
 routeButton.addEventListener("click", (event) => openRouteDialog(event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("close-route").addEventListener("click", closeRouteDialog);
 get<HTMLButtonElement>("cancel-route").addEventListener("click", closeRouteDialog);
@@ -1252,7 +1257,7 @@ get<HTMLFormElement>("route-form").addEventListener("submit", (event) => {
     routeStatus.textContent = routeRejectText(receipt.reason);
   }
 });
-get<HTMLButtonElement>("add-space").addEventListener("click", (event) => openSettings("Spaces are visual for now; session routing comes with the workspace store.", event.currentTarget as HTMLElement));
+get<HTMLButtonElement>("sidebar-provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("command-hint").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("close-settings").addEventListener("click", closeSettings);

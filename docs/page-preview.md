@@ -27,11 +27,13 @@ Page view 同樣有 Pi launcher。「工作區」連結可另開 shell/editor。
 
 ## 手機鍵盤與簡易 bash
 
+手機／窄螢幕與 popup 僅顯示直式 tab 列，提供新增、切換及關閉；桌面工作區僅顯示橫式列。Popup loader 傳入 `tabs=vertical`，即使加寬 popup 也維持直式。兩種版面都保留 provider settings 入口。
+
 Terminal 會列出簡易 bash 支援的內建指令及 ~/bin 檔案工具。指令名稱不分大小寫，例如 `LS`、`Read`、`AI --NEW`、`Preview`；路徑、內容、搜尋文字與 session ID 保留大小寫。啟動 agent 使用 `ai`，另開／恢復對話使用 `ai --new`、`ai --resume ID`；`/exit` 返回 shell。技能仍放在 `~/.pi/skills`。
 
-手機與觸控裝置的輸入欄位採 16px。鍵盤縮小可視區時，暫時隱藏側欄及額外標題，把 composer 收成一列，保留可捲動的 terminal。App 和 popup 同時跟隨 visual viewport 的高度、寬度與位移；popup iframe 只調整尺寸，保留草稿和對話。鍵盤收起時恢復原版面。
+手機與觸控裝置的輸入欄位採 16px。鍵盤縮小可視區時，保留直式 tab 列並暫時隱藏額外標題，把 composer 收成一列，保留可捲動的 terminal。App 和 popup 同時跟隨 visual viewport 的高度、寬度與位移；popup iframe 只調整尺寸，保留草稿和對話。鍵盤收起時恢復原版面。
 
-`npm run test:mobile:browser` 不需 API key；透過真實 Chrome 模擬縮小至 360px 高的 visual viewport，驗證混合大小寫指令、composer、捲動、設定表單、popup 草稿保留及水平位移。回歸測試目前共 94 項通過；瀏覽器結果為 `test-results/mobile-browser.json`，截圖為 `mobile-*-simulated.png`。這是可視區幾何回歸，未取代 iPhone Safari 實體鍵盤驗收。
+`npm run test:mobile:browser` 不需 API key；透過真實 Chrome 模擬縮小至 360px 高的 visual viewport，十一項檢查涵蓋桌面／手機單一 tab 列與新增／關閉／切換、ls／cat／help、混合大小寫指令、composer、捲動、設定表單、popup 草稿保留及水平位移。回歸測試目前共 108 項通過；瀏覽器結果為 `test-results/mobile-browser.json`，截圖為 `mobile-*-simulated.png`。這是可視區幾何回歸，未取代 iPhone Safari 實體鍵盤驗收。
 
 ## 頁面與資源範圍
 

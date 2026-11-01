@@ -27,6 +27,14 @@
 | ls | 選填 `path`；列出目錄的直接子項，包含隱藏檔與 revision |
 | skill_load | `name`；經由 `api.skills.load` 載入本輪 catalog 中的 SKILL.md，記錄來源與 active skill。與其他工具一樣從 ~/bin 載入 JS／manifest |
 
+## Shell 與 AI 工具的輸出
+
+Shell 的 `ls` 預設列出目前 cwd 的直接子項名稱，隱藏點檔；`ls -a` 包含隱藏檔、`ls -F` 為目錄加 `/`、`ls -l` 顯示 VFS 類型、UTF-8 bytes、revision 與時間，沒有虛構作業系統權限。`cat` 讀完整正文（支援多檔與 `-n`）；`read` 保留分頁 JSON。`grep -rin PATTERN PATH` 和 `find . -name "*.md" -type f` 顯示一般文字結果；工具呼叫及 shell 的 JSON 形式保留上表契約，`ls` 工具仍包含隱藏檔。
+
+`mkdir -p` 才遞迴建父目錄；`rm -r` 才刪目錄、`rm -f` 忽略不存在的路徑；`rmdir` 只刪空目錄；`mv FILE DIRECTORY` 移入目錄，但不覆寫既有檔案。`touch` 可建立多檔，既有內容／時間保留。引號與反斜線遵循 bash 基本規則；`"\n"` 是字面值，換行請直接輸入或透過 JSON。
+
+每個指令支援 `COMMAND --help`／`help COMMAND`，列出語法、支援選項與簡化範圍；自訂工具顯示自己的 description 與 JSON schema。AI 另有唯讀 `help` 工具（可傳 `command`）查閱同一份說明，名稱 `help` 保留給此工具。Help 不會啟動 agent、開 editor／preview 或執行 mutation。不支援的選項與多餘參數會報錯；管線、重導向與指令替換明確拒絕，沒有環境變數或路徑 glob 展開。
+
 Shell 與 Pi 使用相同 BinRegistry、schemas、JS 與 filesystem API。Shell 是內建指令解析器；目前不支援 pipes、redirects 或作業系統程式。
 
 Shell 指令名稱不分大小寫，例如 `LS`、`Read`、`AI --NEW`、`Preview`、`DeMo JoKeS` 都可使用，包含自訂 bin 工具。`restore-bin READ` 也接受大小寫混用；路徑、檔案內容、搜尋字串、JSON 欄位和 session ID 仍保留原本大小寫。
@@ -40,7 +48,7 @@ edit "jokes/笑話1.md" "今天" "明天"
 grep "笑話" jokes
 find jokes "*.md"
 cd jokes
-pi
+ai
 ```
 
 所有 bin 工具都可直接接受 JSON 參數，方便使用完整選項：
