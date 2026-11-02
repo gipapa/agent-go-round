@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
+const LOCALHOST_ORIGIN = /^https?:\/\/(?:(?:[^:]+\.)?localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
 
 const embedDevEntry = (): Plugin => ({
   name: "agent-go-round-embed-dev-entry",
@@ -13,8 +14,9 @@ const embedDevEntry = (): Plugin => ({
         return;
       }
       response.statusCode = 200;
-      response.setHeader("Access-Control-Allow-Origin", request.headers.origin ?? "*");
       response.setHeader("Vary", "Origin");
+      const origin = request.headers.origin;
+      if (origin && LOCALHOST_ORIGIN.test(origin)) response.setHeader("Access-Control-Allow-Origin", origin);
       response.setHeader("Content-Type", "application/javascript");
       response.end('import "/src/embed.ts";');
     });
@@ -25,7 +27,8 @@ export default defineConfig({
   plugins: [embedDevEntry()],
   base: process.env.VITE_BASE_PATH || "/",
   server: {
-    host: "127.0.0.1"
+    host: "127.0.0.1",
+    cors: { origin: LOCALHOST_ORIGIN }
   },
   build: {
     rollupOptions: {

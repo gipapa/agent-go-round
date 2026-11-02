@@ -192,6 +192,8 @@ Production build 會產生 `embed.js`。宿主 HTML 可以載入 GitHub Pages �
 
 Loader 依 `embed.js` 所在位置推導 iframe app URL，保留 `/agent-go-round/` 子路徑。測試線上版本時使用上述絕對 URL；`src="./embed.js"` 會改載入宿主自己提供的檔案。若宿主有 CSP，需允許該來源的 script 與 iframe。使用者仍在 popup 輸入自己的 Groq key。
 
+本機 `vite` dev server 也提供 `/embed.js`；跨站載入只允許 `localhost`、`*.localhost`、`127.0.0.1` 與 `[::1]` 的 HTTP(S) origin，dev server 與 embed entry 使用同一份白名單。
+
 亦可由宿主明確 mount：
 
 ```js
