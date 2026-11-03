@@ -155,13 +155,14 @@ npm run build
 npm run verify:dist
 ```
 
-目前回歸測試為 157 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、context usage、auto compact、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾與工具自訂內容保留。一般 `npm test` 不呼叫模型或消耗額度。
+目前回歸測試為 160 項，涵蓋歷史接續、自動恢復 provider、模型清單與 context length、context usage、auto compact、VFS、工具／skills、大小寫指令、預覽、popup 工作區隔離、bin 宿主讀取與無宿主錯誤、新訊息自動捲動、預設初始化、交易回滾、工具自訂內容保留與缺少 `crypto.randomUUID` 的相容處理。一般 `npm test` 不呼叫模型或消耗額度。
 
 瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
 | 指令 | 驗證範圍與需求 |
 |---|---|
 | `npm run test:vfs:browser` | 原生 IndexedDB 讀取量、metadata、skill 路徑、串流選取及 reload；先啟動 production preview，不需 API key |
+| `npm run test:embed:vfs:browser` | 不同 localhost origin 的 HTTP embed：原生／缺少 `crypto.randomUUID` 的 VFS 初始化、Worker 讀寫、預覽及 reload；先 build，runner 自行啟動 preview 與宿主，不需 API key |
 | `npm run test:mobile:browser` | 混合大小寫工具、模擬鍵盤、捲動、設定表單與 popup 草稿；先啟動 production preview，不需 API key |
 | `npm run test:host:browser` | Popup workspace 隔離、reload 保存與真實模型讀取 Host page 作者；先啟動 production preview，有 `.env.local` key 時執行 live 任務 |
 | `npm run test:tabs:browser` | 同頁雙 AI tabs：tab1 發送笑話任務給 tab2、讀取並轉述原文；切換 tab 的來源身分、shell 讀取與 reload；先啟動 production preview，使用 `.env.local` 的 key |
@@ -193,6 +194,8 @@ Production build 會產生 `embed.js`。宿主 HTML 可以載入 GitHub Pages �
 Loader 依 `embed.js` 所在位置推導 iframe app URL，保留 `/agent-go-round/` 子路徑。測試線上版本時使用上述絕對 URL；`src="./embed.js"` 會改載入宿主自己提供的檔案。若宿主有 CSP，需允許該來源的 script 與 iframe。使用者仍在 popup 輸入自己的 Groq key。
 
 本機 `vite` dev server 也提供 `/embed.js`；跨站載入只允許 `localhost`、`*.localhost`、`127.0.0.1` 與 `[::1]` 的 HTTP(S) origin，dev server 與 embed entry 使用同一份白名單。
+
+嵌入環境未提供 `crypto.randomUUID()` 時，工作區識別碼、預覽 surface 與工具 sandbox nonce 會使用 `crypto.getRandomValues()` 產生安全 UUID，避免初始化或讀檔失敗。
 
 亦可由宿主明確 mount：
 

@@ -20,6 +20,7 @@
     "test:preview:browser": "node scripts/verify-preview-browser.mjs",
     "test:mobile:browser": "node scripts/verify-mobile-browser.mjs",
     "test:vfs:browser": "node scripts/verify-vfs-browser.mjs",
+    "test:embed:vfs:browser": "node scripts/verify-embed-vfs-browser.mjs",
     "test:host:browser": "node scripts/verify-host-browser.mjs",
     "test:tabs:browser": "node scripts/verify-tabs-browser.mjs"
   },

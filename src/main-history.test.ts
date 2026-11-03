@@ -45,6 +45,22 @@ async function saved() {
 }
 
 describe("UI history at the real provider request boundary", () => {
+  it("initializes files, saves history and opens previews without crypto.randomUUID", async () => {
+    const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    vi.stubGlobal("crypto", { getRandomValues });
+    await loadApp();
+    const fs = new IndexedDbFileSystem(window.indexedDB);
+    expect((await fs.readFile("~/agents.md")).content).toBe("請回覆繁體中文");
+    expect(document.querySelector("#workspace-status")!.textContent).not.toContain("failed");
+    await fs.writeFile("~/main.html", "<h1>Embedded files</h1>");
+    await send("preview main.html");
+    await vi.waitFor(() => expect(document.querySelector<HTMLIFrameElement>(".preview-surface > iframe")?.srcdoc).toContain("Embedded files"));
+    const before = await saved();
+    expect(before!.tabs.find(tab => tab.mode === "preview")!.preview!.surfaceId).toMatch(/^popup-/);
+    await loadApp();
+    await vi.waitFor(() => expect(document.querySelector<HTMLIFrameElement>(".preview-surface > iframe")?.srcdoc).toContain("Embedded files"));
+  });
+
   it("starts with default VFS rules and an empty skills folder, then discovers demo skills at home", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);

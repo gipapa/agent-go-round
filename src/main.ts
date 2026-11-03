@@ -18,6 +18,7 @@ import { createScriptedSession } from "./core/scripted";
 import { AgentSession, DEFAULT_AUTO_COMPACT_PERCENT, inspectSessionRecovery, ToolOutcomeUnknownError, type SessionEvent, type SessionTool, type ToolApprovalRequest } from "./core/session";
 import { TabRouter, type TabRouteEvent } from "./core/tab-router";
 import { TabAgents } from "./core/tab-agents";
+import { randomUUID } from "./core/random";
 import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
@@ -782,7 +783,7 @@ function openPreview(entry: string): void {
   const id = `preview-${state.nextTabNumber++}`;
   const tab = createTab(id, `◈ ${entry.split("/").at(-1)}`, []);
   tab.mode = "preview";
-  tab.preview = { entry, surfaceId: `popup-${crypto.randomUUID()}` };
+  tab.preview = { entry, surfaceId: `popup-${randomUUID()}` };
   state.tabs.push(tab); state.activeTabId = id;
   render(); scheduleWorkspaceSave();
 }

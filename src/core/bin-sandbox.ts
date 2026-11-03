@@ -1,4 +1,5 @@
 import { FILE_METHODS, type BinCapability } from "./file-capabilities";
+import { randomUUID } from "./random";
 
 export type FileRpc = (method: BinCapability, args: unknown[]) => Promise<unknown>;
 export interface BinExecutor {
@@ -57,7 +58,7 @@ export class SandboxedBinExecutor implements BinExecutor {
       iframe.hidden = true;
       iframe.setAttribute("sandbox", "allow-scripts");
       iframe.setAttribute("aria-hidden", "true");
-      const nonce = crypto.randomUUID().replaceAll("-", "");
+      const nonce = randomUUID().replaceAll("-", "");
       // No allow-same-origin: scripts cannot access the app's IndexedDB or credentials.
       iframe.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; worker-src blob:; connect-src 'none'"><script nonce="${nonce}">(${sandboxBootstrap.toString()})();<\/script>`;
       const channel = new MessageChannel();

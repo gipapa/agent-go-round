@@ -1,5 +1,6 @@
 import { validateWorkspaceSnapshot, WorkspacePersistenceError, type WorkspaceSnapshot, type WorkspaceTabSnapshot } from "./workspace-store";
 import type { SessionEvent, SessionEventStore } from "./session";
+import { randomUUID } from "./random";
 
 export const CONVERSATIONS_DATABASE = "agent-go-round.sessions";
 type RecordRow<T> = { key: string; workspace: string; id: string; value: T };
@@ -53,7 +54,7 @@ type Lease = { owner: string; expires: number };
 export class IndexedDbConversationStore {
   private revisions = new Map<string, number>();
   private layoutRevision = 0;
-  readonly writerId = crypto.randomUUID();
+  readonly writerId = randomUUID();
   constructor(readonly records: IndexedWorkspaceRecords, private readonly layoutKey = "layout") {}
   async load(): Promise<WorkspaceSnapshot | undefined> {
     return this.records.transaction(false, async records => {
