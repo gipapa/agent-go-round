@@ -1,0 +1,17 @@
+AgentGoRound modifications to just-bash 3.6.0 (Apache-2.0)
+2026-11-04
+
+Modified file: node_modules/just-bash/dist/bundle/browser.js
+Original SHA-256: 38f1ad1e3283980ecdf68cede8a4eed028c6dff6e8c31793dec1e0af529c446e
+Patched SHA-256: f8085d4e66edbaeebe376818038e3a75671ea036306358eb499629d17b13336d
+
+scripts/patch-just-bash.mjs adds a public result.cwd field. It reports the
+execution-local interpreter cwd for normal completion, exit, execution limits
+and empty scripts. getCwd() and env.PWD are unchanged. No parser or command
+implementations were changed. Applications use the public result rather than
+reading private engine state. The patch is reversible, idempotent, and verifies
+the entire original artifact hash on install/build/test.
+
+The original Apache-2.0 license and upstream bundled notices remain applicable
+and are distributed alongside this modification notice. Copyright 2025 Vercel Inc.
+Application-side browser-zlib.ts explicitly rejects unsupported browser codecs.
