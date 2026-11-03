@@ -1,13 +1,15 @@
 import { TerminalView, type TerminalLine as TranscriptLine } from "./terminal/view";
-import { FileBrowser } from "./terminal/file-browser";
 import { initializeWorkspace } from "./core/workspace-bootstrap";
 import "./styles.css";
 import { PreviewSurface, type PreviewConfig } from "./preview-surface";
-import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath, FileSystemError } from "./core/fs";
+import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath } from "./core/fs";
 import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
-import { executeTerminalInput, type AgentStart } from "./terminal/controller";
+import { executeTerminalInput } from "./terminal/controller";
+import { ShellRuntime } from "./core/shell-runtime";
+import { SHELL_NOTICE } from "./core/shell-help";
+import { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
 import { configureFileAgent } from "./core/file-context";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
 import type { SessionSnapshot } from "./core/persistence";
@@ -22,6 +24,7 @@ import { randomUUID } from "./core/random";
 import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
+type AgentStart = { kind: "continue" } | { kind: "new" } | { kind: "resume"; sessionId: string };
 type TabStatus = "working" | "idle" | "done" | "blocked" | "error";
 type AgentTab = {
   id: string;
@@ -36,7 +39,7 @@ type AgentTab = {
   unread: number;
   draft: string;
   unregisterRoute: () => void;
-  mode: "shell" | "agent" | "editor" | "preview";
+  mode: "shell" | "agent" | "preview";
   preview?: PreviewConfig;
   provider: "scripted" | "groq";
   connected: boolean;
@@ -44,12 +47,10 @@ type AgentTab = {
   committedSession?: SessionSnapshot;
   agentCwd?: string;
   pendingContext: string[];
-  editor?: { path: string; content: string; revision: number; saving?: boolean; status?: string };
-  browserDirectory?: string;
-  browserHidden?: boolean;
   expandedTools: Set<string>;
   cwd: string;
   commandAbort?: AbortController;
+  shell?: ShellRuntime;
 };
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -66,7 +67,7 @@ if (!/^[a-zA-Z0-9_-]{1,64}$/.test(surfaceId)) throw new Error("Invalid surface i
 document.body.classList.toggle("page-view", pageView);
 document.body.classList.toggle("vertical-tabs", locationParams.get("tabs") === "vertical");
 const previews = new Map<string, PreviewSurface>();
-const shellBootHint = "輸入 help 查看用法；ai 啟動 agent，/exit 返回簡易 bash。";
+const shellBootHint = "just-bash 已就緒。使用 AI／Shell 按鈕切換；每次送出獨立 script，僅保存 cwd。";
 const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
   apiKey: "agent-go-round.groq.api-key",
@@ -173,15 +174,22 @@ app.innerHTML = `
           <div class="pane-header-actions"><div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div><button id="route-tab" class="pane-action" type="button">ask another tab</button></div>
         </header>
 
+        <nav class="pane-tools" aria-label="Workspace actions">
+          <button id="mode-toggle" type="button" class="terminal-button">AI</button>
+          <button id="new-conversation" type="button" class="terminal-button">New conversation</button>
+          <button id="history-toggle" type="button" class="terminal-button" aria-expanded="false" aria-controls="conversation-history">History</button>
+          <details class="workspace-menu"><summary>Workspace</summary><div class="workspace-menu-content">
+            <button id="shell-help" type="button" class="terminal-button">Shell guide</button>
+            <button id="reset-cwd" type="button" class="terminal-button">Home</button>
+            <form id="open-preview-form"><label>Preview file<input id="preview-entry" value="~/main.html" autocomplete="off" /></label><button type="submit" class="terminal-button">Open preview</button></form>
+            <button id="install-demo" type="button" class="terminal-button">Install joke demo</button>
+            <button id="reload-tools" type="button" class="terminal-button">Reload AI tools</button>
+          </div></details>
+        </nav>
+        <section id="conversation-history" class="conversation-history" hidden aria-label="Saved conversations"><label>Saved conversation<select id="conversation-list"></select></label><button id="resume-conversation" type="button" class="terminal-button">Resume</button></section>
         <div id="terminal" class="terminal" role="log" aria-live="polite"></div>
         <div id="page-previews" class="page-previews" hidden></div>
 
-        <section id="file-editor" class="file-editor" hidden aria-label="Human file editor">
-          <div class="editor-toolbar"><div class="editor-title"><span class="editor-kicker">HUMAN EDITOR</span><strong id="editor-path"></strong></div><span id="editor-status" role="status"></span><button id="editor-save" type="button" class="terminal-button">Save ⌘S</button><button id="editor-cancel" type="button" class="terminal-button">Back to terminal</button></div>
-          <div class="editor-help">Tab inserts indentation · ⌘/Ctrl+S saves · changes stay local until Save</div>
-          <div class="editor-navigation"><button id="editor-files" class="terminal-button" type="button" aria-controls="editor-browser" aria-expanded="true">檔案樹</button><button id="editor-close" class="terminal-button" type="button">關閉檔案</button></div>
-          <div class="editor-layout"><aside id="editor-browser"></aside><div id="editor-document" class="editor-surface"><pre id="editor-line-numbers" aria-hidden="true">1</pre><label for="editor-content" class="sr-only">File contents</label><textarea id="editor-content" spellcheck="false" aria-label="File contents" wrap="off"></textarea></div></div>
-        </section>
         <form id="terminal-form" class="terminal-form">
           <span class="terminal-prompt" aria-hidden="true">❯</span>
           <label class="sr-only" for="prompt">Message</label>
@@ -349,7 +357,6 @@ function refreshModels(force = false): Promise<void> {
 }
 
 const terminalView = new TerminalView(get<HTMLDivElement>("terminal"));
-const fileBrowser = new FileBrowser(get<HTMLElement>("editor-browser"));
 const promptElement = get<HTMLTextAreaElement>("prompt");
 const sendButton = get<HTMLButtonElement>("send");
 const stopButton = get<HTMLButtonElement>("stop");
@@ -365,8 +372,6 @@ const settingsDrawer = get<HTMLElement>("settings-drawer");
 const settingsBackdrop = get<HTMLDivElement>("settings-backdrop");
 const settingsStatus = get<HTMLParagraphElement>("settings-status");
 const workspaceStatus = get<HTMLSpanElement>("workspace-status");
-const editorContent = get<HTMLTextAreaElement>("editor-content");
-const editorLineNumbers = get<HTMLPreElement>("editor-line-numbers");
 let routeSourceTabId: string | null = null;
 let routeReturnFocus: HTMLElement | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
@@ -388,11 +393,6 @@ function syncViewportHeight(): void {
   const editing = document.activeElement?.matches('textarea, input:not([type="checkbox"]):not([type="button"]), select, [contenteditable="true"]') ?? false;
   const keyboardOpen = fullViewportHeight - viewportHeight > 120 || (editing && viewportHeight < 500);
   document.documentElement.classList.toggle("keyboard-open", keyboardOpen);
-  const tab = state.tabs.find(tab => tab.id === state.activeTabId);
-  if (tab?.mode === "editor") {
-    if (keyboardOpen && document.activeElement === editorContent) tab.browserHidden = true;
-    updateEditorLayout(tab);
-  }
   document.documentElement.style.setProperty("--viewport-height", `${Math.round(viewportHeight)}px`);
   document.documentElement.style.setProperty("--viewport-width", `${Math.round(viewportWidth)}px`);
   document.documentElement.style.setProperty("--viewport-offset-top", `${Math.round(viewportOffsetTop)}px`);
@@ -400,8 +400,7 @@ function syncViewportHeight(): void {
   requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
 }
 
-function keepsAgentEnterAsNewline(): boolean {
-  if (activeTab().mode !== "agent") return false;
+function keepsEnterAsNewline(): boolean {
   if (document.documentElement.classList.contains("keyboard-open")) return true;
   if (typeof window.matchMedia !== "function") return false;
   return window.matchMedia("(max-width: 760px)").matches || window.matchMedia("(pointer: coarse)").matches;
@@ -430,30 +429,6 @@ function setWorkspaceStatus(message: string): void {
   workspaceStatus.textContent = message;
 }
 
-function syncEditorLineNumbers(): void {
-  const lineCount = Math.max(1, editorContent.value.split("\n").length);
-  editorLineNumbers.textContent = Array.from({ length: lineCount }, (_, index) => String(index + 1)).join("\n");
-  editorLineNumbers.scrollTop = editorContent.scrollTop;
-}
-
-function indentEditorSelection(event: KeyboardEvent): void {
-  if (event.key !== "Tab" || event.altKey || event.metaKey || event.ctrlKey) return;
-  event.preventDefault();
-  const start = editorContent.selectionStart;
-  const end = editorContent.selectionEnd;
-  const value = editorContent.value;
-  if (!event.shiftKey) {
-    editorContent.setRangeText("\t", start, end, "end");
-    editorContent.dispatchEvent(new Event("input", { bubbles: true }));
-    return;
-  }
-  const lineStart = value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-  const remove = value.startsWith("\t", lineStart) ? 1 : value.startsWith("  ", lineStart) ? 2 : 0;
-  if (!remove) return;
-  editorContent.setRangeText("", lineStart, lineStart + remove, "end");
-  editorContent.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
 function workspaceTabSnapshot(tab: AgentTab): WorkspaceTabSnapshot {
   return {
     id: tab.id,
@@ -463,12 +438,11 @@ function workspaceTabSnapshot(tab: AgentTab): WorkspaceTabSnapshot {
     mode: tab.mode,
     cwd: tab.cwd,
     draft: tab.draft,
-    transcript: tab.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text, ...(streaming ? { streaming: true } : {}), ...(toolCallId ? { toolCallId } : {}) })),
+    transcript: tab.transcript.map(({ id, role, text, streaming, toolCallId, channel }) => ({ id, role, text, ...(channel ? { channel } : {}), ...(streaming ? { streaming: true } : {}), ...(toolCallId ? { toolCallId } : {}) })),
     session: tab.session.isRunning ? tab.committedSession! : tab.session.snapshot(),
     provider: tab.provider,
     agentCwd: tab.agentCwd,
     pendingContext: [...tab.pendingContext],
-    editor: tab.editor ? { path: tab.editor.path, content: tab.editor.content, revision: tab.editor.revision } : undefined,
     preview: tab.preview ? { ...tab.preview } : undefined
   };
 }
@@ -699,21 +673,26 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
   if (!fileRuntime) throw new Error("Virtual filesystem is unavailable");
   const explicit = input.match(/^\/skill\s+(\S+)\s+([\s\S]+)$/i);
   if (/^\/skill(?:\s|$)/i.test(input) && !explicit) throw new Error("Usage: /skill NAME TASK");
-  await configureFileAgent(tab.session, fileRuntime.fs, tab.agentCwd ?? tab.cwd, fileRuntime.bin, explicit?.[1], currentHostTools(tab.session.sessionId, false));
+  const session = tab.session;
+  await configureFileAgent(session, fileRuntime.fs, tab.agentCwd ?? tab.cwd, fileRuntime.bin, explicit?.[1], currentHostTools(session.sessionId, false), {
+    identity: { workspaceId, tabId: tab.id, sessionId: session.sessionId, kind: "agent" },
+    onCwd: cwd => { if (tab.session === session) tab.agentCwd = cwd; }
+  });
+  if (tab.session !== session) throw new Error("Session changed before dispatch; no model or script was executed");
   if (signal?.aborted) throw new Error("Run cancelled before dispatch");
-  await conversations().claim(tab.session.sessionId);
+  await conversations().claim(session.sessionId);
   try {
     if (signal?.aborted) throw new Error("Run cancelled before dispatch");
-    for (const message of tab.pendingContext) tab.session.addContextMessage(message);
+    for (const message of tab.pendingContext) session.addContextMessage(message);
     tab.pendingContext = [];
-    tab.committedSession = tab.session.snapshot();
-    const result = await tab.session.prompt(explicit?.[2] ?? input);
-    tab.committedSession = tab.session.snapshot();
+    tab.committedSession = session.snapshot();
+    const result = await session.prompt(explicit?.[2] ?? input);
+    tab.committedSession = session.snapshot();
     await durableEvents?.flush();
     await conversations().remember(workspaceTabSnapshot(tab));
     return result;
   } finally {
-    await conversations().release(tab.session.sessionId);
+    await conversations().release(session.sessionId);
     scheduleWorkspaceSave();
   }
 }
@@ -750,33 +729,6 @@ async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
   }
 }
 
-async function openFileEditor(tab: AgentTab, path: string): Promise<void> {
-  if (!fileRuntime) throw new Error("Files are unavailable");
-  const resolved = resolvePath(path, tab.cwd);
-  const node = await fileRuntime.fs.stat(resolved).catch(error => { if (error instanceof FileSystemError && error.code === "not_found") return undefined; throw error; });
-  if (node?.kind === "directory") {
-    tab.browserDirectory = resolved; tab.browserHidden = false; tab.mode = "editor"; return;
-  }
-  if (tab.editor?.path === resolved) { tab.browserHidden = compactEditor(); tab.mode = "editor"; return; }
-  if (!await mayReplaceEditor(tab)) return;
-  try { const file = await fileRuntime.fs.readFile(resolved); tab.editor = { path: resolved, content: file.content, revision: file.revision }; }
-  catch (error) { if (error instanceof FileSystemError && error.code === "not_found") tab.editor = { path: resolved, content: "", revision: 0 }; else throw error; }
-  tab.browserDirectory = resolved.slice(0, resolved.lastIndexOf("/"));
-  tab.browserHidden = compactEditor();
-  tab.mode = "editor";
-  if (activeTab() === tab) editorContent.dataset.identity = "";
-}
-
-async function mayReplaceEditor(tab: AgentTab): Promise<boolean> {
-  if (!tab.editor || !fileRuntime) return true;
-  if (tab.editor.saving) throw new Error("檔案儲存中，請稍後再操作");
-  const editor = tab.editor;
-  let saved: string | undefined;
-  try { saved = (await fileRuntime.fs.readFile(editor.path)).content; }
-  catch (error) { if (!(error instanceof FileSystemError) || error.code !== "not_found") throw error; }
-  return saved === editor.content || window.confirm(`${displayPath(editor.path)} 有未儲存內容，要放棄變更嗎？`);
-}
-
 function openPreview(entry: string): void {
   const existing = state.tabs.find(tab => tab.preview?.entry === entry);
   if (existing) { existing.mode = "preview"; selectTab(existing.id); return; }
@@ -786,26 +738,6 @@ function openPreview(entry: string): void {
   tab.preview = { entry, surfaceId: `popup-${randomUUID()}` };
   state.tabs.push(tab); state.activeTabId = id;
   render(); scheduleWorkspaceSave();
-}
-
-async function saveFileEditor(): Promise<void> {
-  const tab = activeTab(), editor = tab.editor;
-  if (!editor || !fileRuntime || editor.saving) return;
-  editor.saving = true;
-  get<HTMLButtonElement>("editor-save").disabled = true;
-  const content = editor.content;
-  try {
-    const file = await fileRuntime.fs.writeFile(editor.path, content, { expectedRevision: editor.revision });
-    editor.revision = file.revision;
-    editor.status = `Saved · revision ${file.revision}${editor.content !== content ? " · newer edits unsaved" : ""}`;
-    if (activeTab() === tab && tab.editor === editor) get<HTMLElement>("editor-status").textContent = editor.status;
-    scheduleWorkspaceSave();
-    if (activeTab() === tab && tab.mode === "editor") void fileBrowser.refresh();
-  } catch (error) {
-    editor.status = error instanceof Error ? error.message : String(error);
-    if (activeTab() === tab && tab.editor === editor) get<HTMLElement>("editor-status").textContent = editor.status;
-  }
-  finally { editor.saving = false; if (activeTab() === tab) get<HTMLButtonElement>("editor-save").disabled = false; }
 }
 
 function createTab(id: string, name: string, responses: readonly string[], branch = "master", path = "~"): AgentTab {
@@ -899,6 +831,9 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
   }
   if (event.type === "file_access") {
     tab.transcript.push({ id: makeId("file"), role: "system", text: `${event.method} ${displayPath(event.path)}${event.revision !== undefined ? ` · revision ${event.revision}` : ""}${event.readRange ? ` · returned lines ${event.readRange.startLine}–${event.readRange.endLine}/${event.readRange.totalLines}` : ""}` });
+    if (tab.id === state.activeTabId) terminalView.schedule({ ...tab, messages: tab.session.agent.state.messages });
+    scheduleWorkspaceSave();
+    return;
   }
   if (event.type === "tool_started" || event.type === "tool_finished") {
     tab.transcript.push({ id: makeId("tool"), role: "system", text: `${event.toolName} · ${event.type === "tool_started" ? "running" : event.isError ? "failed" : "finished"}`, ...(event.type === "tool_finished" ? { toolCallId: event.toolCallId } : {}) });
@@ -1071,43 +1006,9 @@ function renderTabs(): void {
   }
 }
 
-function browserContext(tab: AgentTab) {
-  return {
-    id: tab.id, directory: tab.browserDirectory ?? (tab.editor ? tab.editor.path.slice(0, tab.editor.path.lastIndexOf("/")) : tab.cwd), fs: fileRuntime!.fs,
-    navigate: (path: string) => { tab.browserDirectory = path; },
-    open: async (path: string) => { await openFileEditor(tab, path); if (activeTab() === tab) render(); scheduleWorkspaceSave(); },
-    beforeMutation: async (path: string, operation: "rename" | "remove") => {
-      if (!tab.editor || !(tab.editor.path === path || tab.editor.path.startsWith(path + "/"))) return true;
-      if (tab.editor.saving) throw new Error("檔案儲存中，請稍後再操作");
-      return operation === "rename" || await mayReplaceEditor(tab);
-    },
-    renamed: (from: string, to: string) => {
-      if (tab.editor && (tab.editor.path === from || tab.editor.path.startsWith(from + "/"))) {
-        tab.editor.path = to + tab.editor.path.slice(from.length); tab.editor.revision++;
-      }
-      if (activeTab() === tab) render(); scheduleWorkspaceSave();
-    },
-    removed: (path: string) => { if (tab.editor?.path === path) tab.editor = undefined; if (activeTab() === tab) render(); scheduleWorkspaceSave(); }
-  };
-}
-
-function compactEditor(): boolean {
-  return document.documentElement.classList.contains("keyboard-open") || window.matchMedia("(max-width: 760px)").matches;
-}
-
-function updateEditorLayout(tab: AgentTab): void {
-  const browsing = !tab.editor || !tab.browserHidden;
-  get<HTMLElement>("editor-browser").hidden = !browsing;
-  get<HTMLElement>("editor-document").hidden = !tab.editor || (browsing && compactEditor());
-  get<HTMLElement>("editor-files").setAttribute("aria-expanded", String(browsing));
-  get<HTMLElement>("editor-files").textContent = !tab.editor ? "檔案樹" : browsing ? "返回編輯" : "返回檔案樹";
-  get<HTMLButtonElement>("editor-files").disabled = !tab.editor;
-  get<HTMLButtonElement>("editor-close").disabled = !tab.editor || !!tab.editor.saving;
-}
-
 function renderPane(tab: AgentTab): void {
   get<HTMLSpanElement>("pane-title").textContent = tab.name;
-  get<HTMLSpanElement>("pane-type").textContent = tab.mode === "shell" ? "簡易 bash" : tab.mode === "editor" ? "檔案編輯" : tab.mode === "preview" ? "頁面預覽" : "AI agent";
+  get<HTMLSpanElement>("pane-type").textContent = tab.mode === "shell" ? "just-bash" : tab.mode === "preview" ? "頁面預覽" : "AI agent";
   get<HTMLSpanElement>("pane-path").textContent = displayPath(tab.mode === "agent" ? tab.agentCwd ?? tab.cwd : tab.cwd);
   const statusDot = get<HTMLSpanElement>("pane-status-dot");
   statusDot.className = `status-dot ${statusClass(tab.status)}`;
@@ -1129,7 +1030,7 @@ function renderPane(tab: AgentTab): void {
   const footerModel = get<HTMLSpanElement>("footer-model");
   footerModel.textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${contextLabel}${!tab.connected ? " · reconnect required" : ""}`;
   footerModel.title = footerModel.textContent;
-  promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $ help | ai` : "Ask AI to work with your files…";
+  promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $ script…` : "Ask AI to work with your files…";
   if (promptElement.dataset.tabId !== tab.id) {
     promptElement.value = tab.draft;
     promptElement.dataset.tabId = tab.id;
@@ -1138,11 +1039,9 @@ function renderPane(tab: AgentTab): void {
   stopButton.disabled = !running;
   promptElement.disabled = running || !workspaceReady;
   routeButton.disabled = state.tabs.length < 2;
-  const editing = tab.mode === "editor";
   const previewing = tab.mode === "preview" && !!tab.preview;
-  get<HTMLDivElement>("terminal").hidden = editing || previewing;
-  get<HTMLElement>("terminal-form").hidden = editing || previewing;
-  get<HTMLElement>("file-editor").hidden = !editing;
+  get<HTMLDivElement>("terminal").hidden = previewing;
+  get<HTMLElement>("terminal-form").hidden = previewing;
   const previewPanel = get<HTMLElement>("page-previews");
   previewPanel.hidden = !previewing;
   if (previewing && fileRuntime && !previews.has(tab.id)) {
@@ -1150,17 +1049,8 @@ function renderPane(tab: AgentTab): void {
     previews.set(tab.id, preview); previewPanel.append(preview.element);
   }
   for (const [id, preview] of previews) preview.element.hidden = !previewing || id !== tab.id;
-  if (editing) {
-    fileBrowser.show(browserContext(tab));
-    updateEditorLayout(tab);
-    get<HTMLButtonElement>("editor-save").disabled = !tab.editor || !!tab.editor.saving;
-    get<HTMLElement>("editor-path").textContent = tab.editor ? displayPath(tab.editor.path) : "選擇或新增檔案";
-    get<HTMLElement>("editor-status").textContent = tab.editor?.status ?? "";
-  }
-  if (editing && tab.editor) {
-    if (editorContent.dataset.identity !== `${tab.id}:${tab.editor!.path}`) { editorContent.value = tab.editor!.content; editorContent.dataset.identity = `${tab.id}:${tab.editor!.path}`; }
-    syncEditorLineNumbers();
-  }
+  const modeButton = get<HTMLButtonElement>("mode-toggle"); modeButton.textContent = tab.mode === "agent" ? "Shell" : "AI";
+  for (const id of ["mode-toggle", "new-conversation", "history-toggle", "resume-conversation", "install-demo", "reload-tools", "reset-cwd"]) get<HTMLButtonElement>(id).disabled = running || !workspaceReady;
   terminalView.render({ ...tab, messages: tab.session.agent.state.messages });
 }
 
@@ -1187,7 +1077,6 @@ async function closeTab(id: string): Promise<void> {
   const index = state.tabs.findIndex((tab) => tab.id === id);
   if (index < 0) return;
   const candidate = state.tabs[index];
-  if (candidate.editor?.saving) { setWorkspaceStatus("Wait for the file save to finish before closing this tab"); return; }
   candidate.commandAbort?.abort();
   candidate.session.stop();
   try {
@@ -1223,13 +1112,12 @@ function addTab(): void {
 
 async function restoreTab(snapshot: WorkspaceTabSnapshot): Promise<AgentTab> {
   const tab = createTab(snapshot.id, snapshot.name, ["Restored workspace tab."], snapshot.branch, snapshot.path);
-  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId }) => ({ id, role, text: streaming ? `${text}\n[Interrupted by reload]` : text, ...(toolCallId ? { toolCallId } : {}) }));
+  tab.transcript = snapshot.transcript.map(({ id, role, text, streaming, toolCallId, channel }) => ({ id, role, ...(channel ? { channel } : {}), text: streaming ? `${text}\n[Interrupted by reload]` : text, ...(toolCallId ? { toolCallId } : {}) }));
   tab.draft = snapshot.draft;
-  tab.mode = snapshot.mode ?? "shell";
+  tab.mode = snapshot.mode === "agent" || snapshot.mode === "preview" ? snapshot.mode : "shell";
   tab.cwd = snapshot.cwd ?? VFS_HOME;
   tab.agentCwd = snapshot.agentCwd;
   tab.pendingContext = [...(snapshot.pendingContext ?? [])];
-  tab.editor = snapshot.editor ? { ...snapshot.editor } : undefined;
   tab.preview = snapshot.preview ? { ...snapshot.preview } : undefined;
   tab.provider = snapshot.provider ?? (snapshot.session.model.provider === "scripted" ? "scripted" : "groq");
   tab.connected = tab.provider === "scripted";
@@ -1332,8 +1220,8 @@ const appReady = (async () => {
 get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const tab = activeTab();
-  const input = promptElement.value.trim();
-  if (!input || tab.session.isRunning || tab.commandAbort) return;
+  const input = promptElement.value;
+  if (!input.trim() || tab.session.isRunning || tab.commandAbort) return;
   const controller = new AbortController();
   tab.commandAbort = controller;
   tab.draft = "";
@@ -1346,17 +1234,13 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
     if (controller.signal.aborted) throw new Error("Command cancelled");
     if (!fileRuntime) throw new Error(`Files unavailable: ${fileRuntimeError}`);
     if (tab.mode === "shell") {
-      const result = await executeTerminalInput(input, {
-        ...fileRuntime, cwd: tab.cwd, signal: controller.signal, binContext: { tabId: tab.id }, extraTools: [...hostToolSpecs.values()],
-        history: () => conversations().history(),
-        openPreview,
-        openEditor: path => openFileEditor(tab, path),
-        enterAgent: args => enterAi(tab, args)
-      });
-      if (result.cwd) tab.cwd = result.cwd;
-      if (result.clear) tab.transcript = [];
-      if (result.text) tab.transcript.push({ id: makeId("shell"), role: "system", text: result.text });
-      tab.status = "idle";
+      tab.shell ??= new ShellRuntime(fileRuntime.fs, { workspaceId, tabId: tab.id, kind: "human" });
+      const result = await executeTerminalInput(input, { shell: tab.shell, cwd: tab.cwd, signal: controller.signal });
+      tab.cwd = result.cwd;
+      if (result.stdout) tab.transcript.push({ id: makeId("stdout"), role: "system", channel: "stdout", text: result.stdout });
+      if (result.stderr) tab.transcript.push({ id: makeId("stderr"), role: "system", channel: "stderr", text: result.stderr });
+      tab.transcript.push({ id: makeId("exit"), role: "system", channel: "exit", text: `exitCode: ${result.exitCode}` });
+      tab.status = result.exitCode === 0 ? "idle" : "error";
     } else if (/^\/exit$/i.test(input)) {
       tab.mode = "shell";
       tab.status = "idle";
@@ -1379,36 +1263,48 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
   }
 });
 
-editorContent.addEventListener("input", (event) => {
-  const editor = activeTab().editor;
-  if (editor) editor.content = (event.currentTarget as HTMLTextAreaElement).value;
-  if (editor) editor.status = "Unsaved";
-  get<HTMLElement>("editor-status").textContent = "Unsaved";
-  syncEditorLineNumbers();
-  scheduleWorkspaceSave();
-});
-editorContent.addEventListener("scroll", syncEditorLineNumbers);
-editorContent.addEventListener("keydown", (event) => {
-  indentEditorSelection(event);
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void saveFileEditor(); }
-});
-get<HTMLButtonElement>("editor-save").addEventListener("click", () => void saveFileEditor());
-get<HTMLButtonElement>("editor-files").addEventListener("click", () => {
-  const tab = activeTab(); tab.browserHidden = !tab.browserHidden; updateEditorLayout(tab);
-});
-get<HTMLButtonElement>("editor-close").addEventListener("click", async () => {
-  const tab = activeTab(), editor = tab.editor;
+async function workspaceAction(action: (tab: AgentTab) => Promise<void> | void): Promise<void> {
+  const tab = activeTab();
   try {
-    if (!await mayReplaceEditor(tab)) return;
-    if (tab.editor !== editor) return;
-    tab.editor = undefined; tab.browserHidden = false;
-    if (activeTab() === tab) render();
-    scheduleWorkspaceSave();
-  } catch (error) { setWorkspaceStatus(error instanceof Error ? error.message : String(error)); }
+    await appReady;
+    if (!workspaceReady || tab.commandAbort || tab.session.isRunning) return;
+    await action(tab);
+    document.querySelectorAll<HTMLDetailsElement>(".workspace-menu[open]").forEach(menu => { menu.open = false; });
+    render(); scheduleWorkspaceSave();
+  } catch (error) { tab.transcript.push({ id: makeId("action-error"), role: "system", text: error instanceof Error ? error.message : String(error) }); render(); }
+}
+get<HTMLButtonElement>("mode-toggle").addEventListener("click", () => void workspaceAction(async tab => {
+  if (tab.mode === "agent") tab.mode = "shell"; else await enterAi(tab, { kind: "continue" });
+  promptElement.focus();
+}));
+get<HTMLButtonElement>("new-conversation").addEventListener("click", () => void workspaceAction(tab => enterAi(tab, { kind: "new" })));
+get<HTMLButtonElement>("history-toggle").addEventListener("click", () => void workspaceAction(async () => {
+  const panel = get<HTMLElement>("conversation-history"); panel.hidden = !panel.hidden;
+  get<HTMLElement>("history-toggle").setAttribute("aria-expanded", String(!panel.hidden));
+  if (panel.hidden) return;
+  const entries = await conversations().history();
+  const select = get<HTMLSelectElement>("conversation-list"); select.replaceChildren();
+  for (const entry of entries) { const option = document.createElement("option"); option.value = entry.session.sessionId; option.textContent = `${entry.name} · ${entry.session.sessionId} · ${entry.provider ?? entry.session.model.provider}`; select.append(option); }
+  if (!entries.length) { const option = document.createElement("option"); option.textContent = "No saved conversations"; option.value = ""; select.append(option); }
+}));
+get<HTMLButtonElement>("resume-conversation").addEventListener("click", () => void workspaceAction(async tab => {
+  const sessionId = get<HTMLSelectElement>("conversation-list").value;
+  if (sessionId) await enterAi(tab, { kind: "resume", sessionId });
+  get<HTMLElement>("conversation-history").hidden = true;
+  get<HTMLElement>("history-toggle").setAttribute("aria-expanded", "false");
+}));
+get<HTMLButtonElement>("shell-help").addEventListener("click", () => void workspaceAction(tab => { tab.transcript.push({ id: makeId("guide"), role: "system", text: SHELL_NOTICE }); }));
+get<HTMLButtonElement>("reset-cwd").addEventListener("click", () => void workspaceAction(tab => { if (tab.mode === "agent") tab.agentCwd = VFS_HOME; else tab.cwd = VFS_HOME; }));
+get<HTMLFormElement>("open-preview-form").addEventListener("submit", event => {
+  event.preventDefault(); void workspaceAction(tab => openPreview(resolvePath(get<HTMLInputElement>("preview-entry").value || "~/main.html", tab.cwd)));
 });
-get<HTMLButtonElement>("editor-cancel").addEventListener("click", () => {
-  activeTab().mode = "shell"; render(); scheduleWorkspaceSave(); promptElement.focus();
-});
+get<HTMLButtonElement>("install-demo").addEventListener("click", () => void workspaceAction(async tab => {
+  const installed = await installJokeDemo(fileRuntime!.fs);
+  tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} created, ${installed.kept.length} kept.\n${JOKE_PROMPT}` });
+}));
+get<HTMLButtonElement>("reload-tools").addEventListener("click", () => void workspaceAction(async tab => {
+  await fileRuntime!.bin.reload(); syncHostTools(); tab.transcript.push({ id: makeId("tools"), role: "system", text: "AI tools reloaded." });
+}));
 
 promptElement.addEventListener("input", () => {
   activeTab().draft = promptElement.value;
@@ -1416,7 +1312,7 @@ promptElement.addEventListener("input", () => {
 });
 
 promptElement.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !keepsAgentEnterAsNewline()) {
+  if (event.key === "Enter" && !event.shiftKey && !keepsEnterAsNewline()) {
     event.preventDefault();
     get<HTMLFormElement>("terminal-form").requestSubmit();
   }

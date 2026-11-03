@@ -1,10 +1,10 @@
 # AgentGoRound：輕量前端 harness 規劃
 
-建立：2026-10-31；更新：2026-11-01。
+目前交付依 [just-bash／VFS 計畫](just-bash-plan.md)：人類與 AI 的 bash 共用 opaque Worker／IndexedDB VFS，保留結構化工具、skills、歷史、跨 tab 與宿主來源身分。舊 parser／JSON CLI／人類 editor 已移除；editor 重做與完整互動 shell session 列為後續。[程式與驗證紀錄](just-bash-progress.md) 記錄最新 gates 與未執行的外部模型 smoke。
 
-目前以 F0–F5 檔案式編輯器為交付基線。操作方式見 [README](../README.md)，實作契約見 [檔案編輯器規劃](filesystem-editor-plan.md)；[原始缺口盤點](poc-gap-plan.md) 與本文後半的 M0–M4 保留為歷史背景。
+以下 F0–F5、舊 shell／editor 和 M0–M4 為歷史記錄；其中指令與測試數量不代表現行版本。操作以 [README](../README.md) 為準。
 
-## 目前交付狀態
+## 整合前 F0–F5 交付基線（歷史）
 
 | 項目 | 已完成內容 | 驗證與邊界 |
 |---|---|---|
@@ -31,7 +31,7 @@ Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動�
 
 ## 程式精簡與資料策略
 
-這是新專案，開發期間可直接拋棄舊工作區，不維護 migration 或舊格式 fallback。檔案只使用 `agent-go-round.vfs`，對話／layout／events 只使用 `agent-go-round.sessions`，皆從目前 schema 建立；舊命名空間不讀取。
+這是新專案，不維護 migration 或舊格式 fallback。檔案現使用 `agent-go-round.vfs.bytes-v2`（schema 1），對話／layout／events 仍使用 `agent-go-round.sessions`。舊 `agent-go-round.vfs` 不讀取、不清空、不自動搬移；新版以明確命名空間隔離。
 
 本輪盤點已移除：skills 舊目錄搬移、LocalStorage 對話匯入及三套 LocalStorage store、舊 IndexedDB 補欄位、manifest 搬移、內建 read／write 舊版本比對升級、舊 find 語法，以及另一套記憶體 skill loader／prompt 組裝。Workspace 測試改用正式 IndexedDB adapter；重複的 snapshot 驗證已合併。
 

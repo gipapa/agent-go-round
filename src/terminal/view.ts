@@ -75,7 +75,7 @@ export class TerminalView {
     this.logo.hidden = isAgent;
     this.label.hidden = isAgent;
     this.welcome.hidden = !isAgent;
-    this.label.textContent = model.mode === "shell" ? "簡易 bash · 虛擬檔案系統" : "AgentGoRound · Pi runtime";
+    this.label.textContent = model.mode === "shell" ? "just-bash · workspace filesystem" : "AgentGoRound · Pi runtime";
     if (model.mode === "shell") { if (!this.notice.isConnected) this.intro.after(this.notice); }
     else this.notice.remove();
     const tools = new Map<string, ToolDetails>();
@@ -97,6 +97,9 @@ export class TerminalView {
       if (row.element !== cursor) { this.element.insertBefore(row.element, cursor); changed = true; }
       cursor = row.element.nextSibling;
       row.element.className = `terminal-line ${line.role}${line.streaming ? " streaming" : ""}`;
+      if (line.channel) row.element.dataset.channel = line.channel;
+      else delete row.element.dataset.channel;
+      row.element.setAttribute("aria-label", line.channel ?? line.role);
       row.marker.textContent = line.role === "input" ? "❯" : line.role === "assistant" ? (line.streaming ? "⠇" : "●") : "·";
       if (row.text !== line.text || row.streaming !== line.streaming) {
         if (row.details) row.details.querySelector("summary")!.textContent = line.text;

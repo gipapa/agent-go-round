@@ -7,6 +7,10 @@
     "node": ">=22"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-just-bash.mjs",
+    "predev": "node scripts/patch-just-bash.mjs",
+    "pretest": "node scripts/patch-just-bash.mjs",
+    "prebuild": "node scripts/patch-just-bash.mjs",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
@@ -15,11 +19,15 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "verify:dist": "node scripts/verify-dist.mjs",
+    "licenses:generate": "node scripts/generate-licenses.mjs",
     "test:jokes": "AGENT_GO_ROUND_RUN_JOKES=1 vitest run src/acceptance/jokes-live.test.ts --testTimeout=600000",
     "test:jokes:browser": "node --experimental-strip-types scripts/verify-jokes-browser.mjs",
     "test:preview:browser": "node scripts/verify-preview-browser.mjs",
     "test:mobile:browser": "node scripts/verify-mobile-browser.mjs",
     "test:vfs:browser": "node scripts/verify-vfs-browser.mjs",
+    "test:bash:browser": "node scripts/verify-just-bash-browser.mjs",
+    "test:shell:browser": "node scripts/verify-shell-runtime-browser.mjs",
+    "test:agent:bash:browser": "node scripts/verify-agent-bash-browser.mjs",
     "test:embed:vfs:browser": "node scripts/verify-embed-vfs-browser.mjs",
     "test:host:browser": "node scripts/verify-host-browser.mjs",
     "test:tabs:browser": "node scripts/verify-tabs-browser.mjs"
@@ -27,11 +35,13 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.4",
     "@earendil-works/pi-ai": "0.84.4",
+    "just-bash": "3.6.0",
     "parse5": "^8.0.1",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "esbuild": "0.25.12",
     "fake-indexeddb": "^6.2.7",
     "happy-dom": "^20.0.0",
     "typescript": "^5.8.0",

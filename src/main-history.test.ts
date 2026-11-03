@@ -33,6 +33,26 @@ async function send(text: string): Promise<void> {
   document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")?.disabled).toBe(false));
 }
+async function enterAgent() {
+  document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
+  await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
+}
+async function openPreviewFixture(path: string) {
+  document.querySelector<HTMLInputElement>("#preview-entry")!.value = path;
+  document.querySelector<HTMLFormElement>("#open-preview-form")!.requestSubmit();
+  await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("頁面預覽"));
+}
+async function installDemo() {
+  document.querySelector<HTMLButtonElement>("#install-demo")!.click();
+  await vi.waitFor(() => expect(document.querySelector("#terminal")!.textContent).toContain("Joke demo:"));
+}
+async function resume(id: string) {
+  document.querySelector<HTMLButtonElement>("#history-toggle")!.click();
+  await vi.waitFor(() => expect(document.querySelector(`option[value="${id}"]`)).not.toBeNull());
+  document.querySelector<HTMLSelectElement>("#conversation-list")!.value = id;
+  document.querySelector<HTMLButtonElement>("#resume-conversation")!.click();
+  await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
+}
 async function connect(): Promise<void> {
   document.querySelector<HTMLButtonElement>("#provider-toggle")!.click();
   document.querySelector<HTMLInputElement>("#api-key")!.value = "fixture-secret-never-in-snapshot";
@@ -53,7 +73,7 @@ describe("UI history at the real provider request boundary", () => {
     expect((await fs.readFile("~/agents.md")).content).toBe("請回覆繁體中文");
     expect(document.querySelector("#workspace-status")!.textContent).not.toContain("failed");
     await fs.writeFile("~/main.html", "<h1>Embedded files</h1>");
-    await send("preview main.html");
+    await openPreviewFixture("main.html");
     await vi.waitFor(() => expect(document.querySelector<HTMLIFrameElement>(".preview-surface > iframe")?.srcdoc).toContain("Embedded files"));
     const before = await saved();
     expect(before!.tabs.find(tab => tab.mode === "preview")!.preview!.surfaceId).toMatch(/^popup-/);
@@ -66,61 +86,50 @@ describe("UI history at the real provider request boundary", () => {
     const fs = new IndexedDbFileSystem(window.indexedDB);
     expect(await fs.readFile("~/agents.md")).toMatchObject({ content: "請回覆繁體中文", revision: 1 });
     expect(await fs.listDirectory("~/skills")).toEqual([]);
-    await connect(); await send("ai"); await send("Hello");
+    await connect(); await enterAgent(); await send("Hello");
     expect(requests[0].messages[0].content).toContain("請回覆繁體中文");
-    await send("/exit"); await send("demo jokes");
+    await send("/exit"); await installDemo();
     expect((await fs.readFile("~/skills/joke-master/SKILL.md")).content).toContain("name: joke-master");
     await expect(fs.stat("~/.pi")).rejects.toMatchObject({ code: "not_found" });
     await expect(fs.stat("~/AGENTS.md")).rejects.toMatchObject({ code: "not_found" });
-    await send("ai"); await send("Use joke-master");
+    await enterAgent(); await send("Use joke-master");
     expect(requests.at(-1)!.messages[0].content).toContain("/home/user/skills/joke-master/SKILL.md");
     await loadApp();
     expect((await fs.readFile("~/agents.md")).revision).toBe(1);
   });
 
-  it("documents the limited shell and starts/replaces conversations with ai", async () => {
+  it("documents independent scripts and controls conversations through UI", async () => {
     await loadApp();
-    expect(document.querySelector(".shell-notice")!.textContent).toContain("簡易 bash");
-    expect(document.querySelector(".shell-notice")!.textContent).toContain("read／cat、write、edit、grep、find、ls");
-    expect(document.querySelector<HTMLTextAreaElement>("#prompt")!.placeholder).toContain("ai");
-    await send("HeLp");
-    expect(document.querySelector("#terminal")!.textContent).toContain("ai --resume ID");
-    await send("AI");
-    expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent");
-    await send("/ExIt");
+    expect(document.querySelector(".shell-notice")!.textContent).toContain("僅保存 cwd");
+    document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
+    await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
+    await send("/exit");
     const before = (await saved())!.tabs[0].session.sessionId;
-    await send("aI --NeW"); await send("/EXIT");
+    document.querySelector<HTMLButtonElement>("#new-conversation")!.click();
+    await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
+    await send("/exit");
     expect((await saved())!.tabs[0].session.sessionId).not.toBe(before);
-    expect(document.querySelector("#pane-type")!.textContent).toBe("簡易 bash");
+    expect(document.querySelector("#pane-type")!.textContent).toBe("just-bash");
   });
-  it("accepts mixed-case UI commands while preserving entry paths and history identities", async () => {
+  it("resumes a saved identity from History and preserves preview path case", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
     await fs.writeFile("~/Mixed.html", "<h1>MiXeD Content</h1>");
-    await send("EdIt Mixed.html");
-    expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("<h1>MiXeD Content</h1>");
-    document.querySelector<HTMLButtonElement>("#editor-cancel")!.click();
-    await send("DeMo JoKeS");
-    expect((await fs.readFile("~/agents.md")).content).toContain("繁體中文");
     const initial = await saved();
     const store = new IndexedDbConversationStore(new IndexedWorkspaceRecords(window.indexedDB));
-    await store.load();
-    const archived = structuredClone(initial!.tabs[0]);
-    archived.session.sessionId = "History-MiXeD42";
+    await store.load(); const archived = structuredClone(initial!.tabs[0]); archived.session.sessionId = "History-MiXeD42";
     await store.remember(archived);
-    await send("HiStOrY");
-    expect(document.querySelector("#terminal")!.textContent).toContain("History-MiXeD42");
-    await send("AI --ReSuMe History-MiXeD42");
+    await resume("History-MiXeD42");
     expect((await saved())!.tabs[0].session.sessionId).toBe("History-MiXeD42");
     await send("/SKILL OFF"); await send("/EXIT");
-    await send("PrEvIeW Mixed.html");
+    await openPreviewFixture("Mixed.html");
     await vi.waitFor(() => expect(document.querySelector<HTMLIFrameElement>(".preview-surface > iframe")?.srcdoc).toContain("MiXeD Content"));
   });
   it("restores the preview entry and popup surface without changing workspace conversations", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
     await fs.writeFile("~/main.html", "<h1>Preview entry</h1>");
-    await send("preview main.html");
+    await openPreviewFixture("main.html");
     await vi.waitFor(() => expect(document.querySelector<HTMLIFrameElement>(".preview-surface > iframe")?.srcdoc).toContain("Preview entry"));
     const before = await saved();
     const preview = before!.tabs.find(tab => tab.mode === "preview")!.preview!;
@@ -131,7 +140,7 @@ describe("UI history at the real provider request boundary", () => {
     expect((await saved())!.tabs.find(tab => tab.mode === "preview")!.preview).toEqual(preview);
   });
   it("preserves history across reload, reconnect, repeated Connect, close and resume", async () => {
-    await loadApp(); await connect(); await send("ai"); await send("Remember pineapple-42");
+    await loadApp(); await connect(); await enterAgent(); await send("Remember pineapple-42");
     expect(requests).toHaveLength(1);
     const initial = await saved();
     const id = initial!.tabs[0].session.sessionId;
@@ -149,7 +158,7 @@ describe("UI history at the real provider request boundary", () => {
     document.querySelector<HTMLButtonElement>("#add-tab")!.click();
     document.querySelector<HTMLElement>('[aria-label="Close main"]')!.click();
     await vi.waitFor(() => expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(1));
-    await send(`ai --resume ${id}`);
+    await resume(id);
     expect(document.querySelector("#provider-label")?.textContent).toBe("groq · live");
     await send("Recall the original code after reopening");
     expect(requests.at(-1)!.messages).toContainEqual(expect.objectContaining({ content: "Remember pineapple-42" }));
@@ -159,7 +168,7 @@ describe("UI history at the real provider request boundary", () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
     await fs.writeFile("~/agents.md", "第一個規則：使用中文。");
-    await connect(); await send("ai"); await send("Hello from A");
+    await connect(); await enterAgent(); await send("Hello from A");
     expect(requests[0].messages[0].content).toContain("第一個規則");
     await fs.writeFile("~/agents.md", "第二個規則：使用繁體中文。");
     await send("Check new rules");
@@ -167,7 +176,7 @@ describe("UI history at the real provider request boundary", () => {
     expect(requests[1].messages[0].content).not.toContain("第一個規則");
     document.querySelector<HTMLButtonElement>("#add-tab")!.click();
     expect(document.querySelector("#provider-label")?.textContent).toBe("groq · live");
-    await send("ai"); await send("Hello only from B");
+    await enterAgent(); await send("Hello only from B");
     expect(JSON.stringify(requests[2].messages)).not.toContain("Hello from A");
     expect(document.querySelector("#pane-model")?.textContent).toBe("openai/gpt-oss-120b");
   });
@@ -187,7 +196,7 @@ describe("UI history at the real provider request boundary", () => {
     expect(document.querySelector<HTMLInputElement>("#context-window")!.value).toBe("32768");
     document.querySelector<HTMLFormElement>("#provider-form")!.requestSubmit();
     await vi.waitFor(() => expect(document.querySelector("#provider-label")!.textContent).toBe("groq · live"));
-    await send("ai"); await send("Catalog model request");
+    await enterAgent(); await send("Catalog model request");
     const before = (await saved())!.tabs[0].session;
     expect(before.model).toMatchObject({ id: "catalog-model", contextWindow: 32768 });
     await loadApp();
@@ -243,91 +252,4 @@ describe("UI history at the real provider request boundary", () => {
     expect((await saved())!.tabs.map(tab => tab.session.model)).toEqual(original);
   });
 
-  it("opens the human browser without a file and protects drafts while switching files", async () => {
-    await loadApp();
-    const fs = new IndexedDbFileSystem(window.indexedDB);
-    await fs.writeFile("~/first.md", "first"); await fs.writeFile("~/second.md", "second");
-    await send("edit");
-    expect(document.querySelector<HTMLElement>("#file-editor")!.hidden).toBe(false);
-    expect(document.querySelector<HTMLElement>("#editor-document")!.hidden).toBe(true);
-    const open = async (name: string) => {
-      await vi.waitFor(() => expect(document.querySelector(`[data-path="/home/user/${name}"] .browser-entry`)).not.toBeNull());
-      document.querySelector<HTMLButtonElement>(`[data-path="/home/user/${name}"] .browser-entry`)!.click();
-      await vi.waitFor(() => expect(document.querySelector("#editor-browser")!.hasAttribute("aria-busy")).toBe(false));
-    };
-    await open("first.md");
-    const editor = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
-    editor.value = "local draft"; editor.dispatchEvent(new Event("input", { bubbles: true }));
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    await open("second.md"); expect(editor.value).toBe("local draft"); expect(confirm).toHaveBeenCalled();
-    confirm.mockReturnValue(true);
-    await open("second.md"); expect(editor.value).toBe("second");
-    editor.value = "draft after rename"; editor.dispatchEvent(new Event("input", { bubbles: true }));
-    confirm.mockReturnValue(false);
-    confirm.mockClear();
-    document.querySelector<HTMLButtonElement>("#editor-close")!.click();
-    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
-    expect(editor.value).toBe("draft after rename");
-    document.querySelector<HTMLButtonElement>('[aria-label="重新命名 second.md"]')!.click();
-    const browser = document.querySelector("#editor-browser")!;
-    browser.querySelector("input")!.value = "renamed.md"; browser.querySelector("form")!.requestSubmit();
-    await vi.waitFor(() => expect(document.querySelector("#editor-path")!.textContent).toBe("~/renamed.md"));
-    expect(editor.value).toBe("draft after rename");
-    await vi.waitFor(() => expect(browser.hasAttribute("aria-busy")).toBe(false));
-    document.querySelector<HTMLButtonElement>("#editor-save")!.click();
-    await vi.waitFor(async () => expect((await fs.readFile("~/renamed.md")).content).toBe("draft after rename"));
-    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#editor-close")!.disabled).toBe(false));
-    document.querySelector<HTMLButtonElement>("#editor-close")!.click();
-    await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#editor-document")!.hidden).toBe(true));
-    expect(document.querySelector<HTMLElement>("#editor-browser")!.hidden).toBe(false);
-    expect(document.querySelector("#pane-type")!.textContent).toBe("檔案編輯");
-    confirm.mockRestore();
-  });
-
-  it("retains editor drafts across reload and rejects concurrent file changes", async () => {
-    await loadApp();
-    const fs = new IndexedDbFileSystem(window.indexedDB);
-    await fs.writeFile("~/code.ts", "original");
-    await send("edit code.ts");
-    const editor = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
-    expect(document.querySelector("#editor-line-numbers")?.textContent).toBe("1");
-    editor.value = "first\nsecond"; editor.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(document.querySelector("#editor-line-numbers")?.textContent).toBe("1\n2");
-    editor.setSelectionRange(0, 0); editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    expect(editor.value).toBe("\tfirst\nsecond");
-    editor.value = "unsaved edit"; editor.dispatchEvent(new Event("input", { bubbles: true }));
-    await saved(); await loadApp();
-    expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("unsaved edit");
-    await fs.writeFile("~/code.ts", "other writer");
-    document.querySelector<HTMLButtonElement>("#editor-save")!.click();
-    await vi.waitFor(() => expect(document.querySelector("#editor-status")?.textContent).toContain("changed"));
-    expect((await fs.readFile("~/code.ts")).content).toBe("other writer");
-    expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("unsaved edit");
-  });
-
-  it("keeps a delayed editor save attached to its originating tab", async () => {
-    await loadApp();
-    const fs = new IndexedDbFileSystem(window.indexedDB);
-    await fs.writeFile("~/a.md", "a"); await fs.writeFile("~/b.md", "b");
-    await send("edit a.md");
-    let release!: () => void;
-    const pending = new Promise<void>(resolve => { release = resolve; });
-    const original = IndexedDbFileSystem.prototype.writeFile;
-    const spy = vi.spyOn(IndexedDbFileSystem.prototype, "writeFile").mockImplementation(async function (this: IndexedDbFileSystem, path, content, options) {
-      if (path.endsWith("/a.md")) await pending;
-      return original.call(this, path, content, options);
-    });
-    try {
-      document.querySelector<HTMLButtonElement>("#editor-save")!.click();
-      expect(document.querySelector<HTMLButtonElement>("#editor-save")!.disabled).toBe(true);
-      document.querySelector<HTMLButtonElement>("#add-tab")!.click();
-      await send("edit b.md");
-      expect(document.querySelector<HTMLButtonElement>("#editor-save")!.disabled).toBe(false);
-      release(); await vi.waitFor(async () => expect((await fs.readFile("~/a.md")).revision).toBe(2));
-      expect(document.querySelector("#editor-status")!.textContent).toBe("");
-      expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("b");
-      document.querySelector<HTMLElement>('#tab-list .tab')!.click();
-      expect(document.querySelector("#editor-status")!.textContent).toContain("Saved");
-    } finally { release(); spy.mockRestore(); }
-  });
 });

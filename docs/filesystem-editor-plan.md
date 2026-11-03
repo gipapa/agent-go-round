@@ -1,5 +1,8 @@
 # Pi 編輯器：虛擬檔案系統實作與驗收規劃
 
+此為 just-bash 切換前的歷史規劃。現行範圍依 [just-bash 計畫](just-bash-plan.md) 與 [README](../README.md)；舊 parser／JSON CLI 和人類 editor 已移除，以下舊入口不再適用。
+
+
 日期：2026-10-31；更新：2026-11-01。F0–F5 已完成：歷史接續與最小 history／resume、IndexedDB session／workspace／events migration、VFS／檔案工具、文字 editor、AGENTS.md／skills 與來源版本紀錄、SDK Groq／production browser 的三段笑話驗收，以及 main.html／相對 CSS／SVG 主頁預覽、可恢復且共享 workspace 的 Pi popup。操作與證據見 [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md)。
 
 本文件取代 [前一輪缺口規劃](poc-gap-plan.md) 的交付優先順序，保留其中的問題盤點。新目標是可處理檔案的純前端 Pi 編輯器：開啟 tab 先進入 `~` 的 shell，使用者可以瀏覽、建立與編輯檔案，執行 `ai` 後，agent 在同一個檔案系統中工作。

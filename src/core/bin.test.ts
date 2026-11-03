@@ -5,7 +5,6 @@ import { BinRegistry, type BinFileAccess } from "./bin";
 import { DEFAULT_BIN_TOOLS, FILE_METHODS, installDefaultBin } from "./bin-defaults";
 import { MemoryFileSystem } from "./fs";
 import type { BinExecutor, FileRpc } from "./bin-sandbox";
-import { executeShell } from "./shell";
 import { AgentSession, MemorySessionEventStore } from "./session";
 import { createScriptedSession } from "./scripted";
 import { createAssistantMessageEventStream, type AssistantMessage, type ToolCall } from "@earendil-works/pi-ai";
@@ -27,11 +26,11 @@ async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}
 }
 
 describe("VFS ~/bin JavaScript tools", () => {
-  it("routes shell and AI through editable agents bin JS with trusted caller context", async () => {
+  it("routes structured calls through editable agents bin JS with trusted caller context", async () => {
     const calls: unknown[] = [];
     const { fs, bin } = await setup({ tabAgents: async (args, _signal, context) => { calls.push({ args, context }); return { status: "pending", requestId: "request-a" }; } });
-    expect(JSON.parse((await executeShell("AgEnTs LiSt", fs, bin, "/home/user", undefined, { tabId: "main" })).text)).toMatchObject({ requestId: "request-a" });
-    await executeShell('agents send other "請講一個笑話"', fs, bin, "/home/user", undefined, { tabId: "main" });
+    expect(await bin.execute("agents", { action: "list" }, "/home/user", undefined, { tabId: "main" })).toMatchObject({ requestId: "request-a" });
+    await bin.execute("agents", { action: "send", target: "other", text: "請講一個笑話" }, "/home/user", undefined, { tabId: "main" });
     await bin.sessionTools("/home/user", undefined, undefined, "session-b").find(tool => tool.name === "agents")!.execute("call-b", { action: "read", requestId: "request-a", waitMs: 0 });
     expect(calls).toEqual([
       { args: { action: "list" }, context: { tabId: "main" } },
@@ -39,7 +38,7 @@ describe("VFS ~/bin JavaScript tools", () => {
       { args: { action: "read", requestId: "request-a", waitMs: 0 }, context: { sessionId: "session-b", toolCallId: "call-b" } }
     ]);
     await fs.writeFile("~/bin/agents.js", 'async function main(args, api) { return { custom: true }; }'); await bin.reload();
-    expect(JSON.parse((await executeShell("agents list", fs, bin, "/home/user")).text)).toEqual({ custom: true });
+    expect(await bin.execute("agents", { action: "list" })).toEqual({ custom: true });
     expect(await bin.sessionTools().find(tool => tool.name === "agents")!.execute("edited", { action: "list" })).toMatchObject({ details: { custom: true } });
   });
 
@@ -82,19 +81,19 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect((await fs.readFile("~/bin/manifests/read.tool.json")).revision).toBe(revision);
   });
 
-  it("runs host reads from editable bin JS for both shell and AI, with explicit no-host errors", async () => {
+  it("runs host reads from editable bin JS with source identity, with explicit no-host errors", async () => {
     const plain = await setup();
-    await expect(executeShell("read_host_page", plain.fs, plain.bin, "/home/user")).rejects.toThrow("目前沒有連接宿主頁");
+    await expect(plain.bin.execute("read_host_page", {})).rejects.toThrow("目前沒有連接宿主頁");
     await expect(plain.bin.sessionTools().find(tool => tool.name === "read_host_page")!.execute("no-host", {})).rejects.toThrow("目前沒有連接宿主頁");
     const calls: unknown[] = [];
     const { fs, bin } = await setup({ readHostPage: async (args, _signal, context) => { calls.push({ args, context }); return { html: "這一頁的作者是gipapa" }; } });
-    expect((await executeShell("read_host_page", fs, bin, "/home/user")).text).toContain("gipapa");
+    expect(await bin.execute("read_host_page", {})).toMatchObject({ html: expect.stringContaining("gipapa") });
     const tool = bin.sessionTools("/home/user", undefined, undefined, "session-a").find(tool => tool.name === "read_host_page")!;
     expect(await tool.execute("call-a", { limit: 20 })).toMatchObject({ details: { html: expect.stringContaining("gipapa") } });
     expect(calls.at(-1)).toEqual({ args: { limit: 20 }, context: { sessionId: "session-a", toolCallId: "call-a" } });
     await fs.writeFile("~/bin/read_host_page.js", 'async function main(args, api) { return { edited: true }; }');
     await bin.reload();
-    expect(JSON.parse((await executeShell("read_host_page", fs, bin, "/home/user")).text)).toEqual({ edited: true });
+    expect(await bin.execute("read_host_page", {})).toEqual({ edited: true });
     expect(await bin.sessionTools().find(tool => tool.name === "read_host_page")!.execute("edited", {})).toMatchObject({ details: { edited: true } });
   });
 
@@ -175,7 +174,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     await fs.writeFile("~/bin/hello.js", 'async function main(args, api) { return "first"; }');
     await bin.reload();
     const registered = bin.sessionTools().find((tool) => tool.name === "hello")!;
-    expect(await executeShell("HeLlO", fs, bin, "/home/user")).toEqual({ text: '"first"' });
+    expect(await bin.execute("hello", {})).toBe("first");
     await fs.writeFile("~/bin/hello.js", 'async function main(args, api) { return api.fs.writeFile("~/oops", "bad"); }');
     await bin.reload();
     expect(await registered.execute("test", {})).toMatchObject({ details: "first" });
@@ -237,55 +236,19 @@ describe("VFS ~/bin JavaScript tools", () => {
     await expect(fs.readFile("~/late")).rejects.toThrow();
   });
 
-  it("shares commands with Pi and preserves quoted paths through shell parsing", async () => {
-    const { fs, bin } = await setup();
-    await executeShell('write "space name.md" "hello\\nworld"', fs, bin, "/home/user");
-    expect(await executeShell('cat "space name.md"', fs, bin, "/home/user")).toMatchObject({ text: expect.stringContaining("hello\\nworld") });
-    await executeShell("mkdir jokes", fs, bin, "/home/user");
-    expect(await executeShell("cd jokes", fs, bin, "/home/user")).toMatchObject({ cwd: "/home/user/jokes" });
-    await expect(executeShell("missing", fs, bin, "/home/user")).rejects.toThrow(/not found/);
-    expect(DEFAULT_BIN_TOOLS.map((tool) => tool.name).sort()).toEqual(["agents", "edit", "find", "grep", "help", "ls", "read", "read_host_page", "skill_load", "write"]);
-  });
-
-  it.each(["upper", "mixed"])("accepts %s-case shell commands without changing file paths, content or JSON", async (style) => {
-    const { fs, bin } = await setup();
-    const name = (value: string) => style === "upper" ? value.toUpperCase() : [...value].map((char, index) => index % 2 ? char.toLowerCase() : char.toUpperCase()).join("");
-    const shell = (command: string, args = "") => executeShell(`${name(command)} ${args}`, fs, bin, "/home/user");
-    expect(await shell("help")).toMatchObject({ text: expect.stringContaining("指令名稱不分大小寫") });
-    expect(await shell("pwd")).toEqual({ text: "/home/user" });
-    await shell("mkdir", '"Mixed Dir"');
-    expect(await shell("cd", '"Mixed Dir"')).toMatchObject({ cwd: "/home/user/Mixed Dir" });
-    await shell("touch", '"Mixed Dir/Empty.MD"');
-    await shell("write", '"Mixed Dir/Data.MD" "Token ABC"');
-    await shell("write", JSON.stringify({ path: "Mixed Dir/Other.MD", content: "Other XYZ", expectedRevision: 0 }));
-    expect((await fs.readFile("~/Mixed Dir/Other.MD")).content).toBe("Other XYZ");
-    expect(JSON.parse((await shell("read", '"Mixed Dir/Data.MD"')).text)).toMatchObject({ path: "/home/user/Mixed Dir/Data.MD", content: "Token ABC" });
-    expect((await shell("cat", '"Mixed Dir/Data.MD"')).text).toBe("Token ABC");
-    await shell("edit", '"Mixed Dir/Data.MD" "ABC" "XYZ"');
-    expect((await shell("grep", '"XYZ" "Mixed Dir/Data.MD"')).text).toBe("Token XYZ");
-    expect((await shell("grep", '"xyz" "Mixed Dir/Data.MD"')).text).toBe("");
-    expect((await shell("find", '"Mixed Dir" -name "Data.MD"')).text).toBe("Mixed Dir/Data.MD");
-    expect((await shell("ls", '"Mixed Dir"')).text.split("\n")).toEqual(["Data.MD", "Empty.MD", "Other.MD"]);
-    await shell("mv", '"Mixed Dir/Data.MD" "Mixed Dir/Renamed.MD"');
-    expect((await fs.readFile("~/Mixed Dir/Renamed.MD")).content).toBe("Token XYZ");
-    await expect(fs.readFile("~/mixed dir/renamed.md")).rejects.toThrow("Not found");
-    await shell("rm", '"Mixed Dir/Empty.MD"');
-    await expect(fs.stat("~/Mixed Dir/Empty.MD")).rejects.toThrow("Not found");
-    await shell("restore-bin", name("read"));
-    expect(await shell("rehash")).toMatchObject({ text: expect.stringContaining("read") });
-    expect(await shell("clear")).toEqual({ text: "", clear: true });
-  });
-
   it("recovers broken bin manifests without depending on executable bin tools", async () => {
     const { fs, bin } = await setup();
     await fs.writeFile("~/bin/manifests/read.tool.json", "broken");
     const restarted = new BinRegistry(fs, testExecutor);
     await expect(restarted.reload()).rejects.toThrow();
-    await executeShell("restore-bin read", fs, restarted, "/home/user");
+    const { source: _source, ...manifest } = DEFAULT_BIN_TOOLS.find(tool => tool.name === "read")!;
+    await fs.writeFile("~/bin/manifests/read.tool.json", JSON.stringify(manifest));
+    await restarted.reload();
     expect(restarted.list()).toHaveLength(DEFAULT_BIN_TOOLS.length);
     await fs.writeFile("~/bin/manifests/bad.tool.json", "broken");
     await expect(bin.reload()).rejects.toThrow();
-    await executeShell("rm ~/bin/manifests/bad.tool.json", fs, restarted, "/home/user");
-    expect(await executeShell("rehash", fs, restarted, "/home/user")).toMatchObject({ text: expect.stringContaining("read") });
+    await fs.remove("~/bin/manifests/bad.tool.json");
+    await restarted.reload();
+    expect(restarted.list().some(tool => tool.name === "read")).toBe(true);
   });
 });

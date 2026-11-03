@@ -30,7 +30,7 @@ async function command(text) {
   await call("fill", "#prompt", text);
   await evaluate('(() => { document.querySelector("#terminal-form").requestSubmit(); return true; })()');
   await waitReady();
-  return evaluate('({status:document.querySelector("#run-status").textContent,last:[...document.querySelectorAll("#terminal .line-content")].at(-1)?.textContent})');
+  return evaluate('({status:document.querySelector("#run-status").textContent,last:document.querySelector("#pane-type").textContent==="just-bash"?[...document.querySelectorAll("#terminal [data-channel=stdout] .line-content")].at(-1)?.textContent:[...document.querySelectorAll("#terminal .line-content")].at(-1)?.textContent})');
 }
 async function connect() {
   await call("click", "#provider-toggle");
@@ -48,10 +48,10 @@ async function persisted() {
     const open=(name)=>new Promise((resolve,reject)=>{const q=indexedDB.open(name);q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
     const rows=async(name,store)=>{const db=await open(name);return new Promise((resolve,reject)=>{const tx=db.transaction(store);const q=tx.objectStore(store).getAll();q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error);tx.oncomplete=()=>db.close()})};
     const records=await rows('agent-go-round.sessions','records');
-    const contents=new Map((await rows('agent-go-round.vfs','contents')).map(row=>[row.key,row.content]));
+    const contents=new Map((await rows('agent-go-round.vfs.bytes-v2','contents')).map(row=>[row.key,row.content]));
     const layout=records.find(row=>row.id==='layout'&&row.workspace===${JSON.stringify(workspaceId)})?.value.snapshot;
     const tab=layout?.tabs.find(tab=>tab.id===layout.activeTabId);
-    return {tab,events:records.filter(row=>row.workspace===${JSON.stringify(workspaceId)}&&row.id.startsWith('event:')).map(row=>row.value),files:(await rows('agent-go-round.vfs','nodes')).filter(row=>row.workspace===${JSON.stringify(workspaceId)}).map(row=>({...row.node,...(row.node.kind==='file'?{content:contents.get(row.key)}:{})}))};
+    return {tab,events:records.filter(row=>row.workspace===${JSON.stringify(workspaceId)}&&row.id.startsWith('event:')).map(row=>row.value),files:(await rows('agent-go-round.vfs.bytes-v2','nodes')).filter(row=>row.workspace===${JSON.stringify(workspaceId)}).map(row=>({...row.node,...(row.node.kind==='file'?{content:new TextDecoder().decode(contents.get(row.key))}:{})}))};
   })()`);
 }
 async function grade(id, result, directory) {
@@ -80,9 +80,9 @@ try {
   await call("open", report.url); await waitReady();
   await call("snapshot");
   if (languageOnly) {
-    const rules = await command("read ~/agents.md");
+    const rules = await command("cat ~/agents.md");
     if (!rules.last.includes("請回覆繁體中文")) throw new Error("Default workspace language rule is missing");
-    await connect(); await command("ai");
+    await connect(); await call("click", "#mode-toggle");
     const result = await command("Explain a virtual filesystem in one short sentence.");
     const state = await persisted();
     const last = state.events.filter(event => event.type === "run_finished").at(-1);
@@ -91,19 +91,16 @@ try {
     if (!sources.some(event => event.source.kind === "agents") || sources.some(event => event.source.kind === "skill") || state.tab.session.activeSkill) throw new Error("Language rule was not isolated from skills");
     report.tasks.push({ id: "agents-only-english-to-chinese", status: "pass", model: state.tab.session.model.id, text: last.text, sources });
   } else {
-  await command("demo jokes");
-  await connect(); await command("ai");
+  await call("click", ".workspace-menu > summary"); await call("click", "#install-demo");
+  const demoDeadline=Date.now()+15000;while(Date.now()<demoDeadline){if(await evaluate('document.querySelector("#terminal").textContent.includes("Joke demo:")'))break;await new Promise(r=>setTimeout(r,100))}
+  await connect(); await call("click", "#mode-toggle");
   const first = await command("Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.");
   report.tasks.push(await grade("browser-five-existing-jokes", first, "/home/user/jokes"));
   const previous = report.tasks[0];
-  await command("/exit"); await command("edit ~/jokes/笑話1.md");
-  await call("fill", "#editor-content", "今天的更新笑話：我跟電腦說想休息，電腦說它每天都在等我按睡眠模式。");
-  await call("click", "#editor-save");
-  const saved = await evaluate('document.querySelector("#editor-status").textContent');
-  if (!saved.includes("Saved")) throw new Error("Editor failed to save changed joke");
-  await call("click", "#editor-cancel");
+  await command("/exit");
+  await command("printf '%s' '今天的更新笑話：我跟電腦說想休息，電腦說它每天都在等我按睡眠模式。' > ~/jokes/笑話1.md");
   await persisted(); await call("reload"); await waitReady();
-  await connect(); await command("ai");
+  await connect(); await call("click", "#mode-toggle");
   const next = await command("I edited a joke file. Use joke-master again, reread all five current files in ~/jokes, score each, and choose the funniest one.");
   const second = await grade("browser-reload-reconnect-rescore", next, "/home/user/jokes");
   if (second.sessionId !== previous.sessionId || second.messageCount <= previous.messageCount) throw new Error("Reload did not preserve conversation identity/history");
@@ -112,7 +109,7 @@ try {
   report.tasks.push(second);
   // History continuation is covered above. Start a distinct creation task so
   // free-tier per-request input-token limits do not conflate the two gates.
-  await command("/exit"); await command("ai --new");
+  await command("/exit"); await call("click", "#new-conversation");
   const created = await command("Use joke-master. First create exactly five original short jokes as separate .md files in ~/new-jokes using write with createParents true, then actually read each file back, score all five, and select the funniest one.");
   report.tasks.push(await grade("browser-agent-create-read-back", created, "/home/user/new-jokes"));
   await command("/exit");

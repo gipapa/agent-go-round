@@ -53,7 +53,7 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
     source: "async function main(args, api) { return api.host.readPage(args); }"
   },
   {
-    version: 1, name: "help", description: "Inspect shell command syntax, supported options and limitations, or tool JSON schemas. Omit command for the catalog. Does not execute the command.",
+    version: 1, name: "help", description: "Inspect structured AI tool descriptions and JSON schemas. Omit command for the tool catalog. Bash uses its own help builtin; this tool does not execute scripts.",
     parameters: object({ command: Type.Optional(Type.String()) }), capabilities: ["commandHelp"],
     source: "async function main(args, api) { return { text: await api.tools.help(args.command) }; }"
   },

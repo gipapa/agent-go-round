@@ -9,6 +9,16 @@ import { BinRegistry } from "./bin";
 import { installDefaultBin } from "./bin-defaults";
 
 describe("VFS instructions and skills", () => {
+  it("keeps home rules and skills when a run starts outside home", async () => {
+    const fs = new MemoryFileSystem();
+    await installJokeDemo(fs);
+    await fs.mkdir("/tmp");
+    await fs.writeFile("/tmp/AGENTS.md", "Do not load this as home instructions");
+    const context = await prepareFileContext(fs, "/tmp");
+    expect(context.sources.map(source => source.path)).toEqual(["/home/user/AGENTS.md"]);
+    expect(context.skills.map(skill => skill.name)).toContain("joke-master");
+    expect(context.systemPrompt).not.toContain("Do not load this as home instructions");
+  });
   it("loads hierarchical AGENTS, exposes metadata only, and reads selected skill from disk", async () => {
     const fs = new MemoryFileSystem();
     await installJokeDemo(fs);

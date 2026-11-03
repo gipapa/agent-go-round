@@ -1,11 +1,11 @@
 # 檔案式 Pi：笑話驗收
 
-更新：2026-11-01。先前版本的 SDK 與 production 瀏覽器三任務均曾通過；本輪加強架構驗收後，真實模型驗收尚未全數通過，最新結果與限制見「本輪架構審閱結果」。先前 SDK 使用 `openai/gpt-oss-120b`；瀏覽器使用 `qwen/qwen3.8-27b`。
+更新：2026-11-04。just-bash 版的外部模型 smoke 尚未執行；以下先前的模型結果不列為新版通過。先前版本的 SDK 與 production 瀏覽器三任務均曾通過；本輪加強架構驗收後，真實模型驗收尚未全數通過，最新結果與限制見「本輪架構審閱結果」。先前 SDK 使用 `openai/gpt-oss-120b`；瀏覽器使用 `qwen/qwen3.8-27b`。
 
 ## 自己操作
 
 1. `npm run dev`，開啟顯示的 URL。新 tab 位於 `~`。
-2. 新 workspace 已有空白 `~/skills/` 及內容為「請回覆繁體中文」的 `~/agents.md`。輸入 `demo jokes`，建立示例 skill 與笑話：既有檔案不覆寫，也沿用同位置的小寫 `agents.md`／`skill.md`，避免建立大小寫重複檔；若有自己的規則或同名 skill，請另開 `?workspace=jokes-demo`。
+2. 新 workspace 已有空白 `~/skills/` 及內容為「請回覆繁體中文」的 `~/agents.md`。使用 Workspace → Install joke demo，建立示例 skill 與笑話：既有檔案不覆寫，也沿用同位置的小寫 `agents.md`／`skill.md`，避免建立大小寫重複檔；若有自己的規則或同名 skill，請另開 `?workspace=jokes-demo`。
 
 ```text
 ~/agents.md
@@ -15,17 +15,17 @@
 ~/bin/read.js、write.js、edit.js、grep.js、find.js、ls.js、skill_load.js
 ```
 
-3. 在 provider settings 連接 Groq，執行 `ai`，用英文詢問：
+3. 在 provider settings 連接 Groq，按 AI，用英文詢問：
 
 ```text
 Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.
 ```
 
 4. 查看中文答案、五筆評分與冠軍原文。介面列出本輪 AGENTS.md／skill／讀檔來源及 revision；工具結果可展開檢閱參數與原始內容。
-5. `/exit` → `edit ~/jokes/笑話1.md` → 修改並 Save → Cancel 返回 shell → reload → reconnect → `ai`。英文要求重新讀取五個檔案並評分，必須讀到新 revision。
-6. `/exit` → `ai --new`，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`read` 檢閱實際檔案。
+5. `/exit` 回 shell，以 `printf`／重導向修改 `~/jokes/笑話1.md` → reload → reconnect → 按 AI。英文要求重新讀取五個檔案並評分，必須讀到新 revision。
+6. `/exit` → New conversation，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`cat` 檢閱實際檔案。
 
-`history` 列出持久化對話，`ai --resume SESSION_ID` 重開，`ai --new` 明確另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
+History／Resume 恢復持久化對話，New conversation 另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
 
 ## 重跑指令
 
@@ -40,7 +40,7 @@ npm run test:jokes
 
 SDK runner 使用真正 Groq adapter／Pi loop、IndexedDB（測試使用 fake-indexeddb）與 VFS 內的 JS；只有 Node 執行器以 VM 代替 browser sandbox。
 
-正式瀏覽器 runner 使用 `agent-browser` CLI、真正瀏覽器 IndexedDB、opaque iframe／Worker、editor 與設定表單。先啟動 dev server；CLI 已在 PATH 時可直接執行，否則透過 `AGENT_BROWSER_CLI` 指定其 executable 或 JS 入口：
+正式瀏覽器 runner 使用 `agent-browser` CLI、真正瀏覽器 IndexedDB、opaque iframe／Worker、just-bash 與設定表單。先啟動 dev server；CLI 已在 PATH 時可直接執行，否則透過 `AGENT_BROWSER_CLI` 指定其 executable 或 JS 入口：
 
 ```sh
 npm run test:jokes:browser
@@ -69,7 +69,9 @@ AGENT_GO_ROUND_LANGUAGE_ONLY=1 npm run test:jokes:browser
 
 `src/acceptance/joke-context.test.ts` 使用 IndexedDB、正式 context loader 與 VFS bin JS，驗證首輪只送 catalog、`skill_load` 後模型收到正文、205 行檔案的分頁讀取，以及恢復 session 後載入更新的 agents／skill／reference。這個離線測試使用 scripted provider；真實模型驗收另由 live runners 執行。舊報告未包含 `readRange`，無法直接當作此加強版驗收的通過證據，需重跑。
 
-## 本輪架構審閱結果
+bash 會記錄實際 bytes 存取，但不產生全文 readRange；本驗收仍要求結構化 read 回傳完整內容。
+
+## 歷史架構審閱結果（切換 just-bash 前）
 
 離線回歸 136 項全數通過（包含預設檔案、交易回滾與多視窗初始化），typecheck／build／dist 檢查通過。已修正 demo 在存在小寫 agents／skill 檔時建立大寫重複檔的問題，並加上來源位置／revision、成功回傳的完整分頁與冠軍原文逐字比對。舊格式相容程式與專用測試已移除。
 

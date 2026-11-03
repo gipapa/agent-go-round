@@ -35,14 +35,19 @@ export type {
 export { mount } from "./embed";
 export type { AgentGoRoundGlobal, AgentGoRoundWidget, EmbedEvent, EmbedHostTool, EmbedMessage, EmbedMode, EmbedOptions } from "./embed";
 
-export { IndexedDbFileSystem, MemoryFileSystem, FileSystemError, VFS_HOME, VFS_DATABASE, resolvePath, displayPath } from "./core/fs";
-export type { VirtualFileSystem, FileNode, FileStat, FileWrite, WriteOptions } from "./core/fs";
+export { IndexedDbFileSystem, MemoryFileSystem, FileSystemError, VFS_HOME, VFS_DATABASE, VFS_SCHEMA_VERSION, resolvePath, displayPath } from "./core/fs";
+export type { VirtualFileSystem, FileAccess, FileAccessRecorder, FileNode, ByteFileNode, FileStat, FileWrite, ByteFileWrite, WriteOptions, RemoveOptions } from "./core/fs";
+export { JustBashFileSystem } from "./core/just-bash-fs";
 export { BinRegistry } from "./core/bin";
 export { DEFAULT_BIN_TOOLS, BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, installDefaultBin } from "./core/bin-defaults";
 export type { BinManifest, BinDefinition, FileMethod } from "./core/bin-defaults";
 export { SandboxedBinExecutor } from "./core/bin-sandbox";
 export type { BinExecutor, FileRpc } from "./core/bin-sandbox";
-export { executeShell, shellWords, parseShellCommand } from "./core/shell";
+export { ShellRuntime, ShellExecutionError } from "./core/shell-runtime";
+export type { ShellExecutor, ShellIdentity, ShellAccess } from "./core/shell-runtime";
+export type { ShellOptions, ShellResult } from "./core/shell-protocol";
+export { createBashTool, BASH_PARAMETERS, BASH_DESCRIPTION } from "./core/bash-tool";
+export type { AgentFileRun } from "./core/bash-tool";
 export { configureFileAgent, prepareFileContext, VfsSkillLoader, SkillLoadError } from "./core/file-context";
 export type { FileSkill, FileContext } from "./core/file-context";
 export { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
@@ -50,5 +55,4 @@ export { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
 export type { ContextSource } from "./core/session";
 
 export { initializeWorkspace, VFS_SKILLS, DEFAULT_AGENT_RULES } from "./core/workspace-bootstrap";
-export type { ShellCommand } from "./core/shell-command";
 export type { FileCapabilityArguments, FileCapabilityResults } from "./core/file-capabilities";

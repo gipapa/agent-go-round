@@ -1,4 +1,4 @@
-import { resolvePath, type VirtualFileSystem } from "./fs";
+import { isHomePath, resolvePath, type VirtualFileSystem } from "./fs";
 import type { DefaultTreeAdapterTypes as Tree } from "parse5";
 
 export type PreviewDocument = { html: string; revisions: Record<string, number> };
@@ -10,6 +10,7 @@ export async function resolvePreview(fs: VirtualFileSystem, entry: string): Prom
   const revisions: Record<string, number> = {};
   let bytes = 0;
   async function read(path: string): Promise<string> {
+    if (!isHomePath(resolvePath(path)) || !isHomePath(await fs.realpath(path))) throw new Error("Preview resources must stay inside ~");
     if (Object.keys(revisions).length >= 64 && !(path in revisions)) throw new Error("Preview exceeds 64 resources");
     const file = await fs.readFile(path);
     bytes += file.content.length;

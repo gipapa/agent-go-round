@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, TSchema } from "@earendil-works/pi-ai";
 import { SessionPersistenceError, type SessionSnapshot, type SessionStore } from "./persistence";
+import type { FileAccess, FileAccessRecorder } from "./fs";
 
 export type RunStatus = "success" | "aborted" | "deadline" | "error" | "outcome_unknown" | "output_limit";
 
@@ -322,6 +323,17 @@ export class AgentSession {
 
   recordFileAccess(toolCallId: string, method: string, path: string, revision?: number, readRange?: FileReadRange): void {
     if (this.activeRun) this.emit({ type: "file_access", runId: this.activeRun.runId, toolCallId, method, path, ...(revision !== undefined ? { revision } : {}), ...(readRange ? { readRange } : {}) });
+  }
+
+  /** Capture ownership NOW. Dispatched IndexedDB writes can commit after Stop
+   * or after another run starts; their audit events still belong to this run.
+   * Byte reads never imply that a model received complete file contents.
+   */
+  bindFileAccessRecorder(toolCallId: string): FileAccessRecorder {
+    const runId = this.activeRun?.runId;
+    return (access: FileAccess) => {
+      if (runId) this.emit({ type: "file_access", runId, toolCallId, ...access });
+    };
   }
 
   subscribe(listener: (event: SessionEvent) => void): () => void {

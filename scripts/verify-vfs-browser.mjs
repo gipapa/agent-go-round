@@ -16,8 +16,10 @@ async function ready() {
   throw new Error("Workspace did not become ready");
 }
 async function command(text) {
-  await ready(); await call("fill", "#prompt", text); await call("click", "#send"); await ready();
-  return evaluate('[...document.querySelectorAll("#terminal .line-content")].at(-1)?.textContent');
+  await ready(); await evaluate('(()=>{window.__vfsStart=document.querySelectorAll("#terminal .terminal-line").length;return true})()'); await call("fill", "#prompt", text); await call("click", "#send"); await ready();
+  const result = await evaluate(`(()=>{const rows=[...document.querySelectorAll("#terminal .terminal-line")].slice(window.__vfsStart);return {out:rows.filter(r=>r.dataset.channel==='stdout').map(r=>r.querySelector('.line-content').textContent).join(''),exit:rows.find(r=>r.dataset.channel==='exit')?.textContent,err:rows.filter(r=>r.dataset.channel==='stderr').map(r=>r.textContent).join('')}})()`);
+  if (result.exit && !result.exit.endsWith('exitCode: 0')) throw new Error(JSON.stringify(result));
+  return result.out;
 }
 function assert(value, message) { if (!value) throw new Error(message); }
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", `vfs-${Date.now()}`);
@@ -26,16 +28,17 @@ const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await ready(); await call("snapshot");
   assert((await command("cat ~/agents.md")) === "請回覆繁體中文", "Default rules missing");
-  const content = "x".repeat(4096);
-  for (let start = 0; start < 100; start += 25) await command("write " + JSON.stringify({ files: Array.from({ length: 25 }, (_, i) => ({ path: `~/probe/file${start + i}`, content })), createParents: true }));
+  await command("mkdir -p ~/probe");
+  for(let start=0;start<100;start+=25) await command(`for i in {${start}..${start+24}}; do printf %4096s x > ~/probe/file$i; done`);
   await evaluate(`(()=>{window.__reads={bodies:0,workspaceScans:0};const get=IDBObjectStore.prototype.get,all=IDBIndex.prototype.getAll;IDBObjectStore.prototype.get=function(...args){if(this.name==='contents')window.__reads.bodies++;return get.apply(this,args)};IDBIndex.prototype.getAll=function(...args){if(this.objectStore.name==='nodes'&&this.name==='workspace')window.__reads.workspaceScans++;return all.apply(this,args)};return true})()`);
-  assert((await command('write {"path":"~/probe/file0","content":"x","expectedRevision":1}')).includes("revision"), "Write failed");
+  await command("printf x > ~/probe/file0");
   report.overwrite = await evaluate("({...window.__reads})");
   assert(report.overwrite.bodies === 0 && report.overwrite.workspaceScans === 0, "Write read unrelated bodies or scanned workspace"); check("native write reads no file bodies or workspace scan");
   await command("ls -l ~/probe"); report.listing = await evaluate("({...window.__reads})");
   assert(report.listing.bodies === 0 && report.listing.workspaceScans === 0, "Metadata listing read file contents"); check("ls -l uses metadata only");
-  await command("demo jokes"); assert((await command("read ~/skills/joke-master/SKILL.md")).includes("name: joke-master"), "Skill path broke"); check("skill is readable from ~/skills");
-  await command("ai");
+  await call("click", ".workspace-menu > summary"); await call("click", "#install-demo");
+  const demoDeadline=Date.now()+15000;while(Date.now()<demoDeadline){if(await evaluate('document.querySelector("#terminal").textContent.includes("Joke demo:")'))break;await new Promise(r=>setTimeout(r,100))} assert((await command("cat ~/skills/joke-master/SKILL.md")).includes("name: joke-master"), "Skill path broke"); check("skill is readable from ~/skills");
+  await call("click", "#mode-toggle");
   // Submit first, then emulate selecting history while the response is streaming.
   const selected = await evaluate(`(()=>{document.querySelector('#prompt').value='Remember refactor-native-check';document.querySelector('#terminal-form').requestSubmit();document.querySelector('#prompt').blur();const node=document.querySelector('#terminal .terminal-line .line-content');window.__oldLine=node;const range=document.createRange();range.selectNodeContents(node);getSelection().removeAllRanges();getSelection().addRange(range);return getSelection().toString()})()`);
   await ready();
@@ -43,7 +46,8 @@ try {
   assert(await evaluate("getSelection().toString()") === selected, "Streaming or completion lost text selection"); check("streaming preserves historical DOM and text selection");
   await command("/exit"); await new Promise(resolve => setTimeout(resolve, 500)); await call("reload"); await ready();
   assert(await evaluate('document.querySelector("#terminal").textContent.includes("Remember refactor-native-check")'), "Reload lost conversation");
-  const file = JSON.parse(await command("read ~/probe/file0")); assert(file.content === "x" && file.revision === 2, "Reload lost file revision/content"); check("reload preserves conversation and file revision");
+  assert((await command("cat ~/probe/file0")) === "x", "Reload lost file content");
+  const revision = await evaluate(`(async()=>{const opening=indexedDB.open("agent-go-round.vfs.bytes-v2");const db=await new Promise(r=>opening.onsuccess=()=>r(opening.result));const request=db.transaction("nodes").objectStore("nodes").get(JSON.stringify([new URL(location.href).searchParams.get("workspace"),"/home/user/probe/file0"]));const row=await new Promise(r=>request.onsuccess=()=>r(request.result));db.close();return row.node.revision})()`); assert(revision === 4, "Reload lost file revision"); check("reload preserves conversation and file revision");
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }
 finally {

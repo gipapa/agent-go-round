@@ -8,6 +8,7 @@ export type WorkspaceTranscriptLine = {
   text: string;
   streaming?: boolean;
   toolCallId?: string;
+  channel?: "stdout" | "stderr" | "exit";
 };
 
 export type WorkspaceTabSnapshot = {
@@ -18,13 +19,12 @@ export type WorkspaceTabSnapshot = {
   draft: string;
   transcript: WorkspaceTranscriptLine[];
   session: SessionSnapshot;
-  mode?: "shell" | "agent" | "editor" | "preview";
+  mode?: "shell" | "agent" | "preview";
   preview?: { entry: string; surfaceId: string };
   cwd?: string;
   agentCwd?: string;
   provider?: "scripted" | "groq";
   pendingContext?: string[];
-  editor?: { path: string; content: string; revision: number };
 };
 
 export type WorkspaceSnapshot = {
@@ -59,13 +59,15 @@ export function validateWorkspaceSnapshot(snapshot: unknown): WorkspaceSnapshot 
     if (!tab || typeof tab.id !== "string" || !tab.id || typeof tab.name !== "string" || typeof tab.branch !== "string" || typeof tab.path !== "string" || typeof tab.draft !== "string" || !Array.isArray(tab.transcript) || !tab.session) {
       throw new WorkspacePersistenceError("Workspace snapshot contains an invalid tab");
     }
-    if (tab.mode !== undefined && !["shell", "agent", "editor", "preview"].includes(tab.mode)) throw new WorkspacePersistenceError("Invalid tab mode");
+    // Preserve conversation history when reopening a legacy editor layout;
+    // the removed editor surface/draft is not restored or executed.
+    if ((tab.mode as string) === "editor") tab.mode = "shell";
+    if (tab.mode !== undefined && !["shell", "agent", "preview"].includes(tab.mode)) throw new WorkspacePersistenceError("Invalid tab mode");
     if (tab.preview && (typeof tab.preview.entry !== "string" || !tab.preview.entry.startsWith("/home/user/") || typeof tab.preview.surfaceId !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(tab.preview.surfaceId))) throw new WorkspacePersistenceError("Invalid preview configuration");
     if (tab.mode === "preview" && !tab.preview) throw new WorkspacePersistenceError("Missing preview configuration");
-    for (const cwd of [tab.cwd, tab.agentCwd]) if (cwd !== undefined && (typeof cwd !== "string" || (cwd !== "/home/user" && !cwd.startsWith("/home/user/")))) throw new WorkspacePersistenceError("Invalid cwd");
+    for (const cwd of [tab.cwd, tab.agentCwd]) if (cwd !== undefined && (typeof cwd !== "string" || !cwd.startsWith("/") || cwd.includes("\0") || cwd.length > 4096 || cwd.split("/").some(part => part === "." || part === ".."))) throw new WorkspacePersistenceError("Invalid cwd");
     if (tab.provider !== undefined && tab.provider !== "scripted" && tab.provider !== "groq") throw new WorkspacePersistenceError("Invalid tab provider");
     if (tab.pendingContext !== undefined && (!Array.isArray(tab.pendingContext) || tab.pendingContext.some((entry) => typeof entry !== "string"))) throw new WorkspacePersistenceError("Invalid pending context");
-    if (tab.editor && (typeof tab.editor.path !== "string" || typeof tab.editor.content !== "string" || !Number.isInteger(tab.editor.revision))) throw new WorkspacePersistenceError("Invalid editor draft");
     if (tabIds.has(tab.id)) throw new WorkspacePersistenceError(`Workspace contains duplicate tab id: ${tab.id}`);
     tabIds.add(tab.id);
     validateSessionSnapshot(tab.session);

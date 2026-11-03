@@ -1,6 +1,7 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { shellWorkerPlugin } from "./scripts/shell-worker-plugin";
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 const LOCALHOST_ORIGIN = /^https?:\/\/(?:(?:[^:]+\.)?localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/;
@@ -24,7 +25,9 @@ const embedDevEntry = (): Plugin => ({
 });
 
 export default defineConfig({
-  plugins: [embedDevEntry()],
+  plugins: [embedDevEntry(), shellWorkerPlugin(projectRoot)],
+  resolve: { alias: { "node:zlib": resolve(projectRoot, "src/core/browser-zlib.ts") } },
+  optimizeDeps: { exclude: ["just-bash/browser"] },
   base: process.env.VITE_BASE_PATH || "/",
   server: {
     host: "127.0.0.1",
@@ -34,6 +37,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         app: resolve(projectRoot, "index.html"),
+        justBashProbe: resolve(projectRoot, "poc/just-bash.html"),
         embed: resolve(projectRoot, "src/embed.ts")
       },
       output: {

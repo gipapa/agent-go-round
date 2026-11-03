@@ -31,6 +31,14 @@ async function snapshot(): Promise<WorkspaceSnapshot> {
 }
 
 describe("workspace store", () => {
+  it("saves cwd throughout the virtual root and rejects noncanonical paths", async () => {
+    const repository = store(), original = await snapshot();
+    original.tabs[0].cwd = "/tmp"; original.tabs[0].agentCwd = "/";
+    await repository.save(original);
+    expect((await repository.load())?.tabs[0]).toMatchObject({ cwd: "/tmp", agentCwd: "/" });
+    original.tabs[0].cwd = "/tmp/../home";
+    await expect(repository.save(original)).rejects.toThrow("Invalid cwd");
+  });
   it("round-trips tab identity, draft, transcript and session snapshot", async () => {
     const repository = store();
     const original = await snapshot();

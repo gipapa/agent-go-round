@@ -3,6 +3,17 @@ import { MemoryFileSystem } from "./fs";
 import { resolvePreview } from "./preview";
 
 describe("VFS page resources", () => {
+  it("keeps previews inside home even when virtual root paths and symlinks are available", async () => {
+    const fs = new MemoryFileSystem();
+    await fs.mkdir("/tmp");
+    await fs.writeFile("/tmp/page.html", "<h1>outside home</h1>");
+    await fs.symlink("/tmp/page.html", "~/linked.html");
+    await expect(resolvePreview(fs, "/tmp/page.html")).rejects.toThrow("stay inside ~");
+    await expect(resolvePreview(fs, "~/linked.html")).rejects.toThrow("stay inside ~");
+    await fs.writeFile("~/page.html", '<link rel="stylesheet" href="../../tmp/style.css">');
+    await fs.writeFile("/tmp/style.css", "body{color:red}");
+    await expect(resolvePreview(fs, "~/page.html")).rejects.toThrow("stay inside ~");
+  });
   it("resolves nested CSS and SVG relative to their own files and records all revisions", async () => {
     const fs = new MemoryFileSystem();
     await fs.mkdir("~/site/css", { recursive: true });

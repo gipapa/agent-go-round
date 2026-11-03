@@ -57,14 +57,18 @@ describe.each([
     await expect(fs.stat("~/same")).rejects.toMatchObject({ code: "not_found" });
   });
 
-  it("resolves home and relative paths, persists directories, and rejects escapes", async () => {
+  it("resolves paths inside the virtual root and persists directories", async () => {
     const fs = create();
     await fs.mkdir("~/中文/empty", { recursive: true });
     expect((await fs.listDirectory("~/中文")).map((node) => node.kind)).toEqual(["directory"]);
     const file = await fs.writeFile("~/中文/空 白.md", "你好\nworld", { expectedRevision: 0 });
     expect((await fs.readFile(file.path)).content).toBe("你好\nworld");
     expect(resolvePath("../中文/./空 白.md", "/home/user/中文")).toBe(file.path);
-    expect(() => resolvePath("../../secret")).toThrow(/inside/);
+    expect(resolvePath("../../secret")).toBe("/secret");
+    expect(resolvePath("../../../../secret", "/")).toBe("/secret");
+    await fs.mkdir("/tmp", { recursive: true });
+    await fs.writeFile("/tmp/virtual", "workspace only");
+    expect((await fs.readFile("/tmp/virtual")).content).toBe("workspace only");
     await expect(fs.readFile("~/中文")).rejects.toMatchObject({ code: "wrong_kind" });
     await expect(fs.remove("~/中文")).rejects.toMatchObject({ code: "not_empty" });
     await fs.rename("~/中文", "~/新目錄");

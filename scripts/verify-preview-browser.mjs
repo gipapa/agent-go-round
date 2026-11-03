@@ -1,10 +1,17 @@
+import { fixtureProvider, sequence, tool, writeFiles } from "./browser-fixture.mjs";
 import { loadEnvFile } from "node:process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile } from "node:fs/promises";
 try { loadEnvFile(".env.local"); } catch (error) { if (error.code !== "ENOENT") throw error; }
-const key = process.env.AGENT_GO_ROUND_GROQ_API_KEY || process.env.GROQ_API_KEY;
-if (!key) throw new Error("Set AGENT_GO_ROUND_GROQ_API_KEY in .env.local");
+const live = process.env.AGENT_GO_ROUND_RUN_GROQ === "1";
+const first = sequence([[tool("read-page", "read", {path:"~/main.html"})], [tool("edit-page", "edit", {path:"~/main.html",oldText:"Original title",newText:"Updated by Pi"})], "已將標題改為 Updated by Pi。"]);
+const fixture = live ? undefined : await fixtureProvider({
+  'Read ~/main.html': async body => {await new Promise(r=>setTimeout(r,700));return first(body)},
+  'What exact heading': sequence(["先前設定的標題是 Updated by Pi。"])
+});
+const key = live ? process.env.AGENT_GO_ROUND_GROQ_API_KEY || process.env.GROQ_API_KEY : "acceptance-fixture";
+if (!key) throw new Error("Set AGENT_GO_ROUND_GROQ_API_KEY for an explicitly requested live run");
 const cli = process.env.AGENT_BROWSER_CLI || "agent-browser";
 const command = cli.endsWith(".js") ? [process.execPath, cli] : [cli];
 const run = promisify(execFile);
@@ -32,25 +39,25 @@ async function send(text, popup = false, settle = true) {
   if (settle) await wait(`!${doc}.querySelector('#send').disabled`, 420_000);
 }
 async function connect() {
-  await evaluate(`(() => {const doc=${d};doc.querySelector('#provider-toggle').click();doc.querySelector('#api-key').value=${JSON.stringify(key)};doc.querySelector('#model').value=${JSON.stringify(process.env.AGENT_GO_ROUND_GROQ_MODEL || "qwen/qwen3.8-27b")};doc.querySelector('#remember-key').checked=false;doc.querySelector('#provider-form').requestSubmit();return true;})()`);
+  await evaluate(`(() => {const doc=${d};doc.querySelector('#provider-toggle').click();doc.querySelector('#base-url').value=${JSON.stringify(fixture?.baseUrl || 'https://api.groq.com/openai/v1')};doc.querySelector('#api-key').value=${JSON.stringify(key)};doc.querySelector('#model').value=${JSON.stringify((live ? process.env.AGENT_GO_ROUND_GROQ_MODEL || "qwen/qwen3.8-27b" : "fixture-model"))};doc.querySelector('#remember-key').checked=false;doc.querySelector('#provider-form').requestSubmit();return true;})()`);
   await wait(`${d}.querySelector('#provider-label').textContent==='groq · live'`);
 }
 async function durable(workspace = workspaceId) {
   await new Promise(resolve => setTimeout(resolve, 500));
-  return evaluate(`(async()=>{const rows=async(name,store)=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(name);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});return new Promise((resolve,reject)=>{const t=db.transaction(store),r=t.objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);t.oncomplete=()=>db.close()})};const contents=new Map((await rows('agent-go-round.vfs','contents')).map(r=>[r.key,r.content]));return {files:(await rows('agent-go-round.vfs','nodes')).filter(r=>r.workspace===${JSON.stringify(workspace)}).map(r=>({...r.node,...(r.node.kind==='file'?{content:contents.get(r.key)}:{})})),records:(await rows('agent-go-round.sessions','records')).filter(r=>r.workspace===${JSON.stringify(workspace)})}})()`);
+  return evaluate(`(async()=>{const rows=async(name,store)=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(name);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});return new Promise((resolve,reject)=>{const t=db.transaction(store),r=t.objectStore(store).getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);t.oncomplete=()=>db.close()})};const contents=new Map((await rows('agent-go-round.vfs.bytes-v2','contents')).map(r=>[r.key,r.content]));return {files:(await rows('agent-go-round.vfs.bytes-v2','nodes')).filter(r=>r.workspace===${JSON.stringify(workspace)}).map(r=>({...r.node,...(r.node.kind==='file'?{content:new TextDecoder().decode(contents.get(r.key))}:{})})),records:(await rows('agent-go-round.sessions','records')).filter(r=>r.workspace===${JSON.stringify(workspace)})}})()`);
 }
 const workspaceId = `preview-${Date.now()}`;
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", workspaceId);
-const report = { startedAt: new Date().toISOString(), url: url.href, workspaceId, model: process.env.AGENT_GO_ROUND_GROQ_MODEL || "qwen/qwen3.8-27b", checks: [], status: "running" };
+const report = { startedAt: new Date().toISOString(), url: url.href, workspaceId, model: (live ? process.env.AGENT_GO_ROUND_GROQ_MODEL || "qwen/qwen3.8-27b" : "fixture-model"), provider: live ? "live Groq" : "local HTTP/SSE fixture", checks: [], status: "running" };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await wait("Boolean(document.querySelector('#send') && !document.querySelector('#send').disabled)"); await call("snapshot");
-  await send('write ' + JSON.stringify({ files: [
+  await send(writeFiles([
     { path: "~/main.html", content: '<!doctype html><html lang="zh-Hant"><head><title>Preview acceptance</title><link rel="stylesheet" href="styles.css"></head><body><h1 id="headline">Original title</h1><p>這個頁面來自 IndexedDB。</p><img src="logo.svg" alt="VFS mark"><script>parent.__pageScriptRan=true</script></body></html>' },
     { path: "~/styles.css", content: 'body{background:#f6f3ed;padding:40px;font-family:system-ui}h1{color:rgb(17,34,51)}img{width:48px;height:48px}' },
     { path: "~/logo.svg", content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#8360af"/></svg>' }
-  ] }));
-  await send("preview main.html");
+  ]));
+  await evaluate("(() => {document.querySelector('#preview-entry').value='main.html';document.querySelector('#open-preview-form').requestSubmit();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('Original title')");
   await wait(`Boolean(${d}?.querySelector('#send') && !${d}.querySelector('#send').disabled)`);
   const surface = await evaluate(`new URL((${p}).src).searchParams.get('surface')`);
@@ -59,7 +66,7 @@ try {
   assert(await evaluate("document.querySelector('.preview-surface > iframe').srcdoc.includes('data:image/svg+xml;') && document.querySelector('.preview-surface > iframe').srcdoc.includes('rgb(17,34,51)')"), "VFS resources unresolved");
   check("HTML/CSS/SVG and sandbox isolation");
   await evaluate("(() => {document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.launcher').click();return true;})()");
-  await connect(); await send("ai", true);
+  await connect(); await evaluate(`(() => {${d}.querySelector('#mode-toggle').click();return true;})()`);
   const task = 'Read ~/main.html, then use a file tool to change only the h1 text from "Original title" to "Updated by Pi". Preserve the stylesheet and image. Briefly report what you changed.';
   await evaluate(`(() => {${w}.__previewToken='preserve-popup';return true;})()`);
   await send(task, true, false);
@@ -75,12 +82,12 @@ try {
   const finish = state.records.map(r => r.value).filter(r => r.type === "run_finished" && r.sessionId === session.sessionId).at(-1);
   const trace = state.records.map(r => r.value).filter(r => r.runId === finish.runId && ["context_loaded", "file_access"].includes(r.type));
   const main = state.files.find(f => f.path === "/home/user/main.html");
-  assert(main.content.includes("Updated by Pi") && main.revision === 2, "Model did not commit the heading edit");
-  assert(trace.some(e => e.type === "file_access" && e.method === "writeFile" && e.path === main.path), "No real VFS write trace");
+  assert(main.content.includes("Updated by Pi") && main.revision === 3, "Model did not commit the heading edit");
+  assert(trace.some(e => e.type === "file_access" && ["writeFile", "writeBytes"].includes(e.method) && e.path === main.path), "No real VFS write trace");
   assert(trace.some(e => e.type === "context_loaded" && e.source.kind === "agents"), "Popup did not load shared AGENTS.md");
   assert(/[\u3400-\u9fff]/u.test(finish.text), "Popup did not answer in Chinese");
   report.firstRun = { text: finish.text, trace, revision: main.revision };
-  check("real Groq popup reads shared rules and edits main.html; refresh preserves active run");
+  check("provider popup reads shared rules and edits main.html; refresh preserves active run");
   await wait("document.querySelector('.preview-status').textContent.includes('更新')");
   await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(n=>n.textContent==='重新載入預覽').click();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe').srcdoc.includes('Updated by Pi')");
@@ -88,10 +95,10 @@ try {
   check("committed page edit is visible after explicit refresh");
   await call("screenshot", "test-results/preview-popup-desktop.png");
   await evaluate("(() => {document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.close').click();document.querySelector('#tab-list .tab').click();return true;})()");
-  await send("read main.html");
+  await send("cat main.html");
   assert(await evaluate("document.querySelector('#terminal').textContent.includes('Updated by Pi')"), "Shell cannot inspect popup edit");
-  await send('write ' + JSON.stringify({ path: "~/styles.css", content: 'body{background:#edf5ed;padding:40px;font-family:system-ui}h1{color:rgb(40,80,40)}img{width:48px;height:48px}', expectedRevision: 1 }));
-  await send("preview main.html");
+  await send(writeFiles([{ path: "~/styles.css", content: 'body{background:#edf5ed;padding:40px;font-family:system-ui}h1{color:rgb(40,80,40)}img{width:48px;height:48px}', } ]));
+  await evaluate("(() => {document.querySelector('#preview-entry').value='main.html';document.querySelector('#open-preview-form').requestSubmit();return true;})()");
   assert(await evaluate(`${w}.__previewToken==='preserve-popup'`), "Switching tabs remounted popup");
   await wait("document.querySelector('.preview-status').textContent.includes('更新')");
   await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(n=>n.textContent==='重新載入預覽').click();return true;})()");
@@ -139,5 +146,5 @@ finally {
   await mkdir("test-results", { recursive: true });
   await writeFile("test-results/preview-browser.json", JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2));
   console.log(JSON.stringify({ status: report.status, checks: report.checks, failure: report.failure }));
-  await call("close");
+  await call("close"); if (fixture) await fixture.close();
 }

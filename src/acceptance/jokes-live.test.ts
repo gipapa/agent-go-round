@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { BinRegistry } from "../core/bin";
 import { FILE_METHODS, installDefaultBin } from "../core/bin-defaults";
 import { IndexedDbFileSystem } from "../core/fs";
+import { runShellScript } from "../core/shell-execution";
+import { JustBashFileSystem } from "../core/just-bash-fs";
 import { configureFileAgent } from "../core/file-context";
 import { installJokeDemo, JOKE_PROMPT } from "../core/joke-demo";
 import { createGroqRuntime, DEFAULT_GROQ_MODEL } from "../core/provider";
@@ -51,7 +53,11 @@ describe("Groq real-model file/skill joke acceptance", () => {
         for (const entry of await fs.listDirectory(contextDirectory)) if (entry.kind === "file") contextFiles.push(await fs.readFile(entry.path));
       }
       const context = jokeContextFromFiles(contextFiles);
-      await configureFileAgent(session, fs, "/home/user", bin);
+      // Explicit Node acceptance harness; production always uses opaque Worker.
+      await fs.mkdir("/usr", { recursive: true }); await fs.mkdir("/tmp", { recursive: true });
+      await configureFileAgent(session, fs, "/home/user", bin, undefined, [], {
+        shell: { execute: (script, options) => runShellScript(script, new JustBashFileSystem(fs.withAccessRecorder(options.onAccess ?? (() => {}))), options) }
+      });
       const requestStart = requests.length;
       if (!session.activeSkill) expect(session.agent.state.systemPrompt).not.toContain(context.skill.content.split("---").slice(2).join("---").trim());
       const started = Date.now();

@@ -38,18 +38,36 @@ async function enterWidget() {
 
 // Test-only diagnostics are injected into fixture HTML; production code has no probe.
 function installProbe(hostOrigin) {
-  window.addEventListener("message", event => {
+  window.addEventListener("message", async event => {
     if (event.source !== parent || event.origin !== hostOrigin || event.data?.source !== "embed-vfs-test") return;
-    const { id, command, shellTab } = event.data;
+    const { id, command, shellTab, previewEntry, stop, queryStop } = event.data;
+    let committed;
+    if (queryStop) {
+      const opening = indexedDB.open("agent-go-round.vfs.bytes-v2", 1);
+      const db = await new Promise((resolve, reject) => { opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+      const key = JSON.stringify([new URL(location.href).searchParams.get("workspace"), "/home/user/popup-stop"]);
+      const request = db.transaction("contents").objectStore("contents").get(key);
+      const row = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      committed = !!row && new TextDecoder().decode(row.content) === "popup-committed"; db.close();
+    }
+    if (stop) document.querySelector("#stop").click();
+    if (previewEntry) { document.querySelector("#preview-entry").value = previewEntry; document.querySelector("#open-preview-form").requestSubmit(); }
     if (shellTab) document.querySelector("#agent-list .agent-row").click();
     if (command !== undefined) {
       document.querySelector("#prompt").value = command;
       document.querySelector("#terminal-form").requestSubmit();
     }
+    const rows = [...document.querySelectorAll("#terminal .terminal-line")];
+    const lastInput = rows.findLastIndex(row => row.classList.contains("input"));
+    const output = rows.slice(lastInput + 1);
+    const content = channel => output.filter(row => row.dataset.channel === channel).map(row => row.querySelector(".line-content").textContent).join("");
     parent.postMessage({ source: "embed-vfs-test", id, state: {
       ready: !!document.querySelector("#send") && !document.querySelector("#send").disabled,
       status: document.querySelector("#run-status")?.textContent,
-      text: [...document.querySelectorAll("#terminal .line-content")].at(-1)?.textContent,
+      text: content("stdout"), stderr: content("stderr"), exitCode: content("exit"),
+      committed,
+      worker: !!document.querySelector('iframe[data-shell-isolation="opaque-worker"]'),
+      hasWorker: !!document.querySelector("iframe[data-shell-owner]"),
       saved: document.querySelector("#workspace-status")?.textContent.includes("saved"),
       preview: document.querySelector(".preview-surface > iframe")?.srcdoc.includes("Embedded preview") ?? false,
       crypto: { randomUUID: typeof globalThis.crypto?.randomUUID, getRandomValues: typeof globalThis.crypto?.getRandomValues }
@@ -59,6 +77,7 @@ function installProbe(hostOrigin) {
 
 let app, host;
 let hostOrigin;
+const basePath = process.env.VITE_BASE_PATH || "/";
 const report = { status: "running", checks: [] };
 try {
   const index = await readFile(new URL("../dist/index.html", import.meta.url), "utf8");
@@ -69,7 +88,7 @@ try {
       configurePreviewServer(server) {
         server.middlewares.use((request, response, next) => {
           const url = new URL(request.url, "http://localhost");
-          if (url.pathname !== "/") return next();
+          if (url.pathname !== basePath && url.pathname !== "/") return next();
           const disableUUID = url.searchParams.has("without-random-uuid") ? 'Object.defineProperty(Crypto.prototype,"randomUUID",{configurable:true,value:undefined});' : "";
           response.setHeader("Content-Type", "text/html");
           response.end(index.replace("<head>", `<head><script>${disableUUID}(${installProbe.toString()})(${JSON.stringify(hostOrigin)});</script>`));
@@ -77,7 +96,7 @@ try {
       }
     }]
   });
-  const appUrl = `http://127.0.0.1:${app.httpServer.address().port}/`;
+  const appUrl = `http://127.0.0.1:${app.httpServer.address().port}${basePath}`;
   host = createServer((request, response) => {
     const compat = new URL(request.url, "http://localhost").searchParams.has("compat");
     const options = { appUrl: appUrl + (compat ? "?without-random-uuid" : ""), workspaceId: `embed-${process.pid}-${compat ? "compat" : "native"}`, surfaceId: "embed-test", initiallyOpen: true };
@@ -109,11 +128,17 @@ try {
     const { crypto } = await state();
     assert(crypto.randomUUID === (compat ? "undefined" : "function") && crypto.getRandomValues === "function", "Unexpected crypto fixture");
     assert(await command("cat ~/agents.md") === "請回覆繁體中文", `${mode}: VFS failed to initialize or sandbox read failed`);
-    await command('write notes.md "embedded file"');
+    await command("printf 'embedded file' > notes.md");
     assert(await command("cat notes.md") === "embedded file", `${mode}: file read did not match write`);
     assert((await command("ls")).includes("notes.md"), `${mode}: missing file in listing`);
-    await command('write main.html "<h1>Embedded preview</h1>"');
-    await command("preview main.html");
+    await evaluate('window.probe({command:"printf popup-committed > ~/popup-stop; sleep 30; printf late > ~/popup-late"})');
+    await wait("window.probe().then(state=>state.worker)");
+    await wait("window.probe({queryStop:true}).then(state=>state.committed)");
+    await evaluate("window.probe({stop:true})"); await ready();
+    assert(!(await state()).hasWorker, `${mode}: Stop did not revoke popup Worker`);
+    assert(await command("cat ~/popup-stop; test ! -e ~/popup-late") === "popup-committed", `${mode}: popup Stop corrupted committed files or accepted late writes`);
+    await command("printf '<h1>Embedded preview</h1>' > main.html");
+    await evaluate('window.probe({previewEntry:"main.html"})');
     await wait("window.probe().then(state=>state.preview&&state.saved)");
     await call("screenshot", `test-results/embed-vfs-${mode}.png`);
     await call("reload"); await enterWidget();
