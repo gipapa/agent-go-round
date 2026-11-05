@@ -1,6 +1,8 @@
 # 接入 just-bash 與 VFS 調整計畫
 
-建立：2026-11-03；更新：2026-11-04。狀態：P0–P5 已完成，單元／production／瀏覽器 gates 通過；外部模型 smoke 本輪未執行，新版未發布。[目前程式與驗證紀錄](just-bash-progress.md)。
+建立：2026-11-03；更新：2026-11-06。狀態：P0–P5 已完成；最新本機驗證為 183 項測試、build／dist 與 Shell／AI／tabs／手機瀏覽器檢查通過。外部模型 smoke 仍未執行，發布結果依 push 後 CI 確認。[目前程式與驗證紀錄](just-bash-progress.md)。
+
+2026-11-06 使用者要求已追加實作：一般操作以 Bash 為主；Bash／bin 工具名稱不分大小寫（語法關鍵字、變數與資料保留原語意）；新分頁預設 AI，移除 New conversation 並以 toggle 切換模式；AGENTS.md 列出兩邊工具。下方 P0–P5 保留整合時的契約與決定；後續優先序以 [主計畫](plan.md#後續工作順序待排期) 為準。
 
 ## 目標與範圍
 

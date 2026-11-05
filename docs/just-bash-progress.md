@@ -2,6 +2,23 @@
 
 2026-11-04。依 [整合計畫](just-bash-plan.md) 完成 P0–P5 的實作、文件與驗收；本頁記錄實際證據及保留限制。
 
+## 2026-11-06 更新與驗證
+
+新 tab 預設 AI，移除 New conversation，以 AI／Shell toggle 顯示模式。Bash／bin 工具名稱不分大小寫（包含展開後的名稱、巢狀執行與 help 查詢），路徑、變數、內容與 JSON 欄位保留大小寫。一般檔案操作優先 Bash，bin 保留相容與版本化功能；專案 agents.md 與產品 ~/agents.md 列出雙邊工具，既有工作區只更新標記區塊。
+
+| Gate | 本次結果 |
+|---|---|
+| npm test | 32 檔、183 項通過 |
+| build（含 typecheck）／verify:dist | production base `/` 通過 |
+| licenses:generate | 163 個 production dependencies；更新 command-name／cwd 補丁聲明與驗證雜湊 |
+| test:shell:browser | 12 項通過，新增 AI 預設／toggle／大小寫檢查 |
+| test:agent:bash:browser | 3 組通過，13 個本機 HTTP／SSE requests；大小寫 Bash／bin、skills、Stop／reload |
+| test:tabs:browser | 2 組通過 |
+| test:mobile:browser | 12 項通過；仍是 Chrome 可視區模擬 |
+| 外部 Groq smoke／iPhone 真機 | 本次未執行，不列為通過 |
+
+本次報告為 `test-results/shell-runtime-browser.json`、`agent-bash-browser.json`、`cross-tab-browser.json`、`mobile-browser.json`。AI runner 在多個 browser 並行時曾超過 fixture 的 35 秒整輪等待；後續以 120 秒整輪等待獨立重跑通過，沒有放寬產品內的單工具 timeout。其他 base path／embed／host／preview／VFS 的證據為下方 2026-11-04 歷史紀錄，本次未重跑。GitHub Pages 發布由 push 後 workflow 另行確認。
+
 ## 已落地
 
 | 階段 | 程式與證據 | 邊界 |
@@ -26,7 +43,7 @@
 - HOME 必須明確設為 `/home/user`；自訂 filesystem 的上游預設可能是 `/`。每次送出仍為獨立 script，不延續變數、函式、alias、options 或 `$?`。
 - `Bash` 對 InMemoryFs／MountableFs 使用同步系統初始化；mount 的底層工作區不需要提供同步 IndexedDB 操作。小檔寫入、stat／list 不掃其他正文。
 - 一般引號、Unicode、pipe、redirect、append、glob、heredoc、條件、迴圈只使用 async filesystem 方法。正式 probe 觀察到 lstat、mkdir、stat、writeFile、readFileBuffer、appendFile、readdir；代表腳本不依賴同步 getAllPaths。
-- browser bundle 仍有 node:zlib 靜態匯入，Vite 原始 build 會失敗；`browser-zlib.ts` shim 明確回報 ENOSYS。上游 bundle 唯一修改是前項的公開 cwd 結果補丁。
+- browser bundle 仍有 node:zlib 靜態匯入，Vite 原始 build 會失敗；`browser-zlib.ts` shim 明確回報 ENOSYS。2026-11-04 當時上游 bundle 僅有公開 cwd 結果補丁；2026-11-06 另加入指令名稱正規化，見上方更新與修改聲明。
 - gzip／gunzip／zcat 無瀏覽器 codec；curl 無 network 設定時不註冊；Node／Python 沒有開啟。`touch -t` 在 3.6.0 中接受選項但沒有套用指定時間，已使用可驗證的 `touch -d`。不宣稱所有上游命令與所有 flags 都已驗收。
 - `printf '\\xff'` 的重導向會由上游按 UTF-8 編碼，不等同本機 Bash 的 raw byte escape；使用原版 InMemoryFs 也重現。二進位整合改以 `printf AP+A | base64 -d > file` 建檔，再驗證 copy／move／讀回 bytes，未修改上游 printf。
 - MountableFs 原本會在個別 backend 內解析 absolute symlink。新增全域虛擬路徑 resolver 後，`/bin/home -> /home/user`、home 指向 `/bin/cat`、跨 mount 循環與普通跨 mount byte copy／move 均有整合案例。跨 mount copy／move 是上游逐檔複製／刪除，不宣稱跨 backend 原子交易；workspace 內 copy／rename 則為單一 VFS 交易。
@@ -70,7 +87,7 @@ P3 本輪正式 UI runner 也已在 `/agent-go-round/` 通過同 10 項，`verif
 
 其餘 runners 已去除舊大小寫／JSON CLI／editor 入口。host／tabs 與 AI bash 使用本機 HTTP／SSE fixture 驅動真正 provider adapter、Pi loop、sandbox、native IDB；preview 預設 fixture，設定 AGENT_GO_ROUND_RUN_GROQ=1 才使用外部 Groq。jokes live runner 也已改用 shell 寫入、New conversation／模式 UI 及 bytes-v2 讀回；本輪沒有執行外部模型。
 
-## 本輪最終驗證
+## 2026-11-04 最終驗證（歷史）
 
 | Gate | 結果／證據 |
 |---|---|

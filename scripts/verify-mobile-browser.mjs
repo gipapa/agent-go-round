@@ -44,6 +44,7 @@ try {
   await call("screenshot", "test-results/tabs-mobile.png");
   check("mobile has one vertical tab rail with working add, close and switch controls");
   await wait("!!document.querySelector('#send')&&!document.querySelector('#send').disabled"); await call("snapshot");
+  await call("click", "#mode-toggle");
   assert(await evaluate("document.querySelector('.shell-notice').textContent.includes('just-bash')"), "Missing shell capabilities");
   await send("printf MiXeD > Case.MD; cat Case.MD");
   assert(await evaluate("[...document.querySelectorAll('[data-channel=stdout] .line-content')].at(-1).textContent==='MiXeD'"), "Shell changed path or content case");
@@ -68,7 +69,7 @@ try {
   const mobileEnter = await evaluate("(() => {const prompt=document.querySelector('#prompt');prompt.value='line';const event=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});prompt.dispatchEvent(event);return {defaultPrevented:event.defaultPrevented,pane:document.querySelector('#pane-type').textContent};})()");
   assert(!mobileEnter.defaultPrevented && mobileEnter.pane === "AI agent", "mobile AI Enter should insert a newline instead of submitting");
   check("mobile AI composer keeps Enter for newlines");
-  await send("/ExIt"); await call("click", "#new-conversation"); await send("/EXIT");
+  await send("/ExIt"); await call("click", "#add-vertical-tab"); await send("/EXIT");
   check("mode toggle, new conversation and /exit work with compact composer");
   await viewport(844);
   assert(await evaluate("!document.documentElement.classList.contains('keyboard-open')&&getComputedStyle(document.querySelector('.sidebar')).display!=='none'"), "Keyboard close did not restore layout");

@@ -27,8 +27,8 @@ const report = { url: url.href, provider: "local HTTP/SSE fixture", status: "run
 const check = name => report.checks.push({ name, status: "pass" });
 try {
   await mkdir("test-results", { recursive: true }); await call("open", url.href); await ready(); await call("snapshot");
-  await connect(fixture.baseUrl); await call("click", "#mode-toggle");
-  await call("click", "#add-tab"); await ready(); await call("click", "#mode-toggle");
+  await connect(fixture.baseUrl);
+  await call("click", "#add-tab"); await ready();
   await evaluate("document.querySelectorAll('#tab-list .tab')[0].click();return true");
   await send("Cross-tab source: discover the other tab, send one task and relay its exact answer", "document", false);
   await evaluate("document.querySelectorAll('#tab-list .tab')[1].click();return true");

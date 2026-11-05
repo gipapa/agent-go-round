@@ -110,8 +110,8 @@ describe("VFS ~/bin JavaScript tools", () => {
   it("executes all six defaults against the same files and reads paginated content", async () => {
     const { bin } = await setup();
     expect(bin.list()).toHaveLength(DEFAULT_BIN_TOOLS.length);
-    await bin.execute("write", { path: "code.ts", content: 'const greeting = "你好";\nconsole.log(greeting);\n' });
-    expect(await bin.execute("read", { path: "code.ts", limit: 1 })).toMatchObject({ content: 'const greeting = "你好";', revision: 1, nextOffset: 2 });
+    await bin.execute("WrItE", { path: "code.ts", content: 'const greeting = "你好";\nconsole.log(greeting);\n' });
+    expect(await bin.execute("READ", { path: "code.ts", limit: 1 })).toMatchObject({ content: 'const greeting = "你好";', revision: 1, nextOffset: 2 });
     expect(await bin.execute("edit", { path: "code.ts", oldText: "你好", newText: "世界" })).toMatchObject({ replacements: 1, revision: 2 });
     expect(await bin.execute("grep", { path: "code.ts", pattern: "世界" })).toMatchObject({ matches: [{ line: 1, text: 'const greeting = "世界";' }] });
     expect(await bin.execute("find", { name: "*.ts", type: "file" })).toMatchObject({ entries: [{ path: "/home/user/code.ts" }], truncated: false });
@@ -134,7 +134,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     const streamFn: StreamFn = (_model, context) => {
       requests.push(structuredClone(context.messages));
       const step = steps[turn];
-      const call: ToolCall | undefined = step ? { type: "toolCall", id: `bin-${turn++}`, name: step[0], arguments: step[1] } : undefined;
+      const call: ToolCall | undefined = step ? { type: "toolCall", id: `bin-${turn++}`, name: turn % 2 ? step[0].toUpperCase() : step[0][0].toUpperCase() + step[0].slice(1), arguments: step[1] } : undefined;
       const message: AssistantMessage = {
         role: "assistant", api: "openai-completions", provider: "scripted", model: model.id,
         content: call ? [call] : [{ type: "text", text: "files verified" }],

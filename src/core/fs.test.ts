@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { initializeWorkspace } from "./workspace-bootstrap";
+import { initializeWorkspace, DEFAULT_AGENT_RULES, DEFAULT_TOOL_CATALOG } from "./workspace-bootstrap";
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { IDBFactory, IDBObjectStore, IDBIndex } from "fake-indexeddb";
@@ -14,14 +14,14 @@ describe.each([
     await initializeWorkspace(fs);
     expect((await fs.listDirectory("~")).map(node => node.path)).toEqual(["/home/user/agents.md", "/home/user/skills"]);
     expect(await fs.listDirectory("~/skills")).toEqual([]);
-    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: "請回覆繁體中文", revision: 1 });
+    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: DEFAULT_AGENT_RULES, revision: 1 });
     await fs.writeFile("~/agents.md", "自訂規則");
     await initializeWorkspace(fs);
-    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: "自訂規則", revision: 2 });
+    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: `自訂規則\n\n${DEFAULT_TOOL_CATALOG}`, revision: 3 });
     await fs.rename("~/agents.md", "~/AGENTS.md");
     await initializeWorkspace(fs);
     await expect(fs.stat("~/agents.md")).rejects.toMatchObject({ code: "not_found" });
-    expect((await fs.readFile("~/AGENTS.md")).content).toBe("自訂規則");
+    expect((await fs.readFile("~/AGENTS.md")).content).toBe(`自訂規則\n\n${DEFAULT_TOOL_CATALOG}`);
   });
 
   it("separates metadata from file contents and counts UTF-8 bytes", async () => {
@@ -105,7 +105,7 @@ it("initializes shared IndexedDB workspaces concurrently and keeps other workspa
   const first = new IndexedDbFileSystem(factory, "default");
   const popup = new IndexedDbFileSystem(factory, "default");
   await Promise.all([initializeWorkspace(first), initializeWorkspace(popup)]);
-  expect(await popup.readFile("~/agents.md")).toMatchObject({ content: "請回覆繁體中文", revision: 1 });
+  expect(await popup.readFile("~/agents.md")).toMatchObject({ content: DEFAULT_AGENT_RULES, revision: 1 });
   expect(await popup.listDirectory("~/skills")).toEqual([]);
   const other = new IndexedDbFileSystem(factory, "other");
   await initializeWorkspace(other);

@@ -30,7 +30,7 @@ const program = await read(`assets/${runtimeWorkers[0]}`);
 if (!program.includes("AgentGoRound modification: just-bash 3.6.0 public exec result.cwd")) throw new Error("The formal Worker is missing the public cwd patch notice");
 await read("licenses/index.html");
 const modifications = await read("licenses/just-bash-modifications.txt");
-if (!modifications.includes("f8085d4e66edbaeebe376818038e3a75671ea036306358eb499629d17b13336d")) throw new Error("Missing just-bash modifications notice");
+if (!modifications.includes("37977c1541791bb2f5182ba9453566301c15082faee7c1a4c89eaec0ec8e543f")) throw new Error("Missing just-bash modifications notice");
 const bashLicense = await read("licenses/just-bash-3.6.0-LICENSE.txt");
 const piLicense = await read("licenses/pi-0.84.4-LICENSE.txt");
 if (!bashLicense.includes("Apache License") || !bashLicense.includes("Copyright 2025 Vercel Inc.")) throw new Error("Missing full just-bash license");

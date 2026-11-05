@@ -16,9 +16,10 @@ try {
   await evaluate("window.AgentGoRound.defaultWidget.open();window.__hostTrace=[];window.__hostCalls=[];window.addEventListener('message',event=>{if(event.source===window.AgentGoRound.defaultWidget.iframe.contentWindow&&event.data?.type==='host_tool_call')window.__hostCalls.push(event.data.payload)});window.AgentGoRound.defaultWidget.on('message',message=>{if(message.type==='host_tool_result')window.__hostTrace.push(message.payload)});return true");
   const workspace = await evaluate(`return new URL((${frame}).src).searchParams.get('workspace')`);
   assert(workspace?.startsWith("popup-"), "Popup uses default workspace");
+  await evaluate(`${doc}.querySelector('#mode-toggle').click();return true`); await ready(doc);
   await send("ls ~/bin; ls ~/bin/manifests; printf 'popup file' > ~/host-only.txt", doc);
   assert(await evaluate(`return ${doc}.querySelector('#terminal').textContent.includes('read_host_page.tool.json')`), "Host manifest missing");
-  await connect(fixture.baseUrl, doc); await evaluate(`${doc}.querySelector('#mode-toggle').click();return true`);
+  await connect(fixture.baseUrl, doc); await evaluate(`${doc}.querySelector('#mode-toggle').click();return true`); await ready(doc);
   await evaluate(`${doc}.querySelector('#add-tab').click();return true`); await ready(doc);
   await evaluate(`${doc}.querySelectorAll('#tab-list .tab')[0].click();return true`);
   await send("Read actual host and paginated HTML", doc, false);
@@ -48,7 +49,7 @@ try {
   assert(fixture.requests.length === count, "Reload replayed host calls"); check("reload preserves popup workspace/files without replay");
   await call("screenshot", "test-results/host-popup.png");
   const direct = new URL("./", url); direct.searchParams.set("workspace", `no-host-${Date.now()}`);
-  await call("open", direct.href); await ready(); await call("snapshot"); await connect(fixture.baseUrl); await call("click", "#mode-toggle"); await send("No host connected");
+  await call("open", direct.href); await ready(); await call("snapshot"); await connect(fixture.baseUrl); await send("No host connected");
   const isolated = await durable(direct.searchParams.get("workspace"));
   assert(isolated.events.some(event => event.type === "tool_finished" && event.toolCallId === "no-host" && event.isError) && await evaluate("return document.querySelector('#terminal').textContent.includes('目前沒有連接宿主頁')"), "Direct app lacks explicit no-host error");
   check("direct app structured tool reports missing host");

@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_RULES } from "./core/workspace-bootstrap";
 import "fake-indexeddb/auto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
@@ -34,7 +35,7 @@ async function send(text: string): Promise<void> {
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")?.disabled).toBe(false));
 }
 async function enterAgent() {
-  document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
+  if (document.querySelector("#mode-toggle")!.getAttribute("aria-checked") !== "true") document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
   await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
 }
 async function openPreviewFixture(path: string) {
@@ -51,6 +52,7 @@ async function resume(id: string) {
   await vi.waitFor(() => expect(document.querySelector(`option[value="${id}"]`)).not.toBeNull());
   document.querySelector<HTMLSelectElement>("#conversation-list")!.value = id;
   document.querySelector<HTMLButtonElement>("#resume-conversation")!.click();
+  await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#conversation-history")!.hidden).toBe(true));
   await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
 }
 async function connect(): Promise<void> {
@@ -70,7 +72,7 @@ describe("UI history at the real provider request boundary", () => {
     vi.stubGlobal("crypto", { getRandomValues });
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
-    expect((await fs.readFile("~/agents.md")).content).toBe("請回覆繁體中文");
+    expect((await fs.readFile("~/agents.md")).content).toBe(DEFAULT_AGENT_RULES);
     expect(document.querySelector("#workspace-status")!.textContent).not.toContain("failed");
     await fs.writeFile("~/main.html", "<h1>Embedded files</h1>");
     await openPreviewFixture("main.html");
@@ -84,7 +86,7 @@ describe("UI history at the real provider request boundary", () => {
   it("starts with default VFS rules and an empty skills folder, then discovers demo skills at home", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
-    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: "請回覆繁體中文", revision: 1 });
+    expect(await fs.readFile("~/agents.md")).toMatchObject({ content: DEFAULT_AGENT_RULES, revision: 1 });
     expect(await fs.listDirectory("~/skills")).toEqual([]);
     await connect(); await enterAgent(); await send("Hello");
     expect(requests[0].messages[0].content).toContain("請回覆繁體中文");
@@ -98,17 +100,26 @@ describe("UI history at the real provider request boundary", () => {
     expect((await fs.readFile("~/agents.md")).revision).toBe(1);
   });
 
-  it("documents independent scripts and controls conversations through UI", async () => {
+  it("defaults new tabs to AI and switches modes without replacing the conversation", async () => {
     await loadApp();
-    expect(document.querySelector(".shell-notice")!.textContent).toContain("僅保存 cwd");
-    document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
-    await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
-    await send("/exit");
+    const toggle = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
+    expect(toggle.getAttribute("role")).toBe("switch");
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector("#new-conversation")).toBeNull();
     const before = (await saved())!.tabs[0].session.sessionId;
-    document.querySelector<HTMLButtonElement>("#new-conversation")!.click();
-    await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
-    await send("/exit");
-    expect((await saved())!.tabs[0].session.sessionId).not.toBe(before);
+    toggle.click();
+    await vi.waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
+    expect(document.querySelector(".shell-notice")!.textContent).toContain("僅保存 cwd");
+    toggle.click();
+    await vi.waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    expect((await saved())!.tabs[0].session.sessionId).toBe(before);
+    document.querySelector<HTMLButtonElement>("#add-tab")!.click();
+    await vi.waitFor(() => expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(2));
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    const tabs = (await saved())!.tabs;
+    expect(tabs[1].mode).toBe("agent");
+    expect(tabs[1].session.sessionId).not.toBe(before);
+    await send("/EXIT");
     expect(document.querySelector("#pane-type")!.textContent).toBe("just-bash");
   });
   it("resumes a saved identity from History and preserves preview path case", async () => {

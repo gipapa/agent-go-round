@@ -65,7 +65,7 @@ describe("main workspace UI", () => {
     document.querySelector<HTMLButtonElement>("#shell-help")!.click();
     await vi.waitFor(() => expect(terminal.scrollTop).toBe(1000));
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
-    document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
+    if (document.querySelector("#mode-toggle")!.getAttribute("aria-checked") !== "true") document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
     await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
     terminal.scrollTop = 0;
     send("Hello");
@@ -103,7 +103,7 @@ describe("main workspace UI", () => {
 
   it("shows context usage and the default auto compact target in the AI status bar", async () => {
     await loadApp();
-    document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
+    if (document.querySelector("#mode-toggle")!.getAttribute("aria-checked") !== "true") document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
     await vi.waitFor(() => expect(document.querySelector("#pane-type")?.textContent).toBe("AI agent"));
     const footer = document.querySelector("#footer-model")!.textContent ?? "";
     expect(footer).toContain("context");
@@ -171,7 +171,7 @@ describe("main workspace UI", () => {
     const shellEnter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
     prompt.dispatchEvent(shellEnter);
     expect(shellEnter.defaultPrevented).toBe(false);
-    document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
+    if (document.querySelector("#mode-toggle")!.getAttribute("aria-checked") !== "true") document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
     await vi.waitFor(() => expect(document.querySelector("#pane-type")?.textContent).toBe("AI agent"));
     document.documentElement.classList.add("keyboard-open");
     prompt.value = "first line";

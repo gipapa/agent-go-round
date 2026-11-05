@@ -23,9 +23,9 @@ Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each
 
 4. 查看中文答案、五筆評分與冠軍原文。介面列出本輪 AGENTS.md／skill／讀檔來源及 revision；工具結果可展開檢閱參數與原始內容。
 5. `/exit` 回 shell，以 `printf`／重導向修改 `~/jokes/笑話1.md` → reload → reconnect → 按 AI。英文要求重新讀取五個檔案並評分，必須讀到新 revision。
-6. `/exit` → New conversation，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`cat` 檢閱實際檔案。
+6. `/exit` → 開啟新分頁，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`cat` 檢閱實際檔案。
 
-History／Resume 恢復持久化對話，New conversation 另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
+History／Resume 恢復持久化對話，開啟新分頁 另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
 
 ## 重跑指令
 

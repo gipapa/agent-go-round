@@ -34,6 +34,13 @@ const report = { url: url.href, status: "running", checks: [] };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await ready(); await call("snapshot");
+  assert(await evaluate('return document.querySelector("#mode-toggle").getAttribute("role")==="switch" && document.querySelector("#mode-toggle").getAttribute("aria-checked")==="true" && !document.querySelector("#new-conversation")'), "Expected AI toggle and no new-conversation action");
+  check("new workspace defaults to AI with accessible mode toggle and no redundant conversation action");
+  await call("click", "#mode-toggle"); await ready();
+  const mixed = await run("MkDiR -p ~/Mixed; CD ~/Mixed; PrInTf MiXeD > Case.TXT; cmd=CaT; $cmd Case.TXT | GrEp MiXeD");
+  assert(mixed.stdout === "MiXeD\n" && mixed.stderr === "" && mixed.exitCode === 0 && mixed.cwd === "~/Mixed", JSON.stringify(mixed));
+  await run("CD ~");
+  check("mixed-case commands, expanded names and pipelines preserve paths and content");
   const sample = await run(`mkdir -p ~/docs && cd ~/docs
 printf 'hello\\n世界\\n' > notes.txt
 cat notes.txt | grep hello > matches.txt
@@ -55,10 +62,12 @@ for f in *.txt; do echo "$f"; done`);
   check("actual cwd survives PWD spoofing and exit; subshells remain isolated");
   await run("export VALUE=one; f() { echo function; }; f");
   assert((await run("echo ${VALUE-unset}")).stdout === "unset\n", "Variables leaked between independent scripts");
-  const upper = await run("LS"); assert(upper.exitCode !== 0 && upper.stderr.includes("command not found"), "Old case-insensitive parser remains");
+  const upper = await run("LS"); assert(upper.exitCode === 0 && upper.stderr === "", "Mixed-case LS did not resolve");
   assert((await run("read answer <<< hello; echo $answer")).stdout === "hello\n", "read was intercepted as a JSON file tool");
-  check("independent scripts, upstream case sensitivity and read builtin");
+  check("independent scripts, case-insensitive commands and upstream read builtin");
   await call("click", "#add-tab"); await ready();
+  assert(await evaluate('return document.querySelector("#mode-toggle").getAttribute("aria-checked")==="true"'), "New tab must default to AI");
+  await call("click", "#mode-toggle"); await ready();
   assert((await run("pwd; cat ~/docs/matches.txt")).stdout === "/home/user\nhello\n", "Tabs do not share files with separate cwd");
   await run("cd /tmp");
   await evaluate('document.querySelector("#tab-list .tab").click();return true'); await ready();

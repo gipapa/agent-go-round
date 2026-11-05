@@ -23,17 +23,19 @@ export class BinRegistry {
     const next = new Map<string, LoadedBin>();
     const files = await this.fs.listDirectory(BIN_MANIFEST_DIRECTORY);
     for (const file of files) {
-      if (file.kind !== "file" || !file.path.endsWith(".tool.json")) continue;
+      if (file.kind !== "file" || !file.path.toLowerCase().endsWith(".tool.json")) continue;
       if (next.size >= 64) throw new Error("Bin catalog exceeds 64 tools");
       const metadata = await this.fs.readFile(file.path);
       if (metadata.content.length > 16_000) throw new Error(`Tool manifest is too large: ${file.path}`);
       const manifest = JSON.parse(metadata.content) as BinManifest;
-      if (manifest.version !== 1 || typeof manifest.name !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(manifest.name) || file.path.split("/").pop() !== `${manifest.name}.tool.json`) throw new Error(`Invalid tool identity: ${file.path}`);
+      if (manifest.version !== 1 || typeof manifest.name !== "string" || !/^[a-z][a-z0-9_]{0,63}$/i.test(manifest.name) || file.path.split("/").pop()!.toLowerCase() !== `${manifest.name.toLowerCase()}.tool.json`) throw new Error(`Invalid tool identity: ${file.path}`);
       if (typeof manifest.description !== "string" || !manifest.description.trim() || manifest.description.length > 2000) throw new Error(`Invalid tool description: ${file.path}`);
       if (!manifest.parameters || (manifest.parameters as { type?: string }).type !== "object" || !Array.isArray(manifest.capabilities) || manifest.capabilities.some((value) => !BIN_CAPABILITIES.includes(value))) throw new Error(`Invalid tool schema or capabilities: ${file.path}`);
       const source = await this.fs.readFile(`${BIN_DIRECTORY}/${manifest.name}.js`);
       if (!source.content.trim() || source.content.length > 64_000) throw new Error(`Invalid tool source: ${source.path}`);
-      next.set(manifest.name, { manifest, source: source.content });
+      const key = manifest.name.toLowerCase();
+      if (next.has(key)) throw new Error(`Duplicate tool name (case-insensitive): ${manifest.name}`);
+      next.set(key, { manifest, source: source.content });
     }
     this.tools = next;
   }
@@ -41,7 +43,7 @@ export class BinRegistry {
   list(): readonly BinManifest[] { return [...this.tools.values()].map(({ manifest }) => structuredClone(manifest)); }
 
   async execute(name: string, args: unknown, cwd = VFS_HOME, signal?: AbortSignal, context: BinHostContext = {}): Promise<unknown> {
-    const definition = this.tools.get(name);
+    const definition = this.tools.get(name.toLowerCase());
     if (!definition) throw new Error(`Command not found in ~/bin: ${name}`);
     return this.executeDefinition(definition, args, cwd, signal, undefined, undefined, context);
   }

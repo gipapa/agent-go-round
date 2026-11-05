@@ -1,4 +1,5 @@
-import { Bash, getCommandNames, type CommandName, type IFileSystem } from "just-bash/browser";
+import { Bash, type CommandName, type IFileSystem } from "just-bash/browser";
+import { SHELL_COMMANDS } from "./shell-catalog";
 import { execShellEngine } from "./shell-engine";
 import { mountShellFileSystem } from "./shell-filesystem";
 
@@ -11,7 +12,7 @@ export async function runShellScript(script: string, workspace: IFileSystem, inp
   const fs = mountShellFileSystem(workspace);
   if (!(await fs.stat(options.cwd)).isDirectory) throw new Error("ENOTDIR: Invalid shell cwd");
   const bash = new Bash({ fs, cwd: options.cwd, env: { HOME: "/home/user" },
-    commands: getCommandNames().filter(name => !["gzip", "gunzip", "zcat", "sqlite3", "python", "python3", "node", "js-exec", "curl", "wget"].includes(name)) as CommandName[],
+    commands: SHELL_COMMANDS as CommandName[],
     executionLimits: {
       maxSourceBytes: SHELL_LIMITS.maxSourceBytes, maxOutputSize: options.maxOutputBytes,
       maxCommandCount: options.maxSteps, maxLoopIterations: options.maxSteps, maxExecutionTimeMs: options.timeoutMs,

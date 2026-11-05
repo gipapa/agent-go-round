@@ -27,7 +27,8 @@ const report = { url: url.href, status: "running", checks: [] };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await ready(); await call("snapshot");
-  assert((await command("cat ~/agents.md")) === "請回覆繁體中文", "Default rules missing");
+  await call("click", "#mode-toggle"); await ready();
+  assert((await command("cat ~/agents.md")).includes("請回覆繁體中文"), "Default rules missing");
   await command("mkdir -p ~/probe");
   for(let start=0;start<100;start+=25) await command(`for i in {${start}..${start+24}}; do printf %4096s x > ~/probe/file$i; done`);
   await evaluate(`(()=>{window.__reads={bodies:0,workspaceScans:0};const get=IDBObjectStore.prototype.get,all=IDBIndex.prototype.getAll;IDBObjectStore.prototype.get=function(...args){if(this.name==='contents')window.__reads.bodies++;return get.apply(this,args)};IDBIndex.prototype.getAll=function(...args){if(this.objectStore.name==='nodes'&&this.name==='workspace')window.__reads.workspaceScans++;return all.apply(this,args)};return true})()`);

@@ -8,7 +8,7 @@
 printf '<h1>我的主頁</h1>' > ~/main.html
 ```
 
-預覽右下角的「開啟 Pi」掛載現有 popup。連接 Groq、按 AI，即可要求 agent 透過 bash 或結構化工具讀寫同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。New conversation、History／Resume 管理對話；`/exit` 返回 shell。
+預覽右下角的「開啟 Pi」掛載現有 popup。連接 Groq，即可要求 agent 透過 bash 或結構化工具讀寫同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。開啟新分頁、History／Resume 管理對話；`/exit` 返回 shell。
 
 檔案更新後顯示「檔案有更新」，按「重新載入預覽」才套用。刷新僅替換頁面 iframe，保留 popup 對話、草稿及執行中的任務；切換 tabs 也保留 popup。整頁 reload 恢復 entry、surface 與對話，未保存 key 時需重新連線，不自動重送模型請求或工具副作用。
 
@@ -24,7 +24,7 @@ workspace 決定檔案與歷史範圍，surface 決定持久化版面；popup �
 
 手機／窄螢幕與 popup 僅顯示直式 tab 列；桌面工作區僅顯示橫式列，皆可新增、切換、關閉及開啟 provider settings。Popup loader 指定 `tabs=vertical`。
 
-just-bash 指令與變數區分大小寫，路徑與內容保留大小寫。每次送出獨立 script，僅保存 cwd；shell 的 read／help 使用上游定義。AI 模式使用 UI 切換，沒有舊 JSON CLI 或 editor 指令。
+just-bash 指令名稱不分大小寫；變數、路徑與參數保留大小寫，路徑與內容保留大小寫。每次送出獨立 script，僅保存 cwd；shell 的 read／help 使用上游定義。AI 模式使用 UI 切換，沒有舊 JSON CLI 或 editor 指令。
 
 觸控輸入欄位採 16px。鍵盤縮小可視區時保留 tab 操作、精簡標題與 composer，terminal 仍可捲動。App 和 popup 跟隨 visual viewport 的高度、寬度與位移，不 remount iframe、不丟失草稿。`test:mobile:browser` 以真實 Chrome 模擬 360px 高可視區；這是版面回歸，未取代 iPhone Safari 的實體鍵盤驗收。
 

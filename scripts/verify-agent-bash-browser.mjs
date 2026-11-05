@@ -3,15 +3,15 @@ import { assert, browser, fixtureProvider, sequence, tool } from "./browser-fixt
 const { call, evaluate, wait, ready, send, connect, durable } = browser("agr-agent-bash");
 const provider = await fixtureProvider({
   "P4 mixed": sequence([
-    [tool("create", "bash", { script: "mkdir -p ~/project; cd ~/project; printf 'alpha\\nbeta\\n' > source.txt; cp source.txt copied.txt; grep alpha copied.txt | head -n 1" })],
-    [tool("read", "read", { path: "source.txt" })],
-    [tool("edit", "edit", { path: "source.txt", oldText: "beta", newText: "gamma" })],
+    [tool("create", "BaSh", { script: "MkDiR -p ~/project; CD ~/project; PrInTf 'alpha\\nbeta\\n' > source.txt; CP source.txt copied.txt; GrEp alpha copied.txt | HeAd -n 1" })],
+    [tool("read", "READ", { path: "source.txt" })],
+    [tool("edit", "EdIt", { path: "source.txt", oldText: "beta", newText: "gamma" })],
     [tool("subtree", "bash", { script: "cp -r ~/project /tmp/copy; mv /tmp/copy /tmp/moved; grep gamma /tmp/moved/source.txt; cd /tmp" })],
-    [tool("write", "write", { path: "from-json.txt", content: "structured" })],
+    [tool("write", "WrItE", { path: "from-json.txt", content: "structured" })],
     [tool("reverse", "bash", { script: "cat from-json.txt; cat ~/project/source.txt; head -n 1 ~/skills/probe/references/rule.txt" })],
     [tool("skill", "skill_load", { name: "probe" })],
     [tool("reference", "read", { path: "~/skills/probe/references/rule.txt" })],
-    [tool("help", "help", { command: "bash" })], "P4 verified"
+    [tool("help", "HeLp", { command: "BASH" })], "P4 verified"
   ]),
   "P4 stop": sequence([[tool("cancelled", "bash", { script: "printf once >> ~/once; sleep 30; printf late > ~/late" })]]),
   "P4 inspect": sequence([[tool("inspect", "bash", { script: "cat ~/once; test ! -e ~/late" })], "read back verified"])
@@ -23,8 +23,9 @@ const check = name => report.checks.push({ name, status: "pass" });
 try {
   await mkdir("test-results", { recursive: true });
   await call("open", url.href); await ready(); await call("snapshot");
+  await call("click", "#mode-toggle"); await ready();
   await send("mkdir -p ~/skills/probe/references; printf '%s' '---\nname: probe\ndescription: Check referenced rules.\n---\nRead references/rule.txt.' > ~/skills/probe/SKILL.md; printf 'first rule\\nsecond rule\\n' > ~/skills/probe/references/rule.txt");
-  await connect(provider.baseUrl); await call("click", "#mode-toggle");
+  await connect(provider.baseUrl); await call("click", "#mode-toggle"); await ready();
   await send("P4 mixed: create, read, modify and search actual files");
   assert(await evaluate("return document.querySelector('#run-status').textContent==='done'"), await evaluate("return document.querySelector('#terminal').textContent.slice(-4000)"));
   let state = await durable(workspace);

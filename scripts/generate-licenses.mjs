@@ -40,7 +40,7 @@ for (const [path, record] of Object.entries(lock.packages)) {
   packages.push({ name: manifest.name, version: manifest.version, path, license: manifest.license ?? record.license, tarball: record.resolved, integrity: record.integrity, repository: manifest.repository, texts: texts.map(({ source, text }) => ({ source, sha256: sha256(text) })) });
 }
 const bash = await readFile(new URL("node_modules/just-bash/dist/bundle/browser.js", root), "utf8");
-if (sha256(bash) !== "f8085d4e66edbaeebe376818038e3a75671ea036306358eb499629d17b13336d") throw new Error("Expected the verified just-bash public cwd patch; run scripts/patch-just-bash.mjs");
+if (sha256(bash) !== "37977c1541791bb2f5182ba9453566301c15082faee7c1a4c89eaec0ec8e543f") throw new Error("Expected the verified just-bash public cwd patch; run scripts/patch-just-bash.mjs");
 const notices = bash.slice(bash.lastIndexOf("/*! Bundled license information:"));
 if (!notices.startsWith("/*!")) throw new Error("Expected just-bash bundled dependency notices");
 sections.push(`\nUnmodified just-bash browser bundle notices\n${notices}\n`);

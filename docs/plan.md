@@ -2,7 +2,9 @@
 
 目前交付依 [just-bash／VFS 計畫](just-bash-plan.md)：人類與 AI 的 bash 共用 opaque Worker／IndexedDB VFS，保留結構化工具、skills、歷史、跨 tab 與宿主來源身分。舊 parser／JSON CLI／人類 editor 已移除；editor 重做與完整互動 shell session 列為後續。[程式與驗證紀錄](just-bash-progress.md) 記錄最新 gates 與未執行的外部模型 smoke。
 
-以下 F0–F5、舊 shell／editor 和 M0–M4 為歷史記錄；其中指令與測試數量不代表現行版本。操作以 [README](../README.md) 為準。
+2026-11-06 盤點：新分頁預設 AI、AI／Shell toggle、指令／工具名稱不分大小寫與 AGENTS.md 兩套工具清單已完成。AI 一般檔案操作以 Bash 為主，bin 保留相容與版本化功能。
+
+以下 F0–F5、舊 shell／editor 和 M0–M4 為歷史記錄；其中指令與測試數量不代表現行版本。現行驗證與待辦以下方兩節為準，操作以 [README](../README.md) 為準。
 
 ## 整合前 F0–F5 交付基線（歷史）
 
@@ -54,26 +56,33 @@ Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動�
 
 ## 目前驗證基線
 
-- 本次本機回歸為 25 個檔案、136 項測試通過；typecheck、production build 與 dist 檢查通過。GitHub Pages CI／部署結果於 push 後另行確認。
-- `npm run test:vfs:browser` 五項通過：100 檔情境的單字元覆寫與 ls -l 均為 0 次正文讀取／workspace 掃描、skill 路徑、串流 DOM／選取保存、reload 的對話／revision 保存；報告為 `test-results/vfs-terminal-browser.json`，不需 API key。
-- `npm run test:mobile:browser` 的十一項檢查通過，涵蓋桌面／手機單一 tab 列與操作、ls／cat／help、混合大小寫工具、360px 高可視區、捲動、設定表單、popup 草稿及水平位移；不等同原生 iPhone 鍵盤驗收。
-- `npm run test:host:browser` 的六項檢查通過：bin JS／manifest、shell 分頁與新訊息自動捲動；popup 檔案隔離；錯誤 instance 拒絕；真實 Groq GPT-OSS 20B 經 bin／Worker／bridge 讀取 HTML 並辨識 gipapa；宿主 reload 保留 workspace 與檔案；直接開 app 的無宿主錯誤。報告為 `test-results/host-browser.json`，畫面為 `test-results/host-popup.png`；無 key 時 live 任務明列 skipped。
-- [笑話驗收](joke-acceptance.md) 與 [主頁預覽](page-preview.md) 分別記錄真實模型、任務、限制與重跑方式。報告由 runner 寫入本機 `test-results/`，不納入 Git。
-- Harness／provider、模型決策、網路與 quota 失敗分別記錄。額度失敗不列為 PASS，既有 SDK 與 browser 的模型／儲存／執行器差異保留於報告。
+2026-11-06 本機驗證：
+
+- 32 個測試檔、183 項測試通過；production build（含 typecheck）與 dist 檢查通過。
+- `test:shell:browser` 12 項通過：AI 預設模式、toggle、混合大小寫、完整 script／cwd、雙 tab／reload、Stop／已提交寫入、輸出限制與手機。
+- `test:agent:bash:browser` 3 組通過：真實 Worker／原生 IndexedDB、混合大小寫的 Bash／bin、skills、交易 trace、獨立 cwd、Stop／reload 不重播；provider 為本機 HTTP／SSE fixture，13 個實際 requests。
+- `test:tabs:browser` 2 組、`test:mobile:browser` 12 項通過。手機鍵盤／popup 使用 Chrome 可視區模擬，不是 iPhone 實機。
+- 其他 base path、embed／host／preview／VFS 的先前證據保留在 [just-bash 驗證紀錄](just-bash-progress.md)，不改列為本次重跑。報告位於忽略追蹤的 `test-results/`。
+- just-bash 版的外部 Groq smoke 尚未執行；[笑話驗收](joke-acceptance.md) 的舊版模型結果不等同現行版本通過。模型決策、額度與 harness 失敗分開記錄。
+- GitHub Pages CI／部署結果由 push 後的 workflow 另行確認，本機 build 不代表已發布。
 
 ## 後續工作順序（待排期）
 
-下列為後續順序；P0 的 tab 版面與 shell 操作修正、外部 popup 隔離與呼叫頁面讀取已交付，原生裝置驗收仍待完成，其餘 P1–P4 尚待排期。
+下表區分未實作、部分完成與尚待驗收；舊版 POC 缺口及歷史 TODO 不是當前清單。just-bash 計畫的 P0–P5 已落地。
 
-| 順序 | 工作 | 完成條件 |
+| 順序 | 狀態 | 工作與剩餘完成條件 |
 |---|---|---|
-| P0 | iPhone Safari 真機驗收與必要修正（tab 單列與 shell 操作已補齊） | 實際開啟／收起鍵盤，確認主畫面與 popup 的輸入、送出、中文輸入、捲動、旋轉與 settings；草稿及對話保留 |
-| P1 | 模型 context budget 與可檢閱的 compaction | 超限可辨識；保留原始歷史與 tool call/result 配對；摘要範圍有紀錄，失敗不靜默丟棄歷史 |
-| P2 | 工作區備份與搬移 | 明確匯出／匯入檔案與必要 metadata；驗證格式、大小與衝突，不含 credentials；另訂 v2 匯入規則 |
-| P3 | 歷史管理與閱讀體驗 | 補搜尋、重新命名、封存／刪除及 Markdown／程式碼呈現；維持 session identity 與閱讀位置 |
-| P4 | 頁面資源與發布能力 | 二進位資源、頁面 JavaScript 的隔離／權限及 HTML 匯出分項驗收；本機預覽與訪客可見的發布保持明確區分 |
+| 驗收 | 待執行 | just-bash 版真實 Groq smoke：工具讀寫／read-back、五笑話與 references 完整讀取、reload／重連、popup 改頁面；額度失敗不計通過 |
+| P0 | 待實機驗收 | iPhone Safari：主畫面與 popup 開／收鍵盤、中文輸入、送出、捲動、旋轉與 settings；草稿及對話保留 |
+| P1 | 部分完成 | Context length／估算 budget／可調百分比自動裁切已完成。仍需保存原始歷史、真正摘要與範圍紀錄、可檢閱／失敗恢復、不可縮小的最新輪次或固定 prompt 超限處理；目前會直接裁掉 runtime messages 的舊輪次 |
+| P2 | 未實作 | 工作區備份與搬移：明確匯出／匯入 bytes 與必要 metadata，驗證格式、大小、衝突，不含 credentials；舊 v2 匯入規則需另訂 |
+| P3 | 未實作 | 歷史管理與閱讀：搜尋、重新命名、封存／刪除、Markdown／程式碼呈現，保持 session identity 與閱讀位置 |
+| P4 | 未實作 | 頁面資源與發布：PNG／JPEG 匯入／預覽、JavaScript 隔離／權限、HTML／資源匯出、訪客可見發布，分項驗收；底層 VFS bytes 已完成 |
+| 後續 | 未實作 | 人類檔案 editor 重做；先定義新 UI／檔案瀏覽與編輯契約，不恢復已移除的舊 editor CLI |
 
-MCP、遠端磁碟、policy-gated 模型跨 tab 詢問、ChatGPT 訂閱 adapter、自動 delegation、voice 與多模態仍為選配 backlog，需有具體需求與獨立驗收。現有 VFS 為瀏覽器／origin 本機資料，尚無雲端同步、完整 bash 或任意頁面腳本執行。
+AI 跨 tab 的 `agents list/send/read` 已完成，無須重做；自動 delegation／編排仍延後。完整跨輸入 Shell 狀態、hard links、多使用者權限、Node／Python／網路／任意系統 binary 仍是刻意延後的能力。
+
+MCP、遠端磁碟、ChatGPT 訂閱 adapter、voice 與多模態仍為選配 backlog，需具體需求與獨立驗收。現有 VFS 為瀏覽器／origin 本機資料，尚無雲端同步。
 
 新工作先定義可重現的操作與成功條件，再補相應回歸或裝置證據；已完成 F0–F5 的驗收不得因新增功能而退化。
 

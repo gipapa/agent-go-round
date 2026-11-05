@@ -2,12 +2,14 @@
 
 目前提供 IndexedDB VFS、結構化 AI 檔案工具、skill_load、歷史恢復、AGENTS.md／skills，以及 [HTML 主頁與 popup 預覽](page-preview.md)。主終端已改為 just-bash，工具 JS 仍在既有 sandbox／capability 邊界內執行，不註冊為 trusted custom shell commands。
 
-新 tab 從 `~` 開始，使用 AI／Shell 按鈕切換；agent 可用 `/exit` 返回 shell。真實模型使用工具需先連接 provider。相同 workspace 的 tabs 共用 bytes 檔案，各有 cwd；`?workspace=NAME` 隔離檔案與歷史。
+新 tab 預設 AI 模式，從 `~` 開始，使用 AI／Shell toggle 切換；agent 可用 `/exit` 返回 shell。真實模型使用工具需先連接 provider。相同 workspace 的 tabs 共用 bytes 檔案，各有 cwd；`?workspace=NAME` 隔離檔案與歷史。
 
 
 AI 另有原生 `bash` tool，不是可編輯的 bin JS，也不允許同名自訂工具覆蓋。參數為 `{script, timeoutMs?, maxOutputBytes?, maxSteps?}`，預設 15 秒、上限 30 秒／128000 bytes／10000 steps；回傳 `{stdout, stderr, exitCode, cwd}`。cwd 在 agent 內延續，也供後續相對 read／write／edit 使用；人類 shell 的 cwd 獨立。每次 script 的變數、函式與 options 不延續。
 
 bash 的 `readBytes`／metadata／寫入／remove 紀錄由同一筆 VFS 交易取得 path 與 revision；只記錄成功提交的寫入。取消後才完成的已 dispatch 交易仍歸到原 run。這些存取沒有 `readRange`，不證明模型看過全文；需要完整閱讀證據時使用結構化 read 的成功回傳範圍。未知寫入不自動重播，先讀回確認。
+
+一般檔案操作以 Bash 為主；bin 的 ls／find／grep 保留相容性。需要 revision、完整閱讀證據、原子多檔寫入或精確替換時使用 read／write／edit。工具名稱不分大小寫，參數內容與 JSON 欄位保留大小寫。完整的兩邊工具清單見 [agents.md](../agents.md)，產品工作區也會在 `~/agents.md` 寫入工具清單並保留既有自訂規則。
 
 ## 預設工具
 

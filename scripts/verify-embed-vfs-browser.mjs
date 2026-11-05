@@ -54,6 +54,10 @@ function installProbe(hostOrigin) {
     if (previewEntry) { document.querySelector("#preview-entry").value = previewEntry; document.querySelector("#open-preview-form").requestSubmit(); }
     if (shellTab) document.querySelector("#agent-list .agent-row").click();
     if (command !== undefined) {
+      if (document.querySelector("#mode-toggle").getAttribute("aria-checked") === "true") {
+        document.querySelector("#mode-toggle").click();
+        while (document.querySelector("#mode-toggle").getAttribute("aria-checked") === "true") await new Promise(resolve => setTimeout(resolve, 20));
+      }
       document.querySelector("#prompt").value = command;
       document.querySelector("#terminal-form").requestSubmit();
     }
@@ -127,7 +131,7 @@ try {
     await call("open", hostUrl + (compat ? "?compat" : "")); await enterWidget();
     const { crypto } = await state();
     assert(crypto.randomUUID === (compat ? "undefined" : "function") && crypto.getRandomValues === "function", "Unexpected crypto fixture");
-    assert(await command("cat ~/agents.md") === "請回覆繁體中文", `${mode}: VFS failed to initialize or sandbox read failed`);
+    assert((await command("cat ~/agents.md")).includes("請回覆繁體中文"), `${mode}: VFS failed to initialize or sandbox read failed`);
     await command("printf 'embedded file' > notes.md");
     assert(await command("cat notes.md") === "embedded file", `${mode}: file read did not match write`);
     assert((await command("ls")).includes("notes.md"), `${mode}: missing file in listing`);

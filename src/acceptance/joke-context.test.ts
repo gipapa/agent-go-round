@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_RULES } from "../core/workspace-bootstrap";
 import "fake-indexeddb/auto";
 import { initializeWorkspace } from "../core/workspace-bootstrap";
 // @vitest-environment node
@@ -22,7 +23,7 @@ it("loads joke rules and skills from persisted VFS, delivers full reads, and ref
   await installDefaultBin(fs);
   await installJokeDemo(fs);
   // Both documented lowercase aliases must work in the actual runtime too.
-  expect((await fs.readFile("~/agents.md")).content).toBe("請回覆繁體中文");
+  expect((await fs.readFile("~/agents.md")).content).toBe(DEFAULT_AGENT_RULES);
   await fs.rename("~/skills/joke-master/SKILL.md", "~/skills/joke-master/skill.md");
   expect((await installJokeDemo(fs)).kept).toHaveLength(8);
   await expect(fs.stat("~/AGENTS.md")).rejects.toMatchObject({ code: "not_found" });

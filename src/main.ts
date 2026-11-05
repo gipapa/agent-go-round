@@ -24,7 +24,7 @@ import { randomUUID } from "./core/random";
 import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
-type AgentStart = { kind: "continue" } | { kind: "new" } | { kind: "resume"; sessionId: string };
+type AgentStart = { kind: "continue" } | { kind: "resume"; sessionId: string };
 type TabStatus = "working" | "idle" | "done" | "blocked" | "error";
 type AgentTab = {
   id: string;
@@ -67,7 +67,7 @@ if (!/^[a-zA-Z0-9_-]{1,64}$/.test(surfaceId)) throw new Error("Invalid surface i
 document.body.classList.toggle("page-view", pageView);
 document.body.classList.toggle("vertical-tabs", locationParams.get("tabs") === "vertical");
 const previews = new Map<string, PreviewSurface>();
-const shellBootHint = "just-bash 已就緒。使用 AI／Shell 按鈕切換；每次送出獨立 script，僅保存 cwd。";
+const shellBootHint = "just-bash 已就緒。使用 AI／Shell toggle 切換；每次送出獨立 script，僅保存 cwd。";
 const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
   apiKey: "agent-go-round.groq.api-key",
@@ -175,8 +175,7 @@ app.innerHTML = `
         </header>
 
         <nav class="pane-tools" aria-label="Workspace actions">
-          <button id="mode-toggle" type="button" class="terminal-button">AI</button>
-          <button id="new-conversation" type="button" class="terminal-button">New conversation</button>
+          <button id="mode-toggle" type="button" class="mode-toggle" role="switch" aria-label="AI mode" aria-checked="true"><span class="mode-shell">Shell</span><span class="mode-track" aria-hidden="true"><span class="mode-thumb"></span></span><span class="mode-ai">AI</span></button>
           <button id="history-toggle" type="button" class="terminal-button" aria-expanded="false" aria-controls="conversation-history">History</button>
           <details class="workspace-menu"><summary>Workspace</summary><div class="workspace-menu-content">
             <button id="shell-help" type="button" class="terminal-button">Shell guide</button>
@@ -699,23 +698,6 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
 
 async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
   if (start.kind === "continue") { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; return; }
-  if (start.kind === "new") {
-    await conversations().remember(workspaceTabSnapshot(tab));
-    const runtime = tab.runtime;
-    const next = runtime
-      ? new AgentSession({ sessionId: makeId("session"), model: runtime.model, streamFn: runtime.streamFn, eventStore: sessionEventStore, maxToolCalls: 32, deadlineMs: 360_000, approval: requestHostToolApproval, autoCompactPercent: currentAutoCompactPercent() })
-      : scriptedSession(tab.id, ["New demo conversation."]);
-    if (!runtime && tab.provider === "groq") {
-      next.agent.state.model = tab.session.agent.state.model;
-      next.agent.streamFunction = () => { throw new Error("Reconnect Groq before continuing"); };
-    }
-    attachSession(tab, next);
-    tab.agentCwd = tab.cwd;
-    tab.pendingContext = [];
-    tab.mode = "agent";
-    tab.transcript.push({ id: makeId("new-session"), role: "system", text: `New conversation ${next.sessionId}` });
-    return;
-  }
   if (start.kind === "resume") {
     const existing = state.tabs.find((candidate) => candidate.session.sessionId === start.sessionId);
     if (existing) { existing.mode = "agent"; selectTab(existing.id); return; }
@@ -756,7 +738,8 @@ function createTab(id: string, name: string, responses: readonly string[], branc
     unread: 0,
     draft: "",
     unregisterRoute: () => undefined,
-    mode: "shell",
+    mode: "agent",
+    agentCwd: VFS_HOME,
     provider: "scripted",
     connected: true,
     pendingContext: [],
@@ -1049,8 +1032,10 @@ function renderPane(tab: AgentTab): void {
     previews.set(tab.id, preview); previewPanel.append(preview.element);
   }
   for (const [id, preview] of previews) preview.element.hidden = !previewing || id !== tab.id;
-  const modeButton = get<HTMLButtonElement>("mode-toggle"); modeButton.textContent = tab.mode === "agent" ? "Shell" : "AI";
-  for (const id of ["mode-toggle", "new-conversation", "history-toggle", "resume-conversation", "install-demo", "reload-tools", "reset-cwd"]) get<HTMLButtonElement>(id).disabled = running || !workspaceReady;
+  const modeButton = get<HTMLButtonElement>("mode-toggle");
+  modeButton.hidden = previewing;
+  modeButton.setAttribute("aria-checked", String(tab.mode === "agent"));
+  for (const id of ["mode-toggle", "history-toggle", "resume-conversation", "install-demo", "reload-tools", "reset-cwd"]) get<HTMLButtonElement>(id).disabled = running || !workspaceReady;
   terminalView.render({ ...tab, messages: tab.session.agent.state.messages });
 }
 
@@ -1277,7 +1262,6 @@ get<HTMLButtonElement>("mode-toggle").addEventListener("click", () => void works
   if (tab.mode === "agent") tab.mode = "shell"; else await enterAi(tab, { kind: "continue" });
   promptElement.focus();
 }));
-get<HTMLButtonElement>("new-conversation").addEventListener("click", () => void workspaceAction(tab => enterAi(tab, { kind: "new" })));
 get<HTMLButtonElement>("history-toggle").addEventListener("click", () => void workspaceAction(async () => {
   const panel = get<HTMLElement>("conversation-history"); panel.hidden = !panel.hidden;
   get<HTMLElement>("history-toggle").setAttribute("aria-expanded", String(!panel.hidden));

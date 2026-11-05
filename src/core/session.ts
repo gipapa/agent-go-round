@@ -251,7 +251,7 @@ export class AgentSession {
     this.autoCompactPercent = options.autoCompactPercent ?? DEFAULT_AUTO_COMPACT_PERCENT;
     if (!Number.isInteger(this.autoCompactPercent) || this.autoCompactPercent < 1 || this.autoCompactPercent > 99) throw new Error("autoCompactPercent must be an integer between 1 and 99");
     const tools = this.prepareTools(options.tools ?? []);
-    this.toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+    this.toolsByName = new Map(tools.map((tool) => [tool.name.toLowerCase(), tool]));
     this.approval = options.approval;
     this.maxToolCalls = options.maxToolCalls;
     this.deadlineMs = options.deadlineMs;
@@ -302,7 +302,7 @@ export class AgentSession {
   setTools(tools: readonly SessionTool[]): void {
     if (this.isRunning) throw new SessionBusyError(this.sessionId);
     const prepared = this.prepareTools(tools);
-    this.toolsByName = new Map(prepared.map((tool) => [tool.name, tool]));
+    this.toolsByName = new Map(prepared.map((tool) => [tool.name.toLowerCase(), tool]));
     this.agent.state.tools = prepared;
   }
 
@@ -379,6 +379,14 @@ export class AgentSession {
         }
       }
       if (event.type === "message_end" && event.message.role === "assistant") {
+        // Pi resolves tools by exact name after message_end. Canonicalize only
+        // tool identifiers here so schemas, approvals and arguments stay intact.
+        for (const block of event.message.content) {
+          if (block.type === "toolCall") {
+            const tool = this.toolsByName.get(block.name.toLowerCase());
+            if (tool) block.name = tool.name;
+          }
+        }
         finalAssistant = event.message;
       }
       if (event.type === "message_end" && event.message.role === "toolResult") {
@@ -512,7 +520,7 @@ export class AgentSession {
     if (!run) return { block: true, reason: "No active session run" };
     const toolCallId = context.toolCall.id;
     const toolName = context.toolCall.name;
-    const tool = this.toolsByName.get(toolName);
+    const tool = this.toolsByName.get(toolName.toLowerCase());
     const toolSignal = signal ?? new AbortController().signal;
 
     if (toolSignal.aborted) {
@@ -579,8 +587,8 @@ export class AgentSession {
     const prepared = tools.map((tool) => this.wrapTool(tool));
     const names = new Set<string>();
     for (const tool of prepared) {
-      if (names.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
-      names.add(tool.name);
+      if (names.has(tool.name.toLowerCase())) throw new Error(`Duplicate tool name: ${tool.name}`);
+      names.add(tool.name.toLowerCase());
     }
     return prepared;
   }

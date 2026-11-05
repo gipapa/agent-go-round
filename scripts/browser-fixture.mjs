@@ -44,11 +44,11 @@ export function browser(session) {
     while (Date.now() - start < timeout) { if (await evaluate(`return ${expression}`)) return; await new Promise(resolve => setTimeout(resolve, 100)); }
     throw new Error(`Timed out: ${expression}`);
   };
-  const ready = (doc = "document") => wait(`Boolean(${doc}?.querySelector('#send')&&!${doc}.querySelector('#send').disabled)`);
+  const ready = (doc = "document", timeout = 35000) => wait(`Boolean(${doc}?.querySelector('#send')&&!${doc}.querySelector('#send').disabled)`, timeout);
   const send = async (text, doc = "document", settle = true) => {
     await ready(doc);
     await evaluate(`const d=${doc};d.querySelector('#prompt').value=${JSON.stringify(text)};d.querySelector('#terminal-form').requestSubmit();return true`);
-    if (settle) await ready(doc);
+    if (settle) await ready(doc, 120000);
   };
   const connect = async (baseUrl, doc = "document") => {
     await ready(doc);

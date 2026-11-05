@@ -52,6 +52,7 @@ const report = { startedAt: new Date().toISOString(), url: url.href, workspaceId
 const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await wait("Boolean(document.querySelector('#send') && !document.querySelector('#send').disabled)"); await call("snapshot");
+  await call("click", "#mode-toggle");
   await send(writeFiles([
     { path: "~/main.html", content: '<!doctype html><html lang="zh-Hant"><head><title>Preview acceptance</title><link rel="stylesheet" href="styles.css"></head><body><h1 id="headline">Original title</h1><p>這個頁面來自 IndexedDB。</p><img src="logo.svg" alt="VFS mark"><script>parent.__pageScriptRan=true</script></body></html>' },
     { path: "~/styles.css", content: 'body{background:#f6f3ed;padding:40px;font-family:system-ui}h1{color:rgb(17,34,51)}img{width:48px;height:48px}' },
@@ -66,7 +67,7 @@ try {
   assert(await evaluate("document.querySelector('.preview-surface > iframe').srcdoc.includes('data:image/svg+xml;') && document.querySelector('.preview-surface > iframe').srcdoc.includes('rgb(17,34,51)')"), "VFS resources unresolved");
   check("HTML/CSS/SVG and sandbox isolation");
   await evaluate("(() => {document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.launcher').click();return true;})()");
-  await connect(); await evaluate(`(() => {${d}.querySelector('#mode-toggle').click();return true;})()`);
+  await connect();
   const task = 'Read ~/main.html, then use a file tool to change only the h1 text from "Original title" to "Updated by Pi". Preserve the stylesheet and image. Briefly report what you changed.';
   await evaluate(`(() => {${w}.__previewToken='preserve-popup';return true;})()`);
   await send(task, true, false);

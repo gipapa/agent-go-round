@@ -79,6 +79,7 @@ const report = { startedAt: new Date().toISOString(), url: appUrl.href, workspac
 try {
   await call("open", report.url); await waitReady();
   await call("snapshot");
+  await call("click", "#mode-toggle"); await waitReady();
   if (languageOnly) {
     const rules = await command("cat ~/agents.md");
     if (!rules.last.includes("請回覆繁體中文")) throw new Error("Default workspace language rule is missing");
@@ -109,7 +110,7 @@ try {
   report.tasks.push(second);
   // History continuation is covered above. Start a distinct creation task so
   // free-tier per-request input-token limits do not conflate the two gates.
-  await command("/exit"); await call("click", "#new-conversation");
+  await command("/exit"); await call("click", "#add-tab");
   const created = await command("Use joke-master. First create exactly five original short jokes as separate .md files in ~/new-jokes using write with createParents true, then actually read each file back, score all five, and select the funniest one.");
   report.tasks.push(await grade("browser-agent-create-read-back", created, "/home/user/new-jokes"));
   await command("/exit");
