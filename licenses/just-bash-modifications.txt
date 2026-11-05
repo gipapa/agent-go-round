@@ -1,14 +1,17 @@
 AgentGoRound modifications to just-bash 3.6.0 (Apache-2.0)
-2026-11-04
+2026-11-06
 
 Modified file: node_modules/just-bash/dist/bundle/browser.js
 Original SHA-256: 38f1ad1e3283980ecdf68cede8a4eed028c6dff6e8c31793dec1e0af529c446e
-Patched SHA-256: f8085d4e66edbaeebe376818038e3a75671ea036306358eb499629d17b13336d
+Patched SHA-256: 37977c1541791bb2f5182ba9453566301c15082faee7c1a4c89eaec0ec8e543f
 
 scripts/patch-just-bash.mjs adds a public result.cwd field. It reports the
 execution-local interpreter cwd for normal completion, exit, execution limits
-and empty scripts. getCwd() and env.PWD are unchanged. No parser or command
-implementations were changed. Applications use the public result rather than
+and empty scripts. getCwd() and env.PWD are unchanged. Command identifiers are normalized to lowercase after expansion and at dispatch,
+including nested command/builtin calls, function definitions and command-name
+operands of type/which/help. Literal declaration
+command detection is case-insensitive. Arguments, variables, paths and parser
+keywords retain their case. Command implementations are otherwise unchanged. Applications use the public result rather than
 reading private engine state. The patch is reversible, idempotent, and verifies
 the entire original artifact hash on install/build/test.
 
