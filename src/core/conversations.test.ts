@@ -11,7 +11,7 @@ function snapshot(): WorkspaceSnapshot {
 }
 
 describe("IndexedDB conversations", () => {
-  it("keeps popup layouts separate while sharing history and session writer ownership", async () => {
+  it("keeps popup layouts separate while protecting session writer ownership", async () => {
     const factory = new IDBFactory();
     const workspace = new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory));
     const popup = new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory), "layout:popup-a");
@@ -22,12 +22,11 @@ describe("IndexedDB conversations", () => {
     await workspace.save(snapshot());
     expect((await popup.load())?.tabs[0].draft).toBe("popup draft");
     expect((await workspace.load())?.tabs[0].draft).toBe("draft");
-    expect(await popup.history()).toHaveLength(2);
-    await popup.resume("conversation-a"); await workspace.claim("conversation-a");
+    await workspace.claim("conversation-a");
     await expect(popup.claim("conversation-a")).rejects.toThrow("another browser");
     await workspace.release("conversation-a");
   });
-  it("preserves history after tab close and isolates workspaces", async () => {
+  it("restores only the current tab layout and isolates workspaces", async () => {
     const factory = new IDBFactory();
     const initial = snapshot();
     const store = new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory));
@@ -39,8 +38,7 @@ describe("IndexedDB conversations", () => {
     await store.save(changed);
     const reopened = new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory));
     expect((await reopened.load())?.tabs[0].draft).toBe("new draft");
-    expect((await reopened.history()).map((tab) => tab.session.sessionId).sort()).toEqual(["conversation-a", "conversation-b"]);
-    expect((await reopened.resume("conversation-a")).session.sessionId).toBe("conversation-a");
+    expect((await reopened.load())?.tabs.map(tab => tab.session.sessionId)).toEqual(["conversation-b"]);
     expect(await new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory, "other")).load()).toBeUndefined();
   });
 
@@ -57,7 +55,7 @@ describe("IndexedDB conversations", () => {
     await b.release("conversation-a");
     await a.save(snapshot());
     await expect(b.save(snapshot())).rejects.toThrow(/another browser/);
-    expect((await a.resume("conversation-a")).draft).toBe("draft");
+    expect((await a.load())?.tabs[0].draft).toBe("draft");
   });
 
   it("rolls back failed transactions and persists recovery/source metadata without replay", async () => {

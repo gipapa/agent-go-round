@@ -40,9 +40,10 @@ function workerBootstrap(main: (args: unknown, api: unknown) => Promise<unknown>
   const fs = Object.fromEntries(methods.map((method) => [method, (...values: unknown[]) => call(method, values)]));
   const skills = Object.freeze({ load: (name: string) => call("loadSkill", [name]) });
   const host = Object.freeze({ readPage: (options: unknown) => call("readHostPage", [options]) });
-  const tools = Object.freeze({ help: (command?: string) => call("commandHelp", [command]) });
+  const tools = Object.freeze({ help: (command?: string) => call("commandHelp", [command]), reload: () => call("reloadTools", []) });
+  const workspace = Object.freeze({ home: () => call("home", []), openPreview: (path?: string) => call("openPreview", [path]) });
   const agents = Object.freeze({ execute: (options: unknown) => call("tabAgents", [options]) });
-  Promise.resolve().then(() => main(args, Object.freeze({ fs: Object.freeze(fs), skills, host, tools, agents }))).then(
+  Promise.resolve().then(() => main(args, Object.freeze({ fs: Object.freeze(fs), skills, host, tools, workspace, agents }))).then(
     (result) => self.postMessage({ type: "done", result }),
     (error) => self.postMessage({ type: "error", error: error instanceof Error ? error.message : String(error) })
   );

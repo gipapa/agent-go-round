@@ -62,7 +62,7 @@ describe("main workspace UI", () => {
       document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
     };
     terminal.scrollTop = 0;
-    document.querySelector<HTMLButtonElement>("#shell-help")!.click();
+    send("/exit");
     await vi.waitFor(() => expect(terminal.scrollTop).toBe(1000));
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
     if (document.querySelector("#mode-toggle")!.getAttribute("aria-checked") !== "true") document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();

@@ -1,3 +1,4 @@
+import { workspaceToolFixture, workspaceToolScript } from "./browser-fixture.mjs";
 // Geometry regression: simulates the visual viewport above an on-screen keyboard.
 // Does not claim to exercise a physical iOS keyboard. No model credentials needed.
 import { execFile } from "node:child_process";
@@ -25,6 +26,7 @@ async function viewport(height, offsetTop = 0, width = 390, offsetLeft = 0) {
   await new Promise(resolve => setTimeout(resolve, 200));
 }
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", `keyboard-${Date.now()}`);
+const toolsFixture = await workspaceToolFixture();
 const report = { url: url.href, simulatedVisualViewport: true, checks: [], status: "running" };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
@@ -70,7 +72,7 @@ try {
   assert(!mobileEnter.defaultPrevented && mobileEnter.pane === "AI agent", "mobile AI Enter should insert a newline instead of submitting");
   check("mobile AI composer keeps Enter for newlines");
   await send("/ExIt"); await call("click", "#add-vertical-tab"); await send("/EXIT");
-  check("mode toggle, new conversation and /exit work with compact composer");
+  check("mode toggle, new tab and /exit work with compact composer");
   await viewport(844);
   assert(await evaluate("!document.documentElement.classList.contains('keyboard-open')&&getComputedStyle(document.querySelector('.sidebar')).display!=='none'"), "Keyboard close did not restore layout");
   check("closing keyboard restores normal chrome");
@@ -78,7 +80,7 @@ try {
   assert(await evaluate("(() => {const input=document.querySelector('#api-key'),button=document.querySelector('button[form=provider-form]'),a=input.getBoundingClientRect(),b=button.getBoundingClientRect();return getComputedStyle(input).fontSize==='16px'&&a.top>=60&&a.bottom<=420&&b.bottom<=420;})()"), "Settings controls covered by keyboard");
   await call("click", "#close-settings"); await viewport(844);
   check("provider inputs and connect action fit the visible viewport");
-  await evaluate("(() => {document.querySelector('#open-preview-form').requestSubmit();return true;})()");
+  await evaluate(workspaceToolScript(toolsFixture.baseUrl, "open_preview"));
   await wait("[...document.querySelectorAll('.preview-toolbar button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
   await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('我的 Pi 主頁')");
@@ -102,6 +104,7 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }
 finally {
+  await toolsFixture.close();
   await mkdir("test-results", { recursive: true });
   await writeFile("test-results/mobile-browser.json", JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report)); await call("close");

@@ -1,7 +1,7 @@
 import { executeFileCapability, FILE_METHODS, BIN_CAPABILITIES, type BinCapability, type FileMethod, type BinFileAccess } from "./file-capabilities";
 import { validateToolArguments, type TSchema } from "@earendil-works/pi-ai";
 import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, type BinManifest } from "./bin-defaults";
-import { VFS_HOME, type FileNode, type VirtualFileSystem } from "./fs";
+import { VFS_HOME, resolvePath, type FileNode, type VirtualFileSystem } from "./fs";
 import { ToolOutcomeUnknownError, type SessionTool, type FileReadRange } from "./session";
 import type { BinExecutor } from "./bin-sandbox";
 import { commandHelp } from "./shell-help";
@@ -16,9 +16,10 @@ export class BinRegistry {
   constructor(readonly fs: VirtualFileSystem, private readonly executor: BinExecutor, private readonly services: {
     readHostPage?: (args: { offset?: number; limit?: number }, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
     tabAgents?: (args: unknown, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
+    openPreview?: (entry: string, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
   } = {}) {}
 
-  /** Load source + metadata once while idle; a running tool sees an immutable definition. */
+  /** Atomically replace the catalog; tools already registered in a run keep immutable definitions. */
   async reload(): Promise<void> {
     const next = new Map<string, LoadedBin>();
     const files = await this.fs.listDirectory(BIN_MANIFEST_DIRECTORY);
@@ -48,7 +49,7 @@ export class BinRegistry {
     return this.executeDefinition(definition, args, cwd, signal, undefined, undefined, context);
   }
 
-  private async executeDefinition(definition: LoadedBin, args: unknown, cwd: string, signal?: AbortSignal, onAccess?: (access: BinFileAccess) => void, loadSkill?: (name: string, signal: AbortSignal) => Promise<unknown>, context: BinHostContext = {}): Promise<unknown> {
+  private async executeDefinition(definition: LoadedBin, args: unknown, cwd: string, signal?: AbortSignal, onAccess?: (access: BinFileAccess) => void, loadSkill?: (name: string, signal: AbortSignal) => Promise<unknown>, context: BinHostContext = {}, onCwd?: (cwd: string) => void): Promise<unknown> {
     const { manifest, source } = definition;
     const name = manifest.name;
     const validated = validateToolArguments({ name, description: manifest.description, parameters: manifest.parameters as TSchema }, { type: "toolCall", id: "bin", name, arguments: args as Record<string, unknown> });
@@ -64,6 +65,21 @@ export class BinRegistry {
     const rpc = async (method: BinCapability, values: unknown[]): Promise<unknown> => {
       if (!active || execution.signal.aborted) throw new Error("Tool cancelled");
       if (!manifest.capabilities.includes(method) || !BIN_CAPABILITIES.includes(method)) throw new Error(`Tool lacks filesystem capability: ${method}`);
+      if (method === "home" || method === "reloadTools") {
+        if (!Array.isArray(values) || values.length) throw new Error(`Invalid ${method} arguments`);
+        if (method === "home") {
+          if (!onCwd) throw new Error("Agent working directory unavailable");
+          onCwd(VFS_HOME);
+          return { cwd: VFS_HOME };
+        }
+        await this.reload();
+        return { tools: this.list().map(tool => tool.name), message: "AI tools reloaded. New definitions apply on the next run; running calls keep their original definitions." };
+      }
+      if (method === "openPreview") {
+        if (!Array.isArray(values) || values.length > 1 || values[0] !== undefined && (typeof values[0] !== "string" || !values[0].length || values[0].length > 1024)) throw new Error("Invalid preview path");
+        if (!this.services.openPreview) throw new Error("Preview UI unavailable");
+        return this.services.openPreview(resolvePath((values[0] as string | undefined) ?? "~/main.html", cwd), execution.signal, context);
+      }
       if (method === "tabAgents") {
         if (!Array.isArray(values) || values.length !== 1) throw new Error("Invalid agents arguments");
         const options = validateToolArguments({ name: "agents", description: "Cross-tab agents", parameters: AGENTS_PARAMETERS }, { type: "toolCall", id: "agents-rpc", name: "agents", arguments: values[0] as Record<string, unknown> });
@@ -131,13 +147,13 @@ export class BinRegistry {
     } finally { active = false; execution.abort(); signal?.removeEventListener("abort", abort); }
   }
 
-  sessionTools(cwd: string | (() => string) = VFS_HOME, onAccess?: (access: BinFileAccess, toolCallId: string) => void, loadSkill?: (name: string, toolCallId: string, signal: AbortSignal) => Promise<unknown>, sessionId?: string): SessionTool[] {
+  sessionTools(cwd: string | (() => string) = VFS_HOME, onAccess?: (access: BinFileAccess, toolCallId: string) => void, loadSkill?: (name: string, toolCallId: string, signal: AbortSignal) => Promise<unknown>, sessionId?: string, onCwd?: (cwd: string) => void): SessionTool[] {
     return [...this.tools.values()].map((definition) => {
       const { manifest } = definition;
       return {
       name: manifest.name, label: manifest.name, description: manifest.description, parameters: manifest.parameters,
       execute: async (id, args, signal) => {
-        const result = await this.executeDefinition(definition, args, typeof cwd === "function" ? cwd() : cwd, signal, (access) => onAccess?.(access, id), loadSkill ? (name, executionSignal) => loadSkill(name, id, executionSignal) : undefined, { sessionId, toolCallId: id });
+        const result = await this.executeDefinition(definition, args, typeof cwd === "function" ? cwd() : cwd, signal, (access) => onAccess?.(access, id), loadSkill ? (name, executionSignal) => loadSkill(name, id, executionSignal) : undefined, { sessionId, toolCallId: id }, onCwd);
         return { content: [{ type: "text", text: JSON.stringify(result) ?? "null" }], details: result };
       }
     }; });

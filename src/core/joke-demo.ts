@@ -1,4 +1,4 @@
-import { FileSystemError, type VirtualFileSystem } from "./fs";
+import type { VirtualFileSystem } from "./fs";
 
 export const JOKE_PROMPT = "Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.";
 export const JOKE_SKILL_PATH = "~/skills/joke-master/SKILL.md";
@@ -30,22 +30,33 @@ scores 必須包含指定目錄內每個笑話一次；winner.text 必須與實�
   "~/jokes/笑話5.md": "我把 Wi-Fi 名稱改成「正在連線中」，結果鄰居等了一整個下午。"
 };
 
-/** Explicit demo setup, never overwrites a user's existing workspace files. */
-export async function installJokeDemo(fs: VirtualFileSystem): Promise<{ created: string[]; kept: string[] }> {
-  const result = { created: [] as string[], kept: [] as string[] };
-  for (const [path, content] of Object.entries(JOKE_DEMO_FILES)) {
-    // Respect the same lowercase aliases as the runtime loaders, avoiding ambiguity.
-    const alias = path.endsWith("/AGENTS.md") ? path.replace(/AGENTS\.md$/, "agents.md") : path.endsWith("/SKILL.md") ? path.replace(/SKILL\.md$/, "skill.md") : undefined;
-    if (alias) {
-      try {
-        await fs.stat(alias);
-        result.kept.push(alias);
-        continue;
-      } catch (error) { if (!(error instanceof FileSystemError) || error.code !== "not_found") throw error; }
-    }
-    await fs.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
-    try { await fs.writeFile(path, content, { expectedRevision: 0 }); result.created.push(path); }
-    catch (error) { if (error instanceof FileSystemError && error.code === "conflict") result.kept.push(path); else throw error; }
+/** Shared implementation for SDK fixtures and the editable bin tool; only uses VFS methods. */
+async function installDemoFiles(fs: Pick<VirtualFileSystem, "mkdir" | "listDirectory" | "writeFiles">, files: Readonly<Record<string, string>>): Promise<{ created: string[]; kept: string[] }> {
+  const kept: string[] = [];
+  const pending: Array<{ path: string; content: string; expectedRevision: number }> = [];
+  for (const [path, content] of Object.entries(files)) {
+    const directory = path.slice(0, path.lastIndexOf("/"));
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    await fs.mkdir(directory, { recursive: true });
+    const entries = await fs.listDirectory(directory);
+    const existing = entries.find(entry => {
+      const candidate = entry.path.split("/").pop();
+      return candidate === name || (name === "AGENTS.md" || name === "SKILL.md") && candidate === name.toLowerCase();
+    });
+    if (existing) { kept.push(existing.path); continue; }
+    pending.push({ path, content, expectedRevision: 0 });
   }
-  return result;
+  // A concurrent create fails the batch rather than overwriting user files.
+  if (pending.length) await fs.writeFiles(pending);
+  return { created: pending.map(file => file.path), kept };
 }
+
+/** Explicit demo setup, never overwrites a user's existing workspace files. */
+export function installJokeDemo(fs: VirtualFileSystem): Promise<{ created: string[]; kept: string[] }> {
+  return installDemoFiles(fs, JOKE_DEMO_FILES);
+}
+
+export const JOKE_DEMO_SOURCE = `async function main(args, api) {
+  const installed = await (${installDemoFiles.toString()})(api.fs, ${JSON.stringify(JOKE_DEMO_FILES)});
+  return { ...installed, prompt: ${JSON.stringify(JOKE_PROMPT)} };
+}`;

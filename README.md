@@ -55,15 +55,15 @@ for file in *.txt; do echo "$file"; done
 
 Shell 只操作目前 workspace 的虛擬 `/`，`~`／HOME 為 `/home/user`；沒有宿主磁碟、任意 binary、網路、Node／Python、hard links、gzip codecs 或 sqlite3。執行有來源／步數／記憶體／輸出與時間上限，Stop 會終止 Worker；已開始提交的寫入可能成功，結果不確定時先讀回。
 
-對話、預覽與工具目錄操作使用 UI：
+對話使用分頁管理，預覽與工作區操作由 AI 呼叫 bin 工具：
 
 | 操作 | 入口 |
 |---|---|
 | Shell／AI 切換 | pane 上方 AI／Shell toggle；agent 中也可 `/exit` 返回 shell |
-| 新對話、恢復歷史 | 開啟新分頁、History／Resume |
-| HTML 預覽 | Workspace → Preview file → Open preview |
-| 笑話範例與 JS 工具更新 | Workspace → Install joke demo／Reload AI tools |
-| 回到 home、用法 | Workspace → Home／Shell guide |
+| 獨立對話、還原分頁 | 開啟新分頁建立 session；重新整理還原已開啟分頁 |
+| HTML 預覽 | AI 呼叫 `open_preview({path: "~/main.html"})` |
+| 笑話範例與 JS 工具更新 | AI 呼叫 `install_joke_demo({})`／`reload_tools({})` |
+| 回到 home、用法 | AI 呼叫 `home({})`／`shell_guide({})` |
 
 Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒有同名 CLI／JSON 相容層；也不執行使用者 JS 作為 trusted shell command。人類 editor 已退出本階段。
 
@@ -104,11 +104,11 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 一般讀取、列目錄、搜尋與文字轉換優先使用 `bash`；bin 的 `ls`／`find`／`grep` 保留相容用途。需要 revision、完整讀取證據、原子多檔寫入或精確替換時，使用結構化 `read`／`write`／`edit`。完整指令與工具清單見 [agents.md](agents.md)。工具呼叫與 `help` 查詢名稱不分大小寫；Bash 的 `if`／`then`／`for` 等語法關鍵字仍採標準大小寫。
 
-預設結構化工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`、`agents`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 Workspace → Reload AI tools。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設結構化工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`、`agents`、`shell_guide`、`home`、`open_preview`、`install_joke_demo`、`reload_tools`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
 
 快速體驗檔案式 skill：
 
-1. 使用 Workspace → Install joke demo，沿用預設 agents.md，建立 joke-master skill、評分參考與五個笑話，既有檔案不覆寫；已有小寫 agents.md／skill.md 時沿用原檔。
+1. 使用 AI 呼叫 `install_joke_demo({})`，沿用預設 agents.md，建立 joke-master skill、評分參考與五個笑話，既有檔案不覆寫；已有小寫 agents.md／skill.md 時沿用原檔。
 2. 在 settings 連接 Groq，切換至 AI。
 3. 用英文詢問：`Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.`
 4. 檢閱中文評分、冠軍原文、讀檔來源與 revision；修改檔案後可要求重新讀取與評分。
@@ -117,7 +117,7 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 ## 主頁預覽與 popup
 
-使用 Workspace → Preview file 輸入 `~/main.html`，按 Open preview。檔案不存在時，按「建立主頁範本」才會寫入；也可先用 shell 重導向建立檔案。
+使用 AI 呼叫 `open_preview({path: "~/main.html"})`。檔案不存在時，按「建立主頁範本」才會寫入；也可先用 shell 重導向建立檔案。
 
 右下角「開啟 Pi」會打開共用該 workspace 檔案的 popup。連接 Groq 後，可要求 agent 修改 `~/main.html`。檔案有更新時，按「重新載入預覽」套用內容；刷新只更新頁面 iframe，保留 popup 的對話、草稿與 active run。
 
@@ -159,6 +159,7 @@ npm run verify:dist
 | `npm run test:embed:vfs:browser` | 不同 localhost origin 的 HTTP embed：原生／缺少 `crypto.randomUUID` 的 VFS 初始化、Worker 讀寫、預覽及 reload；先 build，runner 自行啟動 preview 與宿主，不需 API key |
 | `npm run test:mobile:browser` | just-bash 輸入、模擬鍵盤、捲動、設定表單與 popup 草稿；先啟動 production preview，不需 API key |
 | `npm run test:host:browser` | Popup workspace 隔離、reload、宿主 HTML 分頁及來源身分；production preview，本機 fixture，不需 key |
+| `npm run test:workspace:browser` | 移除舊工具列、五項 bin 操作、獨立 cwd、預覽與 session 還原 |
 | `npm run test:tabs:browser` | 同頁雙 AI sessions 的 list／send／read、精確轉述、來源身分與 request 過期；production preview，本機 fixture，不需 key |
 | `npm run test:jokes` | 真實 Groq 的五檔評分、歷史恢復、建立五檔並讀回；使用 `.env.local` 的 key |
 | `npm run test:jokes:browser` | 真正瀏覽器 UI／IndexedDB／Worker 的笑話驗收；先啟動 dev server，使用 `.env.local` 的 key，Node 需支援 TypeScript stripping |

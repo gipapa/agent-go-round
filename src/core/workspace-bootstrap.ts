@@ -9,6 +9,7 @@ export const DEFAULT_TOOL_CATALOG = `${TOOL_CATALOG_START}
 優先使用 bash 處理一般檔案操作；需要 revision、完整讀取證據、原子寫入或精確替換時使用 read/write/edit。
 工具資訊按需查詢：help({}) 列出工具；help({command: "工具名稱"}) 取得用途與 JSON schema；help({command: "bash"}) 取得可用指令、內建與限制。Shell 內建說明使用 bash({script: "help"})。
 指令及工具名稱不分大小寫；路徑、變數、參數內容與 JSON 欄位保留大小寫。技能先用 skill_load 載入，再讀取引用資源。
+工作區操作使用 bin 工具：shell_guide、home、open_preview、install_joke_demo、reload_tools；修改 ~/bin 後呼叫 reload_tools({})，下一輪套用。
 ${TOOL_CATALOG_END}`;
 export const DEFAULT_AGENT_RULES = `請回覆繁體中文\n\n${DEFAULT_TOOL_CATALOG}`;
 

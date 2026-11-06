@@ -84,11 +84,11 @@ describe("Groq real-model file/skill joke acceptance", () => {
       await task("five-existing-jokes", JOKE_PROMPT, "~/jokes");
       const firstAnswer = report.tasks[0].text as string;
       const snapshot = session.snapshot();
-      await store.remember({ id: "main", name: "Joke acceptance", branch: "master", path: "~", cwd: "/home/user", agentCwd: "/home/user", provider: "groq", mode: "agent", draft: "", transcript: [], session: snapshot });
-      const resumed = await new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory, "joke-acceptance")).resume("joke-live");
+      await store.save({ version: 1, activeTabId: "main", nextTabNumber: 2, provider: "groq", savedAt: Date.now(), tabs: [{ id: "main", name: "Joke acceptance", branch: "master", path: "~", cwd: "/home/user", agentCwd: "/home/user", provider: "groq", mode: "agent", draft: "", transcript: [], session: snapshot }] });
+      const restored = await new IndexedDbConversationStore(new IndexedWorkspaceRecords(factory, "joke-acceptance")).load();
       fs = new IndexedDbFileSystem(factory, "joke-acceptance");
       await fs.writeFile("~/jokes/笑話1.md", "圖書館的電腦說自己很安靜，因為所有問題都用靜音模式回答。今天換成了全新的版本。");
-      session = AgentSession.fromSnapshot(resumed.session, { streamFn, eventStore: events, maxToolCalls: 32, deadlineMs: 360_000 });
+      session = AgentSession.fromSnapshot(restored!.tabs[0].session, { streamFn, eventStore: events, maxToolCalls: 32, deadlineMs: 360_000 });
       const requestStart = requests.length;
       await task("reload-reconnect-and-rescore", "I changed one of the files. Use joke-master again, reread all five current files in ~/jokes, score each, and choose the funniest one.", "~/jokes");
       expect((requests[requestStart].messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>).some((message) => message.role === "assistant" && message.content.some((block) => block.type === "text" && block.text === firstAnswer))).toBe(true);

@@ -2,13 +2,13 @@
 
 更新：2026-11-04。現行終端與 AI bash 使用 just-bash；人類 editor 已移除。完整整合與驗收狀態見 [驗證紀錄](just-bash-progress.md)。
 
-在 shell 建立 HTML，再使用 Workspace → Preview file → Open preview 開啟。預設 entry 為 `~/main.html`；檔案不存在時，按「建立主頁範本」才寫入，不覆寫已有內容。
+在 shell 建立 HTML，再使用 AI 呼叫 `open_preview({path: "~/main.html"})` 開啟。預設 entry 為 `~/main.html`；檔案不存在時，按「建立主頁範本」才寫入，不覆寫已有內容。
 
 ```sh
 printf '<h1>我的主頁</h1>' > ~/main.html
 ```
 
-預覽右下角的「開啟 Pi」掛載現有 popup。連接 Groq，即可要求 agent 透過 bash 或結構化工具讀寫同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。開啟新分頁、History／Resume 管理對話；`/exit` 返回 shell。
+預覽右下角的「開啟 Pi」掛載現有 popup。連接 Groq，即可要求 agent 透過 bash 或結構化工具讀寫同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。每個新分頁建立獨立 session，重新整理還原已開啟的分頁；`/exit` 返回 shell。
 
 檔案更新後顯示「檔案有更新」，按「重新載入預覽」才套用。刷新僅替換頁面 iframe，保留 popup 對話、草稿及執行中的任務；切換 tabs 也保留 popup。整頁 reload 恢復 entry、surface 與對話，未保存 key 時需重新連線，不自動重送模型請求或工具副作用。
 

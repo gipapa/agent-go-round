@@ -42,6 +42,7 @@ async function setup(fs: VirtualFileSystem, services: ConstructorParameters<type
     return structuredClone(await runInNewContext(`(${source})`, {}, { timeout: 1000 })(args, {
       fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])),
       skills: { load: (name: string) => rpc("loadSkill", [name]) }, host: { readPage: (options: unknown) => rpc("readHostPage", [options]) },
+      workspace: { home: () => rpc("home", []) },
       agents: { execute: (options: unknown) => rpc("tabAgents", [options]) }, tools: { help: (name?: string) => rpc("commandHelp", [name]) }
     }));
   } }, services); await bin.reload();
@@ -94,6 +95,25 @@ describe.each([
     const results = session.agent.state.messages.filter(message => message.role === "toolResult");
     expect(JSON.stringify(results)).toContain("maxSteps"); // Native bash help schema is available through help.
   });
+});
+
+it("home updates Bash and relative file tools within the same Pi run", async () => {
+  const fs = new MemoryFileSystem(), { bin, shell } = await setup(fs);
+  await fs.writeFile("~/at-home.txt", "home content");
+  const { session } = fixture([
+    [call("leave-home", "bash", { script: "cd /tmp" })],
+    [call("return-home", "home", {})],
+    [call("read-home", "read", { path: "at-home.txt" })],
+    [call("bash-home", "bash", { script: "pwd; cat at-home.txt" })],
+    "completed"
+  ]);
+  const cwd: string[] = [];
+  await configureFileAgent(session, fs, "/home/user", bin, undefined, [], { shell, onCwd: value => cwd.push(value) });
+  expect(await session.prompt("return home and inspect the file")).toMatchObject({ status: "success" });
+  const results = session.agent.state.messages.filter(message => message.role === "toolResult");
+  expect(results.every(result => !result.isError)).toBe(true);
+  expect(JSON.stringify(results)).toContain("/home/user\\nhome content");
+  expect(cwd).toEqual(["/tmp", "/home/user", "/home/user"]);
 });
 
 it("binds late committed writes to their original run and never replays an unknown script on resume", async () => {

@@ -67,3 +67,56 @@ export function browser(session) {
 export function assert(value, message) { if (!value) throw new Error(message); }
 export const shellQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 export const writeFiles = files => files.map(({ path, content }) => `printf '%s' ${shellQuote(content)} > ${shellQuote(path.replace(/^~(?=\/|$)/, "/home/user"))}`).join("; ");
+
+// Shared acceptance path for operations that used to have Workspace buttons.
+export async function workspaceToolFixture() {
+  let nextToolId = 0;
+  return fixtureProvider({
+    "Workspace tool fixture: ": body => {
+      if (body.messages.at(-1).role === "tool") return "工具操作完成。";
+      const content = [...body.messages].reverse().find(message => message.role === "user").content;
+      const prompt = typeof content === "string" ? content : content.map(block => block.text || "").join("");
+      const { name, args } = JSON.parse(prompt.slice(prompt.indexOf("{")));
+      return [tool(`workspace-tool-${++nextToolId}`, name, args)];
+    },
+    "": () => "工作區測試回覆。"
+  });
+}
+
+// Serialized into a fixture page or evaluated through agent-browser.
+export async function runWorkspaceToolInPage(baseUrl, name, args = {}, doc = document) {
+  const until = async test => {
+    const start = Date.now();
+    while (!test()) {
+      if (Date.now() - start > 25000) throw new Error(`Workspace tool timed out: ${name}`);
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+  };
+  await until(() => doc.querySelector("#send") && !doc.querySelector("#send").disabled);
+  doc.querySelector("#provider-toggle").click();
+  doc.querySelector("#base-url").value = baseUrl;
+  doc.querySelector("#api-key").value = "acceptance-fixture";
+  doc.querySelector("#model").value = "fixture-model";
+  doc.querySelector("#context-window").value = "128000";
+  doc.querySelector("#remember-key").checked = false;
+  doc.querySelector("#provider-form").requestSubmit();
+  await until(() => doc.querySelector("#settings-drawer").hidden);
+  if (doc.querySelector("#mode-toggle").getAttribute("aria-checked") !== "true") {
+    doc.querySelector("#mode-toggle").click();
+    await until(() => doc.querySelector("#mode-toggle").getAttribute("aria-checked") === "true");
+  }
+  const sourceIndex = [...doc.querySelectorAll("#tab-list .tab")].findIndex(tab => tab.getAttribute("aria-selected") === "true");
+  doc.querySelector("#prompt").value = `Workspace tool fixture: ${JSON.stringify({ name, args })}`;
+  doc.querySelector("#terminal-form").requestSubmit();
+  await until(() => !doc.querySelector("#tab-list .status-dot.working") && !doc.querySelector("#send").disabled);
+  const finalIndex = [...doc.querySelectorAll("#tab-list .tab")].findIndex(tab => tab.getAttribute("aria-selected") === "true");
+  if (sourceIndex !== finalIndex) {
+    doc.querySelectorAll("#tab-list .tab")[sourceIndex].click();
+    await until(() => !doc.querySelector("#send").disabled);
+    doc.querySelectorAll("#tab-list .tab")[finalIndex].click();
+  }
+  if (doc.querySelector("#tab-list .status-dot.error")) throw new Error(`Workspace tool failed: ${name}: ${doc.querySelector("#terminal").textContent.slice(-2000)}`);
+  return true;
+}
+
+export const workspaceToolScript = (baseUrl, name, args = {}) => `(${runWorkspaceToolInPage.toString()})(${JSON.stringify(baseUrl)},${JSON.stringify(name)},${JSON.stringify(args)})`;

@@ -1,6 +1,8 @@
 # ~/bin：JavaScript 檔案工具
 
-目前提供 IndexedDB VFS、結構化 AI 檔案工具、skill_load、歷史恢復、AGENTS.md／skills，以及 [HTML 主頁與 popup 預覽](page-preview.md)。主終端已改為 just-bash，工具 JS 仍在既有 sandbox／capability 邊界內執行，不註冊為 trusted custom shell commands。
+每個 tab 綁定一個 session，保留 AI／Shell 切換與重新整理還原；沒有 History／Resume 或 Workspace 選單。工作區操作統一使用下列 bin 工具。
+
+目前提供 IndexedDB VFS、結構化 AI 檔案工具、skill_load、分頁 session 保存、AGENTS.md／skills，以及 [HTML 主頁與 popup 預覽](page-preview.md)。主終端已改為 just-bash，工具 JS 仍在既有 sandbox／capability 邊界內執行，不註冊為 trusted custom shell commands。
 
 新 tab 預設 AI 模式，從 `~` 開始，使用 AI／Shell toggle 切換；agent 可用 `/exit` 返回 shell。真實模型使用工具需先連接 provider。相同 workspace 的 tabs 共用 bytes 檔案，各有 cwd；`?workspace=NAME` 隔離檔案與歷史。
 
@@ -25,6 +27,11 @@ bash 的 `readBytes`／metadata／寫入／remove 紀錄由同一筆 VFS 交易�
   read_host_page.js
   help.js
   agents.js
+  shell_guide.js
+  home.js
+  open_preview.js
+  install_joke_demo.js
+  reload_tools.js
   manifests/
     read.tool.json
     write.tool.json
@@ -36,10 +43,20 @@ bash 的 `readBytes`／metadata／寫入／remove 紀錄由同一筆 VFS 交易�
     read_host_page.tool.json
     help.tool.json
     agents.tool.json
+    shell_guide.tool.json
+    home.tool.json
+    open_preview.tool.json
+    install_joke_demo.tool.json
+    reload_tools.tool.json
 ```
 
 | 工具 | 參數與行為 |
 |---|---|
+| shell_guide | `{}`；顯示 Bash 指令、內建與限制，使用既有 help 能力 |
+| home | `{}`；只將呼叫中的 agent cwd 切回 `/home/user`，不改人類 Shell 或其他 tab；同一輪後續 Bash 與檔案工具立即使用新 cwd |
+| open_preview | 選填 `path`，預設 `~/main.html`；相對路徑依呼叫 agent 的 cwd 解析。開啟或切換至同一檔案的預覽 tab；需要 app 預覽服務 |
+| install_joke_demo | `{}`；在 bin JS 透過 VFS 安裝笑話範例，只補缺檔，回傳 created／kept 與建議 prompt，不直接執行評分 |
+| reload_tools | `{}`；原子重載 JS 與 manifests，失敗保留舊 catalog；新定義在下一次 agent run 生效，進行中的 run 保留原定義 |
 | read | `path` 可為單一路徑或最多 32 個路徑的陣列，選填 `offset`（行號，從 1 開始）、`limit`；回傳內容、revision、totalLines、nextOffset |
 | write | 單檔用 `path`／`content`；多檔用 `files:[{path,content,expectedRevision?}]` 原子提交，最多 32 檔。`createParents:true` 建父目錄；覆寫需提供 revision；回傳 path、revision、bytes（UTF-8） |
 | edit | `path`、`oldText`、`newText`，選填 `replaceAll`、`expectedRevision`；精確替換，多處匹配預設失敗 |
@@ -59,7 +76,7 @@ VFS 的 `stat`／`listDirectory`／寫入結果只提供 `FileStat`；只有 `re
 
 AI 的 `help` 查詢工具 catalog／schema，`agents` 維持結構化 list／send／read。目標須已進入 AI 且已連線；pending 時讀同一 requestId，不重新 send。手動跨 tab 提問 UI 仍使用相同 router。來源身份從呼叫中的 session 綁定，切換目前可見 tab 不會改變來源。
 
-跨 tab 請求在本頁記憶體保存；reload 不重播。取消 read 只停止來源等待；停止目標需切到該 tab 按 Stop。對話／工具結果仍保存於歷史。
+跨 tab 請求在本頁記憶體保存；reload 不重播。取消 read 只停止來源等待；停止目標需切到該 tab 按 Stop。對話／工具結果仍保存在各 tab 的 session。
 
 ## 擴充自己的工具
 
@@ -89,21 +106,23 @@ async function main(args, api) {
 }
 ```
 
-使用 Workspace → Reload AI tools，之後 AI 可用結構化參數呼叫 `hello`。修改 JS 或 manifest 後再重新載入。已經開始的 agent run 保留原本工具定義，下一次 user run 才註冊新版本。
+使用 `reload_tools({})`，之後 AI 可用結構化參數呼叫 `hello`。修改 JS 或 manifest 後再重新載入。已經開始的 agent run 保留原本工具定義，下一次 user run 才註冊新版本。
 
 工具函式可用的 `api.fs` 方法為 `stat`、`readFile`、`listDirectory`、`writeFile`、`writeFiles`、`mkdir`、`remove`；每一項必須列在 manifest capabilities。相對路徑依呼叫 tab 的 cwd 解析，所有路徑限定在該 workspace 的虛擬 `/`，`~` 為 `/home/user`。`stat` / `listDirectory` 不回傳檔案正文，內容必須透過 `readFile` 取得。寫入可帶 `{ expectedRevision }`，新增可用 0。
+
+`api.workspace.home()` 需要 `home` capability，由呼叫 session 的 cwd callback 更新本輪目錄；`api.workspace.openPreview(path?)` 需要 `openPreview` capability，宿主重新驗證路徑並依呼叫 cwd 解析，再交由 UI 開啟預覽。工具只能透過這個受控入口操作預覽，沒有 DOM 存取權。`api.tools.reload()` 需要 `reloadTools` capability，由 registry 原子重載，沒有直接操控 session 的能力。
 
 `api.skills.load(name)` 需要 manifest 的 `loadSkill` capability，並只在 Pi 配置過的本輪 skill catalog 中解析名稱。工具 JS 無法自行把任意文字當作工作區指示。
 
 `api.agents.execute({action,target?,text?,requestId?,waitMs?})` 需要 `tabAgents` capability。宿主再次驗證參數，來源 tab 由執行中的 session context 決定，工具無法傳入來源 ID 冒充另一個 tab。只有發起請求的 tab 可讀其結果；模型收到的跨 tab 回覆是任務資料，不是 system instructions。
 
-`api.host.readPage({offset?,limit?})` 需要 `readHostPage` capability，經可信任 bridge 取得宿主資料；宿主不存在時明確報錯，參數由 trusted host 再驗證。`api.tools.help(command?)` 需要 `commandHelp` capability。修改這些工具的 JS／manifest 後同樣以 Workspace → Reload AI tools 套用，沒有另外繞過 bin 的同名工具。
+`api.host.readPage({offset?,limit?})` 需要 `readHostPage` capability，經可信任 bridge 取得宿主資料；宿主不存在時明確報錯，參數由 trusted host 再驗證。`api.tools.help(command?)` 需要 `commandHelp` capability。修改這些工具的 JS／manifest 後同樣以 `reload_tools({})` 套用，沒有另外繞過 bin 的同名工具。
 
 執行器使用 opaque-origin sandbox iframe 內的 Worker，透過 MessageChannel 呼叫受控的 VFS API。工具不直接取得 app DOM、IndexedDB 或 provider credentials；CSP 阻擋網路與外部程式載入。因此 JS 格式目前是自足的函式，不支援 ESM imports、npm packages 或 Node API。
 
 單次執行預設 10 秒、最多 8192 次 filesystem RPC、結果最多 128000 字元；Worker 可被 Stop 中止。若寫入已開始但工具未完成，回報 `outcome_unknown`，需要先讀回，不能自動重做。每檔最多 512 KiB，workspace 最多 2048 個節點及 16 MiB bytes。
 
-預設安裝只補缺檔，保留自訂工具，不自動升級使用者修改過的來源。移除損壞的自訂 manifest 可用 shell `rm ~/bin/manifests/hello.tool.json`，再按 Reload AI tools。舊 `restore-bin`／`rehash` CLI 已移除。
+預設安裝只補缺檔，保留自訂工具，不自動升級使用者修改過的來源。移除損壞的自訂 manifest 可用 shell `rm ~/bin/manifests/hello.tool.json`，再請 AI 呼叫 `reload_tools({})`。舊 `restore-bin`／`rehash` CLI 已移除。
 
 ## 整合前驗證紀錄（歷史）
 

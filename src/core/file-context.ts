@@ -111,7 +111,7 @@ export async function configureFileAgent(session: AgentSession, fs: VirtualFileS
       session.recordContextSource({ kind: "skill", path: skill.path, revision: skill.revision }, id);
       session.recordFileAccess(id, "readFile", skill.path, skill.revision);
       return { ...skill, directory: skill.path.slice(0, skill.path.lastIndexOf("/")) };
-    }, session.sessionId);
+    }, session.sessionId, cwd => { run.cwd = cwd; runtime.onCwd?.(cwd); });
   const allTools = [...local, createBashTool(session, shell, run, runtime.onCwd), ...extraTools];
   if (new Set(allTools.map((tool) => tool.name.toLowerCase())).size !== allTools.length) throw new Error("Tool name conflicts with ~/bin");
   session.setSystemPrompt(context.systemPrompt, context.sources);

@@ -5,7 +5,7 @@
 ## 自己操作
 
 1. `npm run dev`，開啟顯示的 URL。新 tab 位於 `~`。
-2. 新 workspace 已有空白 `~/skills/` 及內容為「請回覆繁體中文」的 `~/agents.md`。使用 Workspace → Install joke demo，建立示例 skill 與笑話：既有檔案不覆寫，也沿用同位置的小寫 `agents.md`／`skill.md`，避免建立大小寫重複檔；若有自己的規則或同名 skill，請另開 `?workspace=jokes-demo`。
+2. 新 workspace 已有空白 `~/skills/` 及內容為「請回覆繁體中文」的 `~/agents.md`。使用 AI 呼叫 `install_joke_demo({})`，建立示例 skill 與笑話：既有檔案不覆寫，也沿用同位置的小寫 `agents.md`／`skill.md`，避免建立大小寫重複檔；若有自己的規則或同名 skill，請另開 `?workspace=jokes-demo`。
 
 ```text
 ~/agents.md
@@ -25,7 +25,7 @@ Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each
 5. `/exit` 回 shell，以 `printf`／重導向修改 `~/jokes/笑話1.md` → reload → reconnect → 按 AI。英文要求重新讀取五個檔案並評分，必須讀到新 revision。
 6. `/exit` → 開啟新分頁，用英文請 agent 建立另一個目錄中的五個新笑話，逐檔讀回、評分、選出冠軍。新對話共用同一份 VFS；歷史接續在上一步驗證。`/exit` 後用 `ls`、`cat` 檢閱實際檔案。
 
-History／Resume 恢復持久化對話，開啟新分頁 另起對話。關 tab 保留歷史；Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
+每個 tab 是獨立 session；開啟新分頁建立新對話，重新整理還原已開啟的分頁，關閉的 tab 不提供 History／Resume。Groq reload 後等待重新連線，不把保存的 transcript 替換成空 runtime。Shell output 不自動塞進模型對話。
 
 ## 重跑指令
 

@@ -1,3 +1,4 @@
+import { workspaceToolFixture, workspaceToolScript } from "./browser-fixture.mjs";
 // Run against the dev server: AGENT_BROWSER_CLI=/path/to/agent-browser.js npm run test:jokes:browser
 import { loadEnvFile } from "node:process";
 import { execFile } from "node:child_process";
@@ -11,6 +12,7 @@ if (!key) throw new Error("Set AGENT_GO_ROUND_GROQ_API_KEY in .env.local");
 const cli = process.env.AGENT_BROWSER_CLI || "agent-browser";
 const prefix = cli.endsWith(".js") ? [process.execPath, cli] : [cli];
 const run = promisify(execFile);
+const toolsFixture = await workspaceToolFixture();
 const sessionName = "agr-jokes-acceptance";
 async function call(...args) {
   try { const result = await run(prefix[0], [...prefix.slice(1), "--session", sessionName, ...args], { maxBuffer: 8 * 1024 * 1024 }); return result.stdout.trim(); }
@@ -35,6 +37,8 @@ async function command(text) {
 async function connect() {
   await call("click", "#provider-toggle");
   await call("fill", "#api-key", key);
+  await call("fill", "#base-url", process.env.AGENT_GO_ROUND_GROQ_BASE_URL || "https://api.groq.com/openai/v1");
+  await call("fill", "#model", process.env.AGENT_GO_ROUND_GROQ_MODEL || "openai/gpt-oss-120b");
   if (process.env.AGENT_GO_ROUND_GROQ_MODEL) await call("fill", "#model", process.env.AGENT_GO_ROUND_GROQ_MODEL);
   await call("uncheck", "#remember-key");
   await call("click", 'button[form="provider-form"]');
@@ -92,8 +96,8 @@ try {
     if (!sources.some(event => event.source.kind === "agents") || sources.some(event => event.source.kind === "skill") || state.tab.session.activeSkill) throw new Error("Language rule was not isolated from skills");
     report.tasks.push({ id: "agents-only-english-to-chinese", status: "pass", model: state.tab.session.model.id, text: last.text, sources });
   } else {
-  await call("click", ".workspace-menu > summary"); await call("click", "#install-demo");
-  const demoDeadline=Date.now()+15000;while(Date.now()<demoDeadline){if(await evaluate('document.querySelector("#terminal").textContent.includes("Joke demo:")'))break;await new Promise(r=>setTimeout(r,100))}
+  await evaluate(workspaceToolScript(toolsFixture.baseUrl, "install_joke_demo"));
+  await call("click", "#mode-toggle");
   await connect(); await call("click", "#mode-toggle");
   const first = await command("Use the joke-master skill to read all five Markdown jokes in ~/jokes, score each one, and give me the funniest joke.");
   report.tasks.push(await grade("browser-five-existing-jokes", first, "/home/user/jokes"));
@@ -124,6 +128,7 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = String(error.message).replaceAll(key, "[redacted]"); process.exitCode = 1; }
 finally {
+  await toolsFixture.close();
   await mkdir("test-results", { recursive: true });
   await writeFile(process.env.AGENT_GO_ROUND_JOKE_BROWSER_REPORT || `test-results/${languageOnly ? "language-browser" : "jokes-browser"}.json`, JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2));
   console.log(JSON.stringify({ status: report.status, tasks: report.tasks.map(({ id, status }) => ({ id, status })), failure: report.failure }));

@@ -1,4 +1,4 @@
-import { fixtureProvider, sequence, tool, writeFiles } from "./browser-fixture.mjs";
+import { fixtureProvider, sequence, tool, writeFiles, workspaceToolFixture, workspaceToolScript } from "./browser-fixture.mjs";
 import { loadEnvFile } from "node:process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -48,6 +48,7 @@ async function durable(workspace = workspaceId) {
 }
 const workspaceId = `preview-${Date.now()}`;
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", workspaceId);
+const toolsFixture = await workspaceToolFixture();
 const report = { startedAt: new Date().toISOString(), url: url.href, workspaceId, model: (live ? process.env.AGENT_GO_ROUND_GROQ_MODEL || "qwen/qwen3.8-27b" : "fixture-model"), provider: live ? "live Groq" : "local HTTP/SSE fixture", checks: [], status: "running" };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
@@ -58,7 +59,7 @@ try {
     { path: "~/styles.css", content: 'body{background:#f6f3ed;padding:40px;font-family:system-ui}h1{color:rgb(17,34,51)}img{width:48px;height:48px}' },
     { path: "~/logo.svg", content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="12" fill="#8360af"/></svg>' }
   ]));
-  await evaluate("(() => {document.querySelector('#preview-entry').value='main.html';document.querySelector('#open-preview-form').requestSubmit();return true;})()");
+  await evaluate(workspaceToolScript(toolsFixture.baseUrl, "open_preview", { path: "main.html" }));
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('Original title')");
   await wait(`Boolean(${d}?.querySelector('#send') && !${d}.querySelector('#send').disabled)`);
   const surface = await evaluate(`new URL((${p}).src).searchParams.get('surface')`);
@@ -96,10 +97,11 @@ try {
   check("committed page edit is visible after explicit refresh");
   await call("screenshot", "test-results/preview-popup-desktop.png");
   await evaluate("(() => {document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.close').click();document.querySelector('#tab-list .tab').click();return true;})()");
+  await send("/exit");
   await send("cat main.html");
   assert(await evaluate("document.querySelector('#terminal').textContent.includes('Updated by Pi')"), "Shell cannot inspect popup edit");
   await send(writeFiles([{ path: "~/styles.css", content: 'body{background:#edf5ed;padding:40px;font-family:system-ui}h1{color:rgb(40,80,40)}img{width:48px;height:48px}', } ]));
-  await evaluate("(() => {document.querySelector('#preview-entry').value='main.html';document.querySelector('#open-preview-form').requestSubmit();return true;})()");
+  await evaluate(workspaceToolScript(toolsFixture.baseUrl, "open_preview", { path: "main.html" }));
   assert(await evaluate(`${w}.__previewToken==='preserve-popup'`), "Switching tabs remounted popup");
   await wait("document.querySelector('.preview-status').textContent.includes('更新')");
   await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(n=>n.textContent==='重新載入預覽').click();return true;})()");
@@ -144,6 +146,7 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = String(error.message).replaceAll(key, "[redacted]"); process.exitCode = 1; }
 finally {
+  await toolsFixture.close();
   await mkdir("test-results", { recursive: true });
   await writeFile("test-results/preview-browser.json", JSON.stringify({ ...report, finishedAt: new Date().toISOString() }, null, 2));
   console.log(JSON.stringify({ status: report.status, checks: report.checks, failure: report.failure }));

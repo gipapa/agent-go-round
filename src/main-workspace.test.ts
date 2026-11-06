@@ -5,16 +5,34 @@ import { IDBFactory } from "fake-indexeddb";
 import { IndexedDbFileSystem } from "./core/fs";
 import { IndexedDbConversationStore, IndexedWorkspaceRecords } from "./core/conversations";
 
+vi.mock("./core/bin-sandbox", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const { FILE_METHODS } = await import("./core/file-capabilities");
+  return { SandboxedBinExecutor: class {
+    async execute(source: string, args: unknown, rpc: import("./core/bin-sandbox").FileRpc) {
+      return structuredClone(await runInNewContext(`(${source})`, {}, { timeout: 1000 })(args, {
+        fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])),
+        workspace: { home: () => rpc("home", []), openPreview: (path?: string) => rpc("openPreview", [path]) },
+        tools: { help: (command?: string) => rpc("commandHelp", [command]), reload: () => rpc("reloadTools", []) }
+      }));
+    }
+  } };
+});
+let nextTool: { name: string; arguments: string } | undefined;
 let requests: Array<{ messages: Array<{ role: string; content: string }> }>;
 beforeEach(() => {
   vi.stubGlobal("indexedDB", new IDBFactory());
   const values = new Map<string, string>();
   Object.defineProperty(window, "localStorage", { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) } });
-  requests = [];
+  requests = []; nextTool = undefined;
   vi.stubGlobal("fetch", vi.fn(async (_input, init: RequestInit) => {
     if (!init.body) return new Response("", { status: 404 });
     const body = JSON.parse(init.body as string);
     requests.push({ ...body, messages: body.messages.map((message: { role: string; content: unknown }) => ({ ...message, content: Array.isArray(message.content) ? message.content.map((block) => block.text ?? "").join("") : message.content })) });
+    if (nextTool) {
+      const call = nextTool; nextTool = undefined;
+      return new Response(`data: ${JSON.stringify({ id: "tool-fixture", model: "openai/gpt-oss-120b", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: `bin-call-${requests.length}`, type: "function", function: call }] }, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    }
     const chunks = [
       { choices: [{ index: 0, delta: { role: "assistant", content: "好，已記住。" }, finish_reason: null }] },
       { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }
@@ -33,28 +51,28 @@ async function send(text: string): Promise<void> {
   document.querySelector<HTMLTextAreaElement>("#prompt")!.value = text;
   document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")?.disabled).toBe(false));
+  await vi.waitFor(() => expect(document.querySelector("#tab-list .status-dot.working")).toBeNull());
 }
 async function enterAgent() {
   if (document.querySelector("#mode-toggle")!.getAttribute("aria-checked") !== "true") document.querySelector<HTMLButtonElement>("#mode-toggle")!.click();
   await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
 }
+async function callTool(name: string, args: unknown = {}) {
+  await enterAgent(); await connect();
+  nextTool = { name, arguments: JSON.stringify(args) };
+  await send(`Call ${name}`);
+  if (name === "open_preview") {
+    const tabs = document.querySelectorAll<HTMLButtonElement>("#tab-list .tab");
+    tabs[0].click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
+    document.querySelectorAll<HTMLButtonElement>("#tab-list .tab")[tabs.length - 1].click();
+  }
+}
 async function openPreviewFixture(path: string) {
-  document.querySelector<HTMLInputElement>("#preview-entry")!.value = path;
-  document.querySelector<HTMLFormElement>("#open-preview-form")!.requestSubmit();
+  await callTool("open_preview", { path });
   await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("頁面預覽"));
 }
-async function installDemo() {
-  document.querySelector<HTMLButtonElement>("#install-demo")!.click();
-  await vi.waitFor(() => expect(document.querySelector("#terminal")!.textContent).toContain("Joke demo:"));
-}
-async function resume(id: string) {
-  document.querySelector<HTMLButtonElement>("#history-toggle")!.click();
-  await vi.waitFor(() => expect(document.querySelector(`option[value="${id}"]`)).not.toBeNull());
-  document.querySelector<HTMLSelectElement>("#conversation-list")!.value = id;
-  document.querySelector<HTMLButtonElement>("#resume-conversation")!.click();
-  await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#conversation-history")!.hidden).toBe(true));
-  await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("AI agent"));
-}
+async function installDemo() { await callTool("install_joke_demo"); }
 async function connect(): Promise<void> {
   document.querySelector<HTMLButtonElement>("#provider-toggle")!.click();
   document.querySelector<HTMLInputElement>("#api-key")!.value = "fixture-secret-never-in-snapshot";
@@ -66,7 +84,7 @@ async function saved() {
   return new IndexedDbConversationStore(new IndexedWorkspaceRecords(window.indexedDB)).load();
 }
 
-describe("UI history at the real provider request boundary", () => {
+describe("Tab sessions at the real provider request boundary", () => {
   it("shows native model events while waiting and streaming, then clears them when finished", async () => {
     let respond!: (response: Response) => void;
     let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -134,7 +152,8 @@ describe("UI history at the real provider request boundary", () => {
     const toggle = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
     expect(toggle.getAttribute("role")).toBe("switch");
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    expect(document.querySelector("#new-conversation")).toBeNull();
+    for (const selector of ["#new-conversation", "#history-toggle", "#conversation-history", ".workspace-menu"]) expect(document.querySelector(selector)).toBeNull();
+    expect(document.querySelectorAll(".pane-tools button")).toHaveLength(1);
     const before = (await saved())!.tabs[0].session.sessionId;
     toggle.click();
     await vi.waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
@@ -151,17 +170,10 @@ describe("UI history at the real provider request boundary", () => {
     await send("/EXIT");
     expect(document.querySelector("#pane-type")!.textContent).toBe("just-bash");
   });
-  it("resumes a saved identity from History and preserves preview path case", async () => {
+  it("preserves preview path case when opening through bin", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
     await fs.writeFile("~/Mixed.html", "<h1>MiXeD Content</h1>");
-    const initial = await saved();
-    const store = new IndexedDbConversationStore(new IndexedWorkspaceRecords(window.indexedDB));
-    await store.load(); const archived = structuredClone(initial!.tabs[0]); archived.session.sessionId = "History-MiXeD42";
-    await store.remember(archived);
-    await resume("History-MiXeD42");
-    expect((await saved())!.tabs[0].session.sessionId).toBe("History-MiXeD42");
-    await send("/SKILL OFF"); await send("/EXIT");
     await openPreviewFixture("Mixed.html");
     await vi.waitFor(() => expect(document.querySelector<HTMLIFrameElement>(".preview-surface > iframe")?.srcdoc).toContain("MiXeD Content"));
   });
@@ -179,7 +191,7 @@ describe("UI history at the real provider request boundary", () => {
     expect(new URL(popup.src).searchParams.get("surface")).toBe(preview.surfaceId);
     expect((await saved())!.tabs.find(tab => tab.mode === "preview")!.preview).toEqual(preview);
   });
-  it("preserves history across reload, reconnect, repeated Connect, close and resume", async () => {
+  it("preserves the tab session across reload and reconnect, and gives a new tab its own session", async () => {
     await loadApp(); await connect(); await enterAgent(); await send("Remember pineapple-42");
     expect(requests).toHaveLength(1);
     const initial = await saved();
@@ -198,10 +210,13 @@ describe("UI history at the real provider request boundary", () => {
     document.querySelector<HTMLButtonElement>("#add-tab")!.click();
     document.querySelector<HTMLElement>('[aria-label="Close main"]')!.click();
     await vi.waitFor(() => expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(1));
-    await resume(id);
-    expect(document.querySelector("#provider-label")?.textContent).toBe("groq · live");
-    await send("Recall the original code after reopening");
-    expect(requests.at(-1)!.messages).toContainEqual(expect.objectContaining({ content: "Remember pineapple-42" }));
+    const remaining = (await saved())!.tabs[0];
+    expect(remaining.session.sessionId).not.toBe(id);
+    await send("A new task after closing the original tab");
+    expect(requests.at(-1)!.messages.some(message => message.content === "Remember pineapple-42")).toBe(false);
+    await loadApp();
+    expect((await saved())!.tabs).toHaveLength(1);
+    expect((await saved())!.tabs[0].session.sessionId).toBe(remaining.session.sessionId);
   });
 
   it("keeps providers per tab and refreshes file instructions without duplicating old rules", async () => {

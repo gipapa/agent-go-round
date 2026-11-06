@@ -1,3 +1,4 @@
+import { workspaceToolFixture, workspaceToolScript } from "./browser-fixture.mjs";
 // Native IndexedDB and incremental terminal smoke; no model credentials required.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -23,6 +24,7 @@ async function command(text) {
 }
 function assert(value, message) { if (!value) throw new Error(message); }
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", `vfs-${Date.now()}`);
+const toolsFixture = await workspaceToolFixture();
 const report = { url: url.href, status: "running", checks: [] };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
@@ -37,8 +39,9 @@ try {
   assert(report.overwrite.bodies === 0 && report.overwrite.workspaceScans === 0, "Write read unrelated bodies or scanned workspace"); check("native write reads no file bodies or workspace scan");
   await command("ls -l ~/probe"); report.listing = await evaluate("({...window.__reads})");
   assert(report.listing.bodies === 0 && report.listing.workspaceScans === 0, "Metadata listing read file contents"); check("ls -l uses metadata only");
-  await call("click", ".workspace-menu > summary"); await call("click", "#install-demo");
-  const demoDeadline=Date.now()+15000;while(Date.now()<demoDeadline){if(await evaluate('document.querySelector("#terminal").textContent.includes("Joke demo:")'))break;await new Promise(r=>setTimeout(r,100))} assert((await command("cat ~/skills/joke-master/SKILL.md")).includes("name: joke-master"), "Skill path broke"); check("skill is readable from ~/skills");
+  await evaluate(workspaceToolScript(toolsFixture.baseUrl, "install_joke_demo"));
+  await call("click", "#mode-toggle");
+  assert((await command("cat ~/skills/joke-master/SKILL.md")).includes("name: joke-master"), "Skill path broke"); check("skill is readable from ~/skills");
   await call("click", "#mode-toggle");
   // Submit first, then emulate selecting history while the response is streaming.
   const selected = await evaluate(`(()=>{document.querySelector('#prompt').value='Remember refactor-native-check';document.querySelector('#terminal-form').requestSubmit();document.querySelector('#prompt').blur();const node=document.querySelector('#terminal .terminal-line .line-content');window.__oldLine=node;const range=document.createRange();range.selectNodeContents(node);getSelection().removeAllRanges();getSelection().addRange(range);return getSelection().toString()})()`);
@@ -52,6 +55,7 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }
 finally {
+  await toolsFixture.close();
   await mkdir("test-results", { recursive: true }); await writeFile("test-results/vfs-terminal-browser.json", JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report)); await call("close");
 }

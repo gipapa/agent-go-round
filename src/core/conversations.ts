@@ -92,7 +92,7 @@ export class IndexedDbConversationStore {
     const lease = await records.get<Lease>(`lease:${id}`);
     if (lease && lease.owner !== this.writerId && lease.expires > Date.now()) throw new WorkspacePersistenceError("Conversation is running in another browser window");
     const saved = await records.get<SavedConversation>(`session:${id}`);
-    if ((saved?.revision ?? 0) !== (this.revisions.get(id) ?? 0)) throw new WorkspacePersistenceError("Conversation changed in another window; resume it again");
+    if ((saved?.revision ?? 0) !== (this.revisions.get(id) ?? 0)) throw new WorkspacePersistenceError("Conversation changed in another window; reload before continuing");
   }
   async remember(tab: WorkspaceTabSnapshot): Promise<void> {
     const copy = structuredClone(tab), id = tab.session.sessionId;
@@ -102,14 +102,6 @@ export class IndexedDbConversationStore {
       await records.set(`session:${id}`, { revision: next, tab: copy }); return next;
     });
     this.revisions.set(id, revision);
-  }
-  async history(): Promise<WorkspaceTabSnapshot[]> {
-    return this.records.transaction(false, async records => (await records.list<SavedConversation>("session:")).map(row => row.value.tab).sort((a, b) => b.session.savedAt - a.session.savedAt));
-  }
-  async resume(sessionId: string): Promise<WorkspaceTabSnapshot> {
-    const saved = await this.records.transaction(false, records => records.get<SavedConversation>(`session:${sessionId}`));
-    if (!saved) throw new WorkspacePersistenceError(`Conversation not found: ${sessionId}`);
-    this.revisions.set(sessionId, saved.revision); return saved.tab;
   }
   async claim(sessionId: string): Promise<void> {
     await this.records.transaction(true, async records => {

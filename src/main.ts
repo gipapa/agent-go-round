@@ -8,8 +8,6 @@ import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
 import { executeTerminalInput } from "./terminal/controller";
 import { ShellRuntime } from "./core/shell-runtime";
-import { SHELL_NOTICE } from "./core/shell-help";
-import { installJokeDemo, JOKE_PROMPT } from "./core/joke-demo";
 import { configureFileAgent } from "./core/file-context";
 import { IndexedDbConversationStore, IndexedDbSessionEventStore, IndexedWorkspaceRecords } from "./core/conversations";
 import type { SessionSnapshot } from "./core/persistence";
@@ -24,7 +22,6 @@ import { randomUUID } from "./core/random";
 import type { WorkspaceSnapshot, WorkspaceTabSnapshot } from "./core/workspace-store";
 import { EMBED_BRIDGE_VERSION, EMBED_SDK_VERSION, isSupportedEmbedBridgeVersion, isSupportedEmbedSdkVersion, type HostToolApprovalDecision, type HostToolApprovalRequest, type HostToolResult, type HostToolSpec } from "./core/embed-bridge";
 
-type AgentStart = { kind: "continue" } | { kind: "resume"; sessionId: string };
 type TabStatus = "working" | "idle" | "done" | "blocked" | "error";
 type AgentTab = {
   id: string;
@@ -130,6 +127,11 @@ const filesReady = (async () => {
         if (!source) throw new Error("Cross-tab source session is no longer open");
         return tabAgents.execute(source.id, args, signal);
       },
+      openPreview: async (entry, signal, context) => {
+        if (signal.aborted) throw new Error("Preview cancelled");
+        if (!state.tabs.some(tab => tab.session.sessionId === context.sessionId)) throw new Error("Preview source session is no longer open");
+        return openPreview(entry);
+      },
       readHostPage: async (args, signal, context) => {
         if (!hostToolSpecs.has("read_host_page")) throw new Error(NO_HOST_PAGE);
         return requestHostTool(context.sessionId ?? activeTab().session.sessionId, context.toolCallId ?? makeId("host-read"), "read_host_page", args, signal);
@@ -176,18 +178,9 @@ app.innerHTML = `
           <div class="pane-header-actions"><div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div><button id="route-tab" class="pane-action" type="button">ask another tab</button></div>
         </header>
 
-        <nav class="pane-tools" aria-label="Workspace actions">
+        <nav class="pane-tools" aria-label="Session mode">
           <button id="mode-toggle" type="button" class="mode-toggle" role="switch" aria-label="AI mode" aria-checked="true"><span class="mode-shell">Shell</span><span class="mode-track" aria-hidden="true"><span class="mode-thumb"></span></span><span class="mode-ai">AI</span></button>
-          <button id="history-toggle" type="button" class="terminal-button" aria-expanded="false" aria-controls="conversation-history">History</button>
-          <details class="workspace-menu"><summary>Workspace</summary><div class="workspace-menu-content">
-            <button id="shell-help" type="button" class="terminal-button">Shell guide</button>
-            <button id="reset-cwd" type="button" class="terminal-button">Home</button>
-            <form id="open-preview-form"><label>Preview file<input id="preview-entry" value="~/main.html" autocomplete="off" /></label><button type="submit" class="terminal-button">Open preview</button></form>
-            <button id="install-demo" type="button" class="terminal-button">Install joke demo</button>
-            <button id="reload-tools" type="button" class="terminal-button">Reload AI tools</button>
-          </div></details>
         </nav>
-        <section id="conversation-history" class="conversation-history" hidden aria-label="Saved conversations"><label>Saved conversation<select id="conversation-list"></select></label><button id="resume-conversation" type="button" class="terminal-button">Resume</button></section>
         <div id="terminal" class="terminal" role="log" aria-live="polite"></div>
         <div id="page-previews" class="page-previews" hidden></div>
 
@@ -702,30 +695,16 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
   }
 }
 
-async function enterAi(tab: AgentTab, start: AgentStart): Promise<void> {
-  if (start.kind === "continue") { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; return; }
-  if (start.kind === "resume") {
-    const existing = state.tabs.find((candidate) => candidate.session.sessionId === start.sessionId);
-    if (existing) { existing.mode = "agent"; selectTab(existing.id); return; }
-    const saved = await conversations().resume(start.sessionId);
-    await conversations().remember(workspaceTabSnapshot(tab));
-    tab.detach(); tab.unregisterRoute();
-    const replacement = await restoreTab({ ...saved, id: tab.id, mode: "agent" });
-    state.tabs[state.tabs.indexOf(tab)] = replacement;
-    replacement.transcript.push({ id: makeId("resume"), role: "system", text: `Resumed ${saved.session.sessionId}` });
-    return;
-  }
-}
-
-function openPreview(entry: string): void {
+function openPreview(entry: string): { tabId: string; entry: string } {
   const existing = state.tabs.find(tab => tab.preview?.entry === entry);
-  if (existing) { existing.mode = "preview"; selectTab(existing.id); return; }
+  if (existing) { existing.mode = "preview"; selectTab(existing.id); return { tabId: existing.id, entry }; }
   const id = `preview-${state.nextTabNumber++}`;
   const tab = createTab(id, `◈ ${entry.split("/").at(-1)}`, []);
   tab.mode = "preview";
   tab.preview = { entry, surfaceId: `popup-${randomUUID()}` };
   state.tabs.push(tab); state.activeTabId = id;
   render(); scheduleWorkspaceSave();
+  return { tabId: id, entry };
 }
 
 function createTab(id: string, name: string, responses: readonly string[], branch = "master", path = "~"): AgentTab {
@@ -1078,7 +1057,7 @@ function renderPane(tab: AgentTab): void {
   const modeButton = get<HTMLButtonElement>("mode-toggle");
   modeButton.hidden = previewing;
   modeButton.setAttribute("aria-checked", String(tab.mode === "agent"));
-  for (const id of ["mode-toggle", "history-toggle", "resume-conversation", "install-demo", "reload-tools", "reset-cwd"]) get<HTMLButtonElement>(id).disabled = running || !workspaceReady;
+  modeButton.disabled = running || !workspaceReady;
   terminalView.render({ ...tab, messages: tab.session.agent.state.messages });
 }
 
@@ -1291,47 +1270,14 @@ get<HTMLFormElement>("terminal-form").addEventListener("submit", async (event) =
   }
 });
 
-async function workspaceAction(action: (tab: AgentTab) => Promise<void> | void): Promise<void> {
+get<HTMLButtonElement>("mode-toggle").addEventListener("click", async () => {
   const tab = activeTab();
-  try {
-    await appReady;
-    if (!workspaceReady || tab.commandAbort || tab.session.isRunning) return;
-    await action(tab);
-    document.querySelectorAll<HTMLDetailsElement>(".workspace-menu[open]").forEach(menu => { menu.open = false; });
-    render(); scheduleWorkspaceSave();
-  } catch (error) { tab.transcript.push({ id: makeId("action-error"), role: "system", text: error instanceof Error ? error.message : String(error) }); render(); }
-}
-get<HTMLButtonElement>("mode-toggle").addEventListener("click", () => void workspaceAction(async tab => {
-  if (tab.mode === "agent") tab.mode = "shell"; else await enterAi(tab, { kind: "continue" });
-  promptElement.focus();
-}));
-get<HTMLButtonElement>("history-toggle").addEventListener("click", () => void workspaceAction(async () => {
-  const panel = get<HTMLElement>("conversation-history"); panel.hidden = !panel.hidden;
-  get<HTMLElement>("history-toggle").setAttribute("aria-expanded", String(!panel.hidden));
-  if (panel.hidden) return;
-  const entries = await conversations().history();
-  const select = get<HTMLSelectElement>("conversation-list"); select.replaceChildren();
-  for (const entry of entries) { const option = document.createElement("option"); option.value = entry.session.sessionId; option.textContent = `${entry.name} · ${entry.session.sessionId} · ${entry.provider ?? entry.session.model.provider}`; select.append(option); }
-  if (!entries.length) { const option = document.createElement("option"); option.textContent = "No saved conversations"; option.value = ""; select.append(option); }
-}));
-get<HTMLButtonElement>("resume-conversation").addEventListener("click", () => void workspaceAction(async tab => {
-  const sessionId = get<HTMLSelectElement>("conversation-list").value;
-  if (sessionId) await enterAi(tab, { kind: "resume", sessionId });
-  get<HTMLElement>("conversation-history").hidden = true;
-  get<HTMLElement>("history-toggle").setAttribute("aria-expanded", "false");
-}));
-get<HTMLButtonElement>("shell-help").addEventListener("click", () => void workspaceAction(tab => { tab.transcript.push({ id: makeId("guide"), role: "system", text: SHELL_NOTICE }); }));
-get<HTMLButtonElement>("reset-cwd").addEventListener("click", () => void workspaceAction(tab => { if (tab.mode === "agent") tab.agentCwd = VFS_HOME; else tab.cwd = VFS_HOME; }));
-get<HTMLFormElement>("open-preview-form").addEventListener("submit", event => {
-  event.preventDefault(); void workspaceAction(tab => openPreview(resolvePath(get<HTMLInputElement>("preview-entry").value || "~/main.html", tab.cwd)));
+  await appReady;
+  if (!workspaceReady || tab.commandAbort || tab.session.isRunning) return;
+  if (tab.mode === "agent") tab.mode = "shell";
+  else { tab.agentCwd ??= tab.cwd; tab.mode = "agent"; }
+  render(); scheduleWorkspaceSave(); promptElement.focus();
 });
-get<HTMLButtonElement>("install-demo").addEventListener("click", () => void workspaceAction(async tab => {
-  const installed = await installJokeDemo(fileRuntime!.fs);
-  tab.transcript.push({ id: makeId("demo"), role: "system", text: `Joke demo: ${installed.created.length} created, ${installed.kept.length} kept.\n${JOKE_PROMPT}` });
-}));
-get<HTMLButtonElement>("reload-tools").addEventListener("click", () => void workspaceAction(async tab => {
-  await fileRuntime!.bin.reload(); syncHostTools(); tab.transcript.push({ id: makeId("tools"), role: "system", text: "AI tools reloaded." });
-}));
 
 promptElement.addEventListener("input", () => {
   activeTab().draft = promptElement.value;

@@ -1,3 +1,4 @@
+import { workspaceToolFixture, runWorkspaceToolInPage } from "./browser-fixture.mjs";
 // Cross-origin HTTP embed + native IndexedDB/Worker regression; no API key needed.
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
@@ -37,7 +38,7 @@ async function enterWidget() {
 }
 
 // Test-only diagnostics are injected into fixture HTML; production code has no probe.
-function installProbe(hostOrigin) {
+function installProbe(hostOrigin, toolBaseUrl, runTool) {
   window.addEventListener("message", async event => {
     if (event.source !== parent || event.origin !== hostOrigin || event.data?.source !== "embed-vfs-test") return;
     const { id, command, shellTab, previewEntry, stop, queryStop } = event.data;
@@ -51,7 +52,7 @@ function installProbe(hostOrigin) {
       committed = !!row && new TextDecoder().decode(row.content) === "popup-committed"; db.close();
     }
     if (stop) document.querySelector("#stop").click();
-    if (previewEntry) { document.querySelector("#preview-entry").value = previewEntry; document.querySelector("#open-preview-form").requestSubmit(); }
+    if (previewEntry) await runTool(toolBaseUrl, "open_preview", { path: previewEntry });
     if (shellTab) document.querySelector("#agent-list .agent-row").click();
     if (command !== undefined) {
       if (document.querySelector("#mode-toggle").getAttribute("aria-checked") === "true") {
@@ -79,6 +80,7 @@ function installProbe(hostOrigin) {
   });
 }
 
+const toolsFixture = await workspaceToolFixture();
 let app, host;
 let hostOrigin;
 const basePath = process.env.VITE_BASE_PATH || "/";
@@ -95,7 +97,7 @@ try {
           if (url.pathname !== basePath && url.pathname !== "/") return next();
           const disableUUID = url.searchParams.has("without-random-uuid") ? 'Object.defineProperty(Crypto.prototype,"randomUUID",{configurable:true,value:undefined});' : "";
           response.setHeader("Content-Type", "text/html");
-          response.end(index.replace("<head>", `<head><script>${disableUUID}(${installProbe.toString()})(${JSON.stringify(hostOrigin)});</script>`));
+          response.end(index.replace("<head>", `<head><script>${disableUUID}(${installProbe.toString()})(${JSON.stringify(hostOrigin)},${JSON.stringify(toolsFixture.baseUrl)},${runWorkspaceToolInPage.toString()});</script>`));
         });
       }
     }]
@@ -114,7 +116,7 @@ try {
         const id=++nextId;
         const cleanup=()=>{clearTimeout(timer);window.removeEventListener("message",receive)};
         const receive=event=>{if(event.source===window.widget.iframe.contentWindow&&event.origin===${JSON.stringify(new URL(appUrl).origin)}&&event.data?.source==="embed-vfs-test"&&event.data.id===id){cleanup();resolve(event.data.state)}};
-        const timer=setTimeout(()=>{cleanup();reject(new Error("Embed probe timed out"))},5000);
+        const timer=setTimeout(()=>{cleanup();reject(new Error("Embed probe timed out"))},options.previewEntry?35000:5000);
         window.addEventListener("message",receive);
         window.widget.iframe.contentWindow.postMessage({source:"embed-vfs-test",id,...options},${JSON.stringify(new URL(appUrl).origin)});
       });
@@ -154,6 +156,7 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }
 finally {
+  await toolsFixture.close();
   await call("close").catch(() => {});
   if (host) await new Promise(resolve => host.close(resolve));
   if (app) await new Promise(resolve => app.httpServer.close(resolve));
