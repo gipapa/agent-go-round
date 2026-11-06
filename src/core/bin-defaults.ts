@@ -1,9 +1,10 @@
 import type { BinCapability } from "./file-capabilities";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
-import { FileSystemError, type VirtualFileSystem } from "./fs";
+import { FileSystemError, resolvePath, type VirtualFileSystem } from "./fs";
 import { AGENTS_PARAMETERS } from "./tab-agents";
 import { JOKE_DEMO_SOURCE } from "./joke-demo";
 import { LEGACY_FILE_TOOL_MANIFESTS } from "./bin-defaults-legacy";
+import { RETIRED_DEFAULT_BIN_TOOLS } from "./bin-retired";
 
 export const BIN_DIRECTORY = "~/bin";
 export const BIN_MANIFEST_DIRECTORY = "~/bin/manifests";
@@ -19,7 +20,6 @@ export type BinManifest = {
 export type BinDefinition = BinManifest & { source: string };
 const path = Type.String({ minLength: 1, maxLength: 1024 });
 const revision = Type.Optional(Type.Integer({ minimum: 0, description: "For write, omitted or 0 means create only. To overwrite, read the file first and pass its returned revision here. After a conflict, read again; do not guess or reuse a stale revision. For edit, optional additional revision check." }));
-const limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 500 }));
 const filePath = { ...path, description: "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive." };
 const fileContent = Type.String({ maxLength: 524288, description: "Complete literal UTF-8 text to save, including actual line breaks. No shell quoting or HTML escaping is needed. Replaces the entire file; not an append." });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
@@ -46,16 +46,6 @@ const WRITE_ONE_SOURCE = `async function main(args, api) {
 }`;
 
 export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
-  {
-    version: 1, name: "shell_guide", description: "Show the virtual Bash guide, available commands, builtins and limits.",
-    parameters: object({}), capabilities: ["commandHelp"],
-    source: 'async function main(args, api) { return { text: await api.tools.help("bash") }; }'
-  },
-  {
-    version: 1, name: "home", description: "Return this agent's working directory to /home/user (~). Does not change the human Shell directory or another tab.",
-    parameters: object({}), capabilities: ["home"],
-    source: "async function main(args, api) { return api.workspace.home(); }"
-  },
   {
     version: 1, name: "open_preview", description: "Open a VFS HTML file in a preview tab, or focus its existing preview. path defaults to ~/main.html; relative paths use this agent's working directory. Requires the app preview UI.",
     parameters: object({ path: Type.Optional(path) }), capabilities: ["openPreview"],
@@ -134,70 +124,26 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
   return { path: updated.path, revision: updated.revision, replacements: matches };
 }`
   },
-  {
-    version: 1, name: "ls", description: "List immediate children of a directory, including hidden files. Default path is the current working directory.",
-    parameters: object({ path: Type.Optional(path) }), capabilities: ["listDirectory"],
-    source: `async function main(args, api) {
-  const entries = await api.fs.listDirectory(args.path || ".");
-  return { entries: entries.map(({path, kind, revision}) => ({path, kind, revision})) };
-}`
-  },
-  {
-    version: 1, name: "find", description: "Find files and directories recursively. name is an optional basename glob (* and ?); type can be file or directory. Results are bounded.",
-    parameters: object({ path: Type.Optional(path), name: Type.Optional(Type.String({ maxLength: 256 })), type: Type.Optional(Type.Union([Type.Literal("file"), Type.Literal("directory")])), limit }), capabilities: ["stat", "listDirectory"],
-    source: `async function main(args, api) {
-  const pattern = args.name;
-  const match = (name) => {
-    if (pattern === undefined) return true;
-    let expression = "^";
-    for (const c of pattern) expression += c === "*" ? ".*" : c === "?" ? "." : "\\\\^$+.[(){}]|".includes(c) ? "\\\\" + c : c;
-    return new RegExp(expression + "$", "u").test(name);
-  };
-  const queue = [await api.fs.stat(args.path || ".")];
-  const entries = [];
-  const maximum = args.limit || 100;
-  while (queue.length) {
-    const node = queue.shift();
-    if ((!args.type || node.kind === args.type) && match(node.path.split("/").pop())) {
-      if (entries.length >= maximum) return { entries, truncated: true };
-      entries.push({ path: node.path, kind: node.kind, revision: node.revision });
-    }
-    if (node.kind === "directory") queue.push(...await api.fs.listDirectory(node.path));
-  }
-  return { entries, truncated: false };
-}`
-  },
-  {
-    version: 1, name: "grep", description: "Search file contents recursively and return matching lines with paths and 1-based line numbers. Literal search by default; regex and ignoreCase are optional.",
-    parameters: object({ pattern: Type.String({ minLength: 1, maxLength: 1024 }), path: Type.Optional(path), regex: Type.Optional(Type.Boolean()), ignoreCase: Type.Optional(Type.Boolean()), limit }), capabilities: ["stat", "listDirectory", "readFile"],
-    source: `async function main(args, api) {
-  const expression = args.regex ? new RegExp(args.pattern, args.ignoreCase ? "iu" : "u") : undefined;
-  const needle = args.ignoreCase ? args.pattern.toLowerCase() : args.pattern;
-  const queue = [await api.fs.stat(args.path || ".")];
-  const matches = [];
-  const maximum = args.limit || 100;
-  while (queue.length) {
-    const node = queue.shift();
-    if (node.kind === "directory") { queue.push(...await api.fs.listDirectory(node.path)); continue; }
-    const file = await api.fs.readFile(node.path);
-    const lines = file.content.split("\\n");
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index];
-      if (expression ? expression.test(line) : (args.ignoreCase ? line.toLowerCase() : line).includes(needle)) {
-        if (matches.length >= maximum) return { matches, truncated: true };
-        if (line.length > 16000) throw new Error("Matching line exceeds 16000 characters");
-        matches.push({ path: file.path, revision: file.revision, line: index + 1, text: line });
-      }
-    }
-  }
-  return { matches, truncated: false };
-}`
-  }
 ];
 
 /** Seed missing files; upgrade known default guidance only when both files are unmodified. */
 export async function installDefaultBin(fs: VirtualFileSystem): Promise<void> {
   await fs.mkdir(BIN_MANIFEST_DIRECTORY, { recursive: true });
+  for (const { source, ...manifest } of RETIRED_DEFAULT_BIN_TOOLS) {
+    const jsPath = `${BIN_DIRECTORY}/${manifest.name}.js`;
+    const jsonPath = `${BIN_MANIFEST_DIRECTORY}/${manifest.name}.tool.json`;
+    try {
+      const js = await fs.readFile(jsPath), json = await fs.readFile(jsonPath);
+      if (js.path !== resolvePath(jsPath) || json.path !== resolvePath(jsonPath)) continue;
+      if (js.content !== source || json.content !== JSON.stringify(manifest, null, 2)) continue;
+      await fs.removeFiles([
+        { path: js.path, expectedRevision: js.revision, expectedContent: js.content },
+        { path: json.path, expectedRevision: json.revision, expectedContent: json.content }
+      ]);
+    } catch (error) {
+      if (!(error instanceof FileSystemError) || !["not_found", "conflict", "wrong_kind", "invalid_encoding"].includes(error.code)) throw error;
+    }
+  }
   for (const { source, ...manifest } of DEFAULT_BIN_TOOLS) {
     const legacy = LEGACY_FILE_TOOL_MANIFESTS.find(tool => tool.name === manifest.name);
     if (legacy) {

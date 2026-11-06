@@ -11,7 +11,7 @@ AI 另有原生 `bash` tool，不是可編輯的 bin JS，也不允許同名自�
 
 bash 的 `readBytes`／metadata／寫入／remove 紀錄由同一筆 VFS 交易取得 path 與 revision；只記錄成功提交的寫入。取消後才完成的已 dispatch 交易仍歸到原 run。這些存取沒有 `readRange`，不證明模型看過全文；需要完整閱讀證據時使用結構化 read 的成功回傳範圍。未知寫入不自動重播，先讀回確認。
 
-一般檔案操作以 Bash 為主；bin 的 ls／find／grep 保留相容性。需要 revision、完整閱讀證據、原子多檔寫入或精確替換時使用 read／write／edit。工具名稱不分大小寫，參數內容與 JSON 欄位保留大小寫。工具說明與參數 schema 透過 `help` 按需取得；`~/agents.md` 僅保留入口與關鍵操作原則，更新標記區塊時保留既有自訂規則。
+一般檔案操作、列目錄與搜尋以 Bash 為主。需要 revision、完整閱讀證據、原子多檔寫入或精確替換時使用 read／write／edit。工具名稱不分大小寫，參數內容與 JSON 欄位保留大小寫。工具說明與參數 schema 透過 `help` 按需取得；`~/agents.md` 僅保留入口與關鍵操作原則，更新標記區塊時保留既有自訂規則。
 
 `bash` 必須提供 `script`，不能呼叫空的 `{}`。寫多行文字或 HTML 時使用 quoted heredoc，避免引號、`$`、反引號與換行被 Shell 展開：
 
@@ -23,6 +23,8 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
 
 `write({path: "main.html", content: "..."})` 只會新增；省略 `expectedRevision` 或設為 0 時，既有檔案不會被覆寫。覆寫流程為先 `read({path: "main.html"})`，檢查內容，再把回傳的 `revision` 放到 `write` 的 `expectedRevision`。多檔批次需在各項提供對應 revision。衝突後重新讀取再決定是否覆寫，不能猜 revision 或原樣重試；取消或結果不確定時也先讀回。
 
+預設 bin 已移除 `shell_guide`、`home`、`ls`、`find`、`grep`，分別改用 `help({command: "bash"})`、`bash({script: "cd ~"})` 與 Bash 的同名檔案指令。既有工作區會以 revision 檢查原子刪除已知且未自訂的舊工具配對，任一檔案有自訂則保留；自訂工具仍可使用這些名稱。
+
 既有工作區啟動時會更新已知舊版的預設 read／write／edit 說明及參數；只有 JS 與 manifest 都仍為原始預設內容才更新，並以 revision 檢查原子提交。任一檔案已有自訂修改則保留整組。工具說明與參數都直接提供給模型，不需要每次先呼叫 help。
 
 ## 預設工具
@@ -32,15 +34,10 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
   read.js
   write.js
   edit.js
-  grep.js
-  find.js
-  ls.js
   skill_load.js
   read_host_page.js
   help.js
   agents.js
-  shell_guide.js
-  home.js
   open_preview.js
   install_joke_demo.js
   reload_tools.js
@@ -48,15 +45,10 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
     read.tool.json
     write.tool.json
     edit.tool.json
-    grep.tool.json
-    find.tool.json
-    ls.tool.json
     skill_load.tool.json
     read_host_page.tool.json
     help.tool.json
     agents.tool.json
-    shell_guide.tool.json
-    home.tool.json
     open_preview.tool.json
     install_joke_demo.tool.json
     reload_tools.tool.json
@@ -64,17 +56,12 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
 
 | 工具 | 參數與行為 |
 |---|---|
-| shell_guide | `{}`；顯示 Bash 指令、內建與限制，使用既有 help 能力 |
-| home | `{}`；只將呼叫中的 agent cwd 切回 `/home/user`，不改人類 Shell 或其他 tab；同一輪後續 Bash 與檔案工具立即使用新 cwd |
 | open_preview | 選填 `path`，預設 `~/main.html`；相對路徑依呼叫 agent 的 cwd 解析。開啟或切換至同一檔案的預覽 tab；需要 app 預覽服務 |
 | install_joke_demo | `{}`；在 bin JS 透過 VFS 安裝笑話範例，只補缺檔，回傳 created／kept 與建議 prompt，不直接執行評分 |
 | reload_tools | `{}`；原子重載 JS 與 manifests，失敗保留舊 catalog；新定義在下一次 agent run 生效，進行中的 run 保留原定義 |
 | read | `path` 可為單一路徑或最多 32 個路徑的陣列，選填 `offset`（行號，從 1 開始）、`limit`；回傳內容、revision、totalLines、nextOffset |
 | write | 單檔用 `path`／`content`；多檔用 `files:[{path,content,expectedRevision?}]` 原子提交，最多 32 檔。`createParents:true` 建父目錄；覆寫需提供 revision；回傳 path、revision、bytes（UTF-8） |
 | edit | `path`、`oldText`、`newText`，選填 `replaceAll`、`expectedRevision`；精確替換，多處匹配預設失敗 |
-| grep | `pattern`，選填 `path`、`regex`、`ignoreCase`、`limit`；遞迴搜尋內容，回傳檔名、revision、行號與文字 |
-| find | 選填 `path`、`name`（basename glob，支援 `*`、`?`）、`type`、`limit`；遞迴列出匹配路徑 |
-| ls | 選填 `path`；列出目錄的直接子項，包含隱藏檔、revision 與 size（UTF-8 bytes），不含正文 |
 | skill_load | `name`；經由 `api.skills.load` 載入本輪 catalog 中的 SKILL.md，記錄來源與 active skill。與其他工具一樣從 ~/bin 載入 JS／manifest |
 | read_host_page | 選填 `offset`／`limit`；經 `api.host.readPage` 讀取呼叫頁面 HTML，無宿主時回報「目前沒有連接宿主頁，請從 Host page 開啟 popup。」；來源綁定呼叫中的 AI session |
 | help | 選填 `command`；經 `api.tools.help` 取得結構化 AI 工具說明與 schema；AI 的 help 同樣從 bin JS 載入 |
@@ -122,7 +109,7 @@ async function main(args, api) {
 
 工具函式可用的 `api.fs` 方法為 `stat`、`readFile`、`listDirectory`、`writeFile`、`writeFiles`、`mkdir`、`remove`；每一項必須列在 manifest capabilities。相對路徑依呼叫 tab 的 cwd 解析，所有路徑限定在該 workspace 的虛擬 `/`，`~` 為 `/home/user`。`stat` / `listDirectory` 不回傳檔案正文，內容必須透過 `readFile` 取得。寫入可帶 `{ expectedRevision }`，新增可用 0。
 
-`api.workspace.home()` 需要 `home` capability，由呼叫 session 的 cwd callback 更新本輪目錄；`api.workspace.openPreview(path?)` 需要 `openPreview` capability，宿主重新驗證路徑並依呼叫 cwd 解析，再交由 UI 開啟預覽。工具只能透過這個受控入口操作預覽，沒有 DOM 存取權。`api.tools.reload()` 需要 `reloadTools` capability，由 registry 原子重載，沒有直接操控 session 的能力。
+為相容自訂工具，保留 `api.workspace.home()` 與 `home` capability，由呼叫 session 的 cwd callback 更新本輪目錄；`api.workspace.openPreview(path?)` 需要 `openPreview` capability，宿主重新驗證路徑並依呼叫 cwd 解析，再交由 UI 開啟預覽。工具只能透過這個受控入口操作預覽，沒有 DOM 存取權。`api.tools.reload()` 需要 `reloadTools` capability，由 registry 原子重載，沒有直接操控 session 的能力。
 
 `api.skills.load(name)` 需要 manifest 的 `loadSkill` capability，並只在 Pi 配置過的本輪 skill catalog 中解析名稱。工具 JS 無法自行把任意文字當作工作區指示。
 
@@ -134,7 +121,7 @@ async function main(args, api) {
 
 單次執行預設 10 秒、最多 8192 次 filesystem RPC、結果最多 128000 字元；Worker 可被 Stop 中止。若寫入已開始但工具未完成，回報 `outcome_unknown`，需要先讀回，不能自動重做。每檔最多 512 KiB，workspace 最多 2048 個節點及 16 MiB bytes。
 
-預設安裝會補缺檔並更新已知、未經修改的舊版工具說明；保留自訂工具，不升級使用者修改過的來源。移除損壞的自訂 manifest 可用 shell `rm ~/bin/manifests/hello.tool.json`，再請 AI 呼叫 `reload_tools({})`。舊 `restore-bin`／`rehash` CLI 已移除。
+預設安裝會補缺檔、更新已知舊版說明，並清除未自訂的淘汰工具；保留自訂工具，不升級使用者修改過的來源。移除損壞的自訂 manifest 可用 shell `rm ~/bin/manifests/hello.tool.json`，再請 AI 呼叫 `reload_tools({})`。舊 `restore-bin`／`rehash` CLI 已移除。
 
 ## 整合前驗證紀錄（歷史）
 

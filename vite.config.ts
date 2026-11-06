@@ -49,6 +49,6 @@ export default defineConfig({
     environment: "happy-dom",
     environmentOptions: { happyDOM: { settings: { navigation: { disableChildFrameNavigation: true }, disableCSSFileLoading: true } } },
     include: ["src/**/*.test.ts"],
-    exclude: process.env.AGENT_GO_ROUND_RUN_GROQ === "1" || process.env.AGENT_GO_ROUND_RUN_JOKES === "1" ? [] : ["src/acceptance/*-live.test.ts"]
+    exclude: process.env.AGENT_GO_ROUND_RUN_GROQ === "1" || process.env.AGENT_GO_ROUND_RUN_JOKES === "1" || process.env.AGENT_GO_ROUND_RUN_TOOLS === "1" ? [] : ["src/acceptance/*-live.test.ts"]
   }
 });

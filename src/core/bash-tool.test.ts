@@ -119,12 +119,12 @@ describe.each([
   });
 });
 
-it("home updates Bash and relative file tools within the same Pi run", async () => {
+it("Bash cd updates relative file tools within the same Pi run", async () => {
   const fs = new MemoryFileSystem(), { bin, shell } = await setup(fs);
   await fs.writeFile("~/at-home.txt", "home content");
   const { session } = fixture([
     [call("leave-home", "bash", { script: "cd /tmp" })],
-    [call("return-home", "home", {})],
+    [call("return-home", "bash", { script: "cd ~" })],
     [call("read-home", "read", { path: "at-home.txt" })],
     [call("bash-home", "bash", { script: "pwd; cat at-home.txt" })],
     "completed"

@@ -50,6 +50,24 @@ describe.each([
     await expect(fs.stat("~/missing")).rejects.toMatchObject({ code: "not_found" });
   });
 
+  it("atomically removes a known file pair and preserves both when either revision changed", async () => {
+    const fs = create();
+    await fs.writeFile("~/tool.js", "original source");
+    await fs.writeFile("~/tool.json", "original manifest");
+    const files = [{ path: "~/tool.js", expectedRevision: 1, expectedContent: "original source" }, { path: "~/tool.json", expectedRevision: 1, expectedContent: "original manifest" }];
+    await fs.writeFile("~/tool.json", "custom manifest");
+    await expect(fs.removeFiles(files)).rejects.toMatchObject({ code: "conflict" });
+    expect((await fs.readFile("~/tool.js")).content).toBe("original source");
+    expect((await fs.readFile("~/tool.json")).content).toBe("custom manifest");
+    await fs.remove("~/tool.json");
+    await fs.writeFile("~/tool.json", "recreated custom manifest");
+    await expect(fs.removeFiles(files)).rejects.toMatchObject({ code: "conflict" });
+    expect((await fs.readFile("~/tool.js")).content).toBe("original source");
+    await fs.removeFiles([{ ...files[0] }, { ...files[1], expectedContent: "recreated custom manifest" }]);
+    await expect(fs.stat("~/tool.js")).rejects.toMatchObject({ code: "not_found" });
+    await expect(fs.stat("~/tool.json")).rejects.toMatchObject({ code: "not_found" });
+  });
+
   it("stores mode and times and distinguishes metadata changes from content modification", async () => {
     const fs = create();
     await fs.writeBytes("~/file", utf8("body"), { mode: 0o600 });

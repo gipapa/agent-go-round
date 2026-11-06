@@ -15,6 +15,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:tools": "AGENT_GO_ROUND_RUN_TOOLS=1 vitest run src/acceptance/tools-live.test.ts --testTimeout=2400000",
     "test:groq": "AGENT_GO_ROUND_RUN_GROQ=1 vitest run src/acceptance/groq-live.test.ts --testTimeout=120000",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

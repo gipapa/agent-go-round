@@ -9,12 +9,12 @@ Pi 擁有唯一的模型／工具循環，使用 Groq 的 OpenAI 相容 Chat Com
 - 桌面僅顯示橫式 tab 列；手機／窄螢幕與 popup 僅顯示直式 tab 列，提供新增、切換與關閉，鍵盤開啟時保留。
 - 新 tab 預設 AI 模式，透過 AI／Shell toggle 顯示及切換目前模式；開啟新 tab 就建立獨立對話。Tabs 共用虛擬檔案系統，各自保有 cwd、草稿與對話，切換模式保留對話。
 - AI 優先用 just-bash 操作檔案；`~/bin` 保留版本化讀寫、精確編輯、skills、宿主頁面與跨 tab 等工具。指令／工具名稱不分大小寫，檔名、變數、內容與 JSON 欄位保留大小寫。
-- 從 VFS 載入 AGENTS.md 與 skills，記錄實際讀寫的路徑和 revision；`~/agents.md` 包含 Bash／bin 工具清單及使用原則。
+- 從 VFS 載入 AGENTS.md 與 skills，記錄實際讀寫的路徑和 revision；`~/agents.md` 保留操作原則；工具說明與參數透過 `help` 按需查詢。
 - 歷史對話可在 reload、重新連接 Groq 或關閉 tab 後恢復；不會自動重送未完成的模型請求或工具副作用。
 - `~/main.html` 支援 HTML／CSS／SVG 預覽，popup 使用同一 workspace 的檔案；刷新預覽保留 popup 對話與草稿。
 - `~/bin/agents.js` 讓 AI 列出 agents、向指定 tab 發送任務並讀取實際回覆；另保留手動跨 tab 提問 UI。
 
-[線上版本](https://gipapa.github.io/agent-go-round/) · [檔案工具](docs/bin-tools.md) · [主頁與 popup](docs/page-preview.md) · [笑話驗收](docs/joke-acceptance.md) · [工具列表](agents.md) · [待辦與現況](docs/plan.md#後續工作順序待排期) · [just-bash 計畫](docs/just-bash-plan.md)
+[線上版本](https://gipapa.github.io/agent-go-round/) · [檔案工具](docs/bin-tools.md) · [工具實測](docs/tool-audit.md) · [主頁與 popup](docs/page-preview.md) · [笑話驗收](docs/joke-acceptance.md) · [工具列表](agents.md) · [待辦與現況](docs/plan.md#後續工作順序待排期) · [just-bash 計畫](docs/just-bash-plan.md)
 
 [just-bash 與 VFS 整合](docs/just-bash-plan.md) 已接入主終端：固定 `just-bash@3.6.0`、bytes VFS、opaque iframe／Worker 與受限 filesystem RPC。AI 的原生 `bash` tool 使用同一 runtime／VFS，也保留結構化工具、skills、宿主讀取與跨 tab agents。人類 editor 重做另列後續。
 
@@ -63,7 +63,7 @@ Shell 只操作目前 workspace 的虛擬 `/`，`~`／HOME 為 `/home/user`；�
 | 獨立對話、還原分頁 | 開啟新分頁建立 session；重新整理還原已開啟分頁 |
 | HTML 預覽 | AI 呼叫 `open_preview({path: "~/main.html"})` |
 | 笑話範例與 JS 工具更新 | AI 呼叫 `install_joke_demo({})`／`reload_tools({})` |
-| 回到 home、用法 | AI 呼叫 `home({})`／`shell_guide({})` |
+| 回到 home、用法 | AI 呼叫 `bash({script: "cd ~"})`／`help({command: "bash"})` |
 
 Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒有同名 CLI／JSON 相容層；也不執行使用者 JS 作為 trusted shell command。人類 editor 已退出本階段。
 
@@ -102,9 +102,9 @@ Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒
 
 AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 script 與受限的 timeoutMs／maxOutputBytes／maxSteps。其 cwd 與人類 shell 分開保存，成功回傳的 cwd 也用於該 agent 後續相對路徑的結構化工具。bash 的交易存取紀錄包含實際路徑與 revision；head／grep／pipe 的結果不標記為模型已讀全文。Stop／結果不確定時先讀回，不自動重播寫入。
 
-一般讀取、列目錄、搜尋與文字轉換優先使用 `bash`；bin 的 `ls`／`find`／`grep` 保留相容用途。需要 revision、完整讀取證據、原子多檔寫入或精確替換時，使用結構化 `read`／`write`／`edit`。完整指令與工具清單見 [agents.md](agents.md)。工具呼叫與 `help` 查詢名稱不分大小寫；Bash 的 `if`／`then`／`for` 等語法關鍵字仍採標準大小寫。
+一般讀取、列目錄、搜尋與文字轉換優先使用 `bash`；列目錄與搜尋使用 Bash 的 `ls`／`find`／`grep`。需要 revision、完整讀取證據、原子多檔寫入或精確替換時，使用結構化 `read`／`write`／`edit`。工具參數及 Shell 指令清單使用 `help({command: "工具名稱"})` 查詢。工具呼叫與 `help` 查詢名稱不分大小寫；Bash 的 `if`／`then`／`for` 等語法關鍵字仍採標準大小寫。
 
-預設結構化工具為 `read`、`write`、`edit`、`grep`、`find`、`ls`、`skill_load`、`read_host_page`、`help`、`agents`、`shell_guide`、`home`、`open_preview`、`install_joke_demo`、`reload_tools`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設結構化工具為 `read`、`write`、`edit`、`skill_load`、`read_host_page`、`help`、`agents`、`open_preview`、`install_joke_demo`、`reload_tools`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
 
 快速體驗檔案式 skill：
 

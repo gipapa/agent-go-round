@@ -19,6 +19,7 @@ export type FileNode = FileStat & { kind: "file"; content: string };
 export type ByteFileNode = FileStat & { kind: "file"; content: Uint8Array };
 export type WriteOptions = { expectedRevision?: number; mode?: number };
 export type FileWrite = { path: string; content: string; expectedRevision?: number };
+export type FileRemoval = { path: string; expectedRevision: number; expectedContent: string };
 export type ByteFileWrite = { path: string; content: Uint8Array; expectedRevision?: number; mode?: number };
 export type RemoveOptions = { recursive?: boolean; force?: boolean };
 export type FileAccess = { method: "readBytes" | "writeBytes" | "metadataRead" | "metadataWrite" | "remove"; path: string; revision: number };
@@ -40,6 +41,7 @@ export interface VirtualFileSystem {
   createExclusive(path: string, options: { mode: number; directory?: boolean }): Promise<FileStat>;
   mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<FileStat>;
   remove(path: string, options?: RemoveOptions): Promise<void>;
+  removeFiles(files: readonly FileRemoval[]): Promise<void>;
   rename(from: string, to: string, options?: WriteOptions & { replace?: boolean }): Promise<void>;
   copy(from: string, to: string, options?: { recursive?: boolean }): Promise<void>;
   symlink(target: string, path: string): Promise<FileStat>;
@@ -317,6 +319,24 @@ abstract class BaseFileSystem implements VirtualFileSystem {
         const node = nodeAt(physical, "directory", options.mode); await tx.save(node); return node;
       };
       return create(absolutePath(path).replace(/\/+$/, "") || "/");
+    });
+  }
+  /** Host-only atomic cleanup: a concurrent change to either tool file aborts the whole removal. */
+  removeFiles(files: readonly FileRemoval[]): Promise<void> {
+    return this.mutate(async tx => {
+      if (!files.length || files.length > 32) throw new FileSystemError("invalid_path", "Remove batch must contain 1–32 files");
+      const paths = new Set<string>();
+      for (const file of files) {
+        const node = await requireNode(tx, file.path, "file", false);
+        protect(node.path); checkRevision(node, file.expectedRevision);
+        const content = await tx.readContent(node.path), expected = encoder.encode(file.expectedContent);
+        if (node.path !== resolvePath(file.path) || !content || content.length !== expected.length || expected.some((byte, index) => byte !== content[index])) {
+          throw new FileSystemError("conflict", "File contents or removal path changed");
+        }
+        if (paths.has(node.path)) throw new FileSystemError("invalid_path", "Duplicate removal path");
+        paths.add(node.path);
+        await tx.removeNode(node.path);
+      }
     });
   }
   remove(path: string, options: RemoveOptions = {}): Promise<void> {

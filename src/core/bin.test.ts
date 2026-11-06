@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { BinRegistry, type BinFileAccess } from "./bin";
 import { DEFAULT_BIN_TOOLS, FILE_METHODS, installDefaultBin } from "./bin-defaults";
 import { LEGACY_FILE_TOOL_MANIFESTS } from "./bin-defaults-legacy";
+import { RETIRED_DEFAULT_BIN_TOOLS } from "./bin-retired";
 import { MemoryFileSystem } from "./fs";
 import type { BinExecutor, FileRpc } from "./bin-sandbox";
 import { AgentSession, MemorySessionEventStore } from "./session";
@@ -46,6 +47,44 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(read.text).not.toContain("Commands:");
   });
 
+  it("retires redundant defaults in existing workspaces while preserving customized tool pairs", async () => {
+    for (const customization of ["none", "js", "manifest"] as const) {
+      const { fs, bin } = await setup();
+      for (const { source, ...manifest } of RETIRED_DEFAULT_BIN_TOOLS) {
+        await fs.writeFile(`~/bin/${manifest.name}.js`, source + (customization === "js" ? "\n// My tool" : ""));
+        await fs.writeFile(`~/bin/manifests/${manifest.name}.tool.json`, JSON.stringify(customization === "manifest" ? { ...manifest, description: "My tool" } : manifest, null, 2));
+      }
+      await installDefaultBin(fs); await bin.reload();
+      for (const tool of RETIRED_DEFAULT_BIN_TOOLS) {
+        if (customization === "none") {
+          await expect(fs.stat(`~/bin/${tool.name}.js`)).rejects.toMatchObject({ code: "not_found" });
+          await expect(fs.stat(`~/bin/manifests/${tool.name}.tool.json`)).rejects.toMatchObject({ code: "not_found" });
+          expect(bin.list().map(tool => tool.name)).not.toContain(tool.name);
+        } else {
+          expect((await fs.readFile(`~/bin/${tool.name}.js`)).content).toContain(customization === "js" ? "// My tool" : tool.source);
+          expect(bin.list().some(current => current.name === tool.name)).toBe(true);
+        }
+      }
+      await installDefaultBin(fs);
+    }
+  });
+
+  it("does not remove a retired tool pair when another tab customizes it during cleanup", async () => {
+    const { fs } = await setup();
+    const { source, ...manifest } = RETIRED_DEFAULT_BIN_TOOLS[0];
+    const path = `~/bin/manifests/${manifest.name}.tool.json`;
+    await fs.writeFile(`~/bin/${manifest.name}.js`, source);
+    await fs.writeFile(path, JSON.stringify(manifest, null, 2));
+    const removeFiles = fs.removeFiles.bind(fs);
+    fs.removeFiles = async files => {
+      await fs.writeFile(path, "customized concurrently");
+      return removeFiles(files);
+    };
+    await installDefaultBin(fs);
+    expect((await fs.readFile(path)).content).toBe("customized concurrently");
+    expect((await fs.readFile(`~/bin/${manifest.name}.js`)).content).toBe(source);
+  });
+
   it("installs demo files through bin JS without overwriting shared user data", async () => {
     const { fs, bin } = await setup();
     await fs.writeFile("~/agents.md", "personal rules");
@@ -58,7 +97,7 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect((await fs.readFile("~/agents.md")).content).toBe("personal rules");
   });
 
-  it("binds preview paths and home changes to the caller, not the visible tab", async () => {
+  it("binds preview and relative file paths to the caller, not the visible tab", async () => {
     const calls: unknown[] = [];
     const { fs, bin } = await setup({ openPreview: async (entry, _signal, context) => { calls.push({ entry, context }); return { entry }; } });
     await fs.mkdir("~/Project");
@@ -66,11 +105,8 @@ describe("VFS ~/bin JavaScript tools", () => {
     const tools = bin.sessionTools(() => cwd, undefined, undefined, "caller-session", value => { cwd = value; });
     await tools.find(tool => tool.name === "open_preview")!.execute("preview-call", { path: "Mixed.html" });
     expect(calls).toEqual([{ entry: "/home/user/Project/Mixed.html", context: { sessionId: "caller-session", toolCallId: "preview-call" } }]);
-    await tools.find(tool => tool.name === "home")!.execute("home-call", {});
-    expect(cwd).toBe("/home/user");
-    await fs.writeFile("~/home.txt", "home data");
-    expect(await tools.find(tool => tool.name === "read")!.execute("read-home", { path: "home.txt" })).toMatchObject({ details: { content: "home data" } });
-    await expect(bin.execute("home", {})).rejects.toThrow("working directory unavailable");
+    await fs.writeFile("~/Project/local.txt", "local data");
+    expect(await tools.find(tool => tool.name === "read")!.execute("read-local", { path: "local.txt" })).toMatchObject({ details: { content: "local data" } });
     const plain = await setup();
     await expect(plain.bin.execute("open_preview", {})).rejects.toThrow("Preview UI unavailable");
   });
@@ -88,9 +124,9 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await bin.execute("read", { path: "value.txt" })).toEqual({ edited: true });
     await fs.remove("~/bin/manifests/broken.tool.json");
     await expect(bin.execute("reload_tools", {})).resolves.toMatchObject({ tools: expect.arrayContaining(["reload_tools"]) });
-    await fs.writeFile("~/bin/home.js", 'async function main(args, api) { return api.workspace.openPreview(42); }');
+    await fs.writeFile("~/bin/help.js", 'async function main(args, api) { return api.workspace.openPreview(42); }');
     await bin.reload();
-    await expect(bin.execute("home", {})).rejects.toThrow("capability");
+    await expect(bin.execute("help", {})).rejects.toThrow("capability");
     await fs.writeFile("~/bin/open_preview.js", 'async function main(args, api) { return api.workspace.openPreview(42); }');
     await bin.reload();
     await expect(bin.execute("open_preview", {})).rejects.toThrow("Invalid preview path");
@@ -201,27 +237,21 @@ describe("VFS ~/bin JavaScript tools", () => {
     await bin.reload();
     await expect(bin.execute("read_host_page", {})).rejects.toThrow("capability");
   });
-  it("executes all six defaults against the same files and reads paginated content", async () => {
+  it("executes the three structured file tools and reads paginated content", async () => {
     const { bin } = await setup();
     expect(bin.list()).toHaveLength(DEFAULT_BIN_TOOLS.length);
     await bin.execute("WrItE", { path: "code.ts", content: 'const greeting = "你好";\nconsole.log(greeting);\n' });
     expect(await bin.execute("READ", { path: "code.ts", limit: 1 })).toMatchObject({ content: 'const greeting = "你好";', revision: 1, nextOffset: 2 });
     expect(await bin.execute("edit", { path: "code.ts", oldText: "你好", newText: "世界" })).toMatchObject({ replacements: 1, revision: 2 });
-    expect(await bin.execute("grep", { path: "code.ts", pattern: "世界" })).toMatchObject({ matches: [{ line: 1, text: 'const greeting = "世界";' }] });
-    expect(await bin.execute("find", { name: "*.ts", type: "file" })).toMatchObject({ entries: [{ path: "/home/user/code.ts" }], truncated: false });
-    expect(await bin.execute("ls", {})).toMatchObject({ entries: expect.arrayContaining([expect.objectContaining({ path: "/home/user/bin", kind: "directory" })]) });
   });
 
-  it("executes the six bin tools through Pi's native loop and preserves call/result ordering", async () => {
+  it("executes the three file tools through Pi's native loop and preserves call/result ordering", async () => {
     const { fs, bin } = await setup();
     const model = createScriptedSession([]).agent.state.model;
     const steps: Array<[string, Record<string, unknown>]> = [
       ["write", { path: "loop.ts", content: "const value = 1;" }],
       ["read", { path: "loop.ts" }],
       ["edit", { path: "loop.ts", oldText: "= 1", newText: "= 2" }],
-      ["grep", { path: "loop.ts", pattern: "= 2" }],
-      ["find", { name: "loop.ts" }],
-      ["ls", {}]
     ];
     let turn = 0;
     const requests: unknown[] = [];
@@ -245,18 +275,17 @@ describe("VFS ~/bin JavaScript tools", () => {
     const session = new AgentSession({ sessionId: "bin-loop", model, streamFn, tools: bin.sessionTools(), eventStore: store });
     expect(await session.prompt("Create, edit, search, and list code")).toMatchObject({ status: "success", text: "files verified" });
     expect((await fs.readFile("~/loop.ts")).content).toBe("const value = 2;");
-    expect(requests).toHaveLength(7);
-    expect(session.agent.state.messages.filter((message) => message.role === "toolResult")).toHaveLength(6);
+    expect(requests).toHaveLength(4);
+    expect(session.agent.state.messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
     expect(store.list().filter((event) => event.type === "tool_finished").map((event) => event.type === "tool_finished" && event.toolName)).toEqual(steps.map(([name]) => name));
   });
 
-  it("rejects ambiguous edits, stale overwrites, invalid schemas, and malformed regex", async () => {
+  it("rejects ambiguous edits, stale overwrites, and invalid schemas", async () => {
     const { bin, fs } = await setup();
     await bin.execute("write", { path: "repeat.md", content: "same same" });
     await expect(bin.execute("edit", { path: "repeat.md", oldText: "same", newText: "new" })).rejects.toThrow(/ambiguous/);
     await expect(bin.execute("write", { path: "repeat.md", content: "oops" })).rejects.toThrow(/changed/);
     await expect(bin.execute("read", { path: "repeat.md", offset: -1 })).rejects.toThrow();
-    await expect(bin.execute("grep", { pattern: "[", regex: true })).rejects.toThrow();
     expect((await fs.readFile("~/repeat.md")).content).toBe("same same");
     expect(await bin.execute("edit", { path: "repeat.md", oldText: "same", newText: "new", replaceAll: true })).toMatchObject({ replacements: 2 });
   });
@@ -299,17 +328,16 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect((await fs.readFile("~/bin/hello.js")).content).toContain("oops");
   });
 
-  it("reads five joke files without the v2 three-resource limit and reports search truncation", async () => {
+  it("reads five files individually and in a batch", async () => {
     const { fs, bin } = await setup();
     await fs.mkdir("~/jokes");
     for (let i = 1; i <= 5; i++) await bin.execute("write", { path: `jokes/笑話${i}.md`, content: `笑話 ${i}` });
-    const found = await bin.execute("find", { path: "jokes", name: "*.md" }) as { entries: { path: string }[] };
-    expect(found.entries).toHaveLength(5);
-    for (const file of found.entries) expect(await bin.execute("read", { path: file.path })).toMatchObject({ content: expect.stringContaining("笑話") });
-    const batch = await bin.execute("read", { path: found.entries.map((file) => file.path) }) as { files: { path: string; content: string }[] };
+    const found = await fs.listDirectory("~/jokes");
+    expect(found).toHaveLength(5);
+    for (const file of found) expect(await bin.execute("read", { path: file.path })).toMatchObject({ content: expect.stringContaining("笑話") });
+    const batch = await bin.execute("read", { path: found.map((file) => file.path) }) as { files: { path: string; content: string }[] };
     expect(batch.files).toHaveLength(5);
     expect(batch.files.every((file) => file.content.startsWith("笑話"))).toBe(true);
-    expect(await bin.execute("grep", { path: "jokes", pattern: "笑話", limit: 2 })).toMatchObject({ matches: expect.any(Array), truncated: true });
   });
 
   it("records delivered read ranges only when output matches the actual VFS content", async () => {

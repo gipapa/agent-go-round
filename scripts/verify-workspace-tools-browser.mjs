@@ -31,15 +31,17 @@ try {
 
   await shell("mkdir -p ~/Project; cd /tmp");
   await shell(writeFiles([{ path: "~/Project/Mixed.html", content: "<h1>Shared VFS preview</h1>" }, { path: "~/home.txt", content: "home-file" }]));
-  await runTool("shell_guide");
+  await runTool("help", { command: "bash" });
   assert(JSON.stringify(fixture.requests.at(-1).messages).includes("Commands:"), "Shell guide did not reach the model");
+  const exposed = fixture.requests.at(-1).tools.map(tool => tool.function.name);
+  assert(exposed.length === 11 && !["shell_guide", "home", "ls", "find", "grep"].some(name => exposed.includes(name)), "Redundant default tools remain exposed");
   await runTool("bash", { script: "cd ~/Project" });
-  await runTool("home");
+  await runTool("bash", { script: "cd ~" });
   await runTool("read", { path: "home.txt" });
   assert(JSON.stringify(fixture.requests.at(-1).messages.at(-1)).includes("home-file"), "Home cwd did not apply to the next file tool");
   const home = (await layout()).tabs[0];
   assert(home.agentCwd === "/home/user" && home.cwd === "/tmp" && home.session.sessionId === initial, "Home changed the human cwd or session identity");
-  check("shell guide and home execute through real bin workers; AI/Shell cwd remain independent");
+  check("help and Bash cd replace redundant guide/home tools; AI/Shell cwd remain independent");
 
   await runTool("install_joke_demo");
   await shell(writeFiles([{ path: "~/jokes/笑話1.md", content: "personal joke" }]));
