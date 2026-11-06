@@ -5,6 +5,20 @@ import { PreviewSurface } from "./preview-surface";
 afterEach(() => { document.body.replaceChildren(); });
 
 describe("preview and popup lifecycle", () => {
+  it("omits navigation links in expanded view while keeping the shared AI launcher", async () => {
+    const fs = new MemoryFileSystem();
+    await fs.writeFile("~/main.html", "<h1>Expanded</h1>");
+    const surface = new PreviewSurface(fs, { entry: "/home/user/main.html", surfaceId: "popup-expanded" }, "expanded-space", { expanded: true });
+    document.body.append(surface.element);
+    try {
+      await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("Expanded"));
+      expect(surface.element.querySelectorAll(".preview-toolbar a")).toHaveLength(0);
+      expect(surface.widget.element.shadowRoot!.querySelector(".launcher")!.textContent).toBe("回到 AI 模式");
+      expect(new URL(surface.widget.iframe.src).searchParams.has("view")).toBe(false);
+      expect(new URL(surface.widget.iframe.src).searchParams.get("workspace")).toBe("expanded-space");
+    } finally { surface.destroy(); }
+  });
+
   it("refreshes content and dependencies without remounting its workspace-bound popup", async () => {
     const fs = new MemoryFileSystem();
     await fs.writeFile("~/main.html", '<link rel="stylesheet" href="styles.css"><h1>Before</h1>');

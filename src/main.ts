@@ -1030,7 +1030,7 @@ function renderPane(tab: AgentTab): void {
   const previewPanel = get<HTMLElement>("page-previews");
   previewPanel.hidden = !previewing;
   if (previewing && fileRuntime && !previews.has(tab.id)) {
-    const preview = new PreviewSurface(fileRuntime.fs, tab.preview!, workspaceId);
+    const preview = new PreviewSurface(fileRuntime.fs, tab.preview!, workspaceId, { expanded: pageView });
     previews.set(tab.id, preview); previewPanel.append(preview.element);
   }
   for (const [id, preview] of previews) preview.element.hidden = !previewing || id !== tab.id;

@@ -18,7 +18,7 @@ printf '<h1>我的主頁</h1>' > ~/main.html
 /?workspace=my-space&view=page&entry=%2Fhome%2Fuser%2Fmain.html&surface=page
 ```
 
-workspace 決定檔案與歷史範圍，surface 決定持久化版面；popup 的 surface identity 隨預覽 tab 保存。page view 可透過「回到 AI 模式」打開共用檔案的 popup。
+workspace 決定檔案與歷史範圍，surface 決定持久化版面；popup 的 surface identity 隨預覽 tab 保存。page view 可透過「回到 AI 模式」打開共用檔案的 popup；放大後不顯示「工作區」或「開啟主頁／放大顯示」連結。
 
 ## 手機與 popup
 

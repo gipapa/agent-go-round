@@ -126,13 +126,17 @@ try {
   await call("open", pageUrl);
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('Updated by Pi')");
   assert(await evaluate("document.body.classList.contains('page-view') && getComputedStyle(document.querySelector('.tab-bar')).display==='none'"), "Page view chrome not hidden");
+  const expandedControls = "document.querySelectorAll('.preview-toolbar a').length===0 && document.querySelector('.preview-surface > div:last-child').shadowRoot.querySelector('.launcher').textContent==='回到 AI 模式'";
+  assert(await evaluate(expandedControls), "Expanded Preview must keep the AI launcher and omit workspace/page navigation links");
   const pageSurface = await evaluate(`new URL((${p}).src).searchParams.get('surface')`);
   await durable(); await call("reload");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('Updated by Pi')");
   assert(await evaluate(`new URL((${p}).src).searchParams.get('surface')===${JSON.stringify(pageSurface)}`), "Page view did not restore entry/popup binding");
+  assert(await evaluate(expandedControls), "Reload restored obsolete expanded Preview controls");
   check("standalone page entry and popup binding survive reload");
   await call("screenshot", "test-results/preview-page-desktop.png");
   await call("set", "viewport", "390", "844");
+  assert(await evaluate(expandedControls), "Mobile expanded Preview controls differ");
   assert(await evaluate("document.documentElement.scrollWidth<=innerWidth"), "Mobile page overflow");
   await call("screenshot", "test-results/preview-page-mobile.png");
   const other = new URL(pageUrl); other.searchParams.set("workspace", workspaceId + "-other");
