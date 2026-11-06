@@ -57,6 +57,28 @@ describe.each([
   ["memory", () => new MemoryFileSystem()],
   ["indexeddb", () => new IndexedDbFileSystem(new IDBFactory())]
 ] as const)("%s AI bash", (_name, create) => {
+  it("recovers from empty bash arguments and a create-only write using actionable errors and read revisions", async () => {
+    const fs = create();
+    const { bin, shell } = await setup(fs);
+    const html = '<!doctype html>\n<p title="quoted">雨夜\'s $HOME `literal` \\ text</p>\n';
+    const { session, events } = fixture([
+      [call("initial", "bash", { script: `cat > main.html <<'HTML'\n${html}HTML\n` })],
+      [call("empty", "bash", {})],
+      [call("conflict", "write", { path: "main.html", content: html + "<!-- revised -->" })],
+      [call("read-revision", "read", { path: "main.html" })],
+      [call("overwrite", "write", { path: "main.html", content: html + "<!-- revised -->", expectedRevision: 2 })],
+      [call("verify", "read", { path: "main.html" })],
+      "已儲存並確認 main.html。"
+    ]);
+    await configureFileAgent(session, fs, "/home/user", bin, undefined, [], { shell });
+    expect(await session.prompt("將一篇短篇小說寫入 main.html")).toMatchObject({ status: "success" });
+    expect(await fs.readFile("~/main.html")).toMatchObject({ content: html + "<!-- revised -->", revision: 3 });
+    const results = session.agent.state.messages.filter(message => message.role === "toolResult");
+    expect(JSON.stringify(results.find(message => message.toolCallId === "empty"))).toContain("script");
+    expect(JSON.stringify(results.find(message => message.toolCallId === "conflict"))).toContain("returned revision as expectedRevision");
+    expect(events.list().filter(event => event.type === "tool_finished" && event.isError).map(event => event.type === "tool_finished" && event.toolCallId)).toEqual(["empty", "conflict"]);
+  });
+
   it("interleaves native bash and structured tools with one run-bound cwd and exact file traces", async () => {
     const fs = create(), hostContexts: unknown[] = [];
     const { bin, shell } = await setup(fs, {

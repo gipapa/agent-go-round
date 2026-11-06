@@ -1,8 +1,9 @@
 import type { BinCapability } from "./file-capabilities";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
-import type { VirtualFileSystem } from "./fs";
+import { FileSystemError, type VirtualFileSystem } from "./fs";
 import { AGENTS_PARAMETERS } from "./tab-agents";
 import { JOKE_DEMO_SOURCE } from "./joke-demo";
+import { LEGACY_FILE_TOOL_MANIFESTS } from "./bin-defaults-legacy";
 
 export const BIN_DIRECTORY = "~/bin";
 export const BIN_MANIFEST_DIRECTORY = "~/bin/manifests";
@@ -17,8 +18,10 @@ export type BinManifest = {
 };
 export type BinDefinition = BinManifest & { source: string };
 const path = Type.String({ minLength: 1, maxLength: 1024 });
-const revision = Type.Optional(Type.Integer({ minimum: 0 }));
+const revision = Type.Optional(Type.Integer({ minimum: 0, description: "For write, omitted or 0 means create only. To overwrite, read the file first and pass its returned revision here. After a conflict, read again; do not guess or reuse a stale revision. For edit, optional additional revision check." }));
 const limit = Type.Optional(Type.Integer({ minimum: 1, maximum: 500 }));
+const filePath = { ...path, description: "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive." };
+const fileContent = Type.String({ maxLength: 524288, description: "Complete literal UTF-8 text to save, including actual line breaks. No shell quoting or HTML escaping is needed. Replaces the entire file; not an append." });
 const object = (properties: Record<string, TSchema>) => Type.Object(properties, { additionalProperties: false });
 
 const READ_ONE_SOURCE = `async function main(args, api) {
@@ -89,8 +92,8 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
     source: "async function main(args, api) { return api.skills.load(args.name); }"
   },
   {
-    version: 1, name: "read", description: "Read UTF-8 files with revisions. path accepts one path string or an array of up to 32 paths; use an array to read independent files together. offset is a 1-based line number and limit defaults to 200. Follow nextOffset for more.",
-    parameters: object({ path: Type.Union([path, Type.Array(path, { minItems: 1, maxItems: 32 })]), offset: Type.Optional(Type.Integer({ minimum: 1 })), limit }), capabilities: ["readFile"],
+    version: 1, name: "read", description: "Read UTF-8 files and obtain the revision needed for write overwrites. path accepts one path string or an array of up to 32 paths. offset is a 1-based line number; limit defaults to 200 (max 500). Follow nextOffset until absent for a complete read. Pass the returned revision as write.expectedRevision, not as a field named revision.",
+    parameters: object({ path: Type.Union([filePath, Type.Array(filePath, { minItems: 1, maxItems: 32 })]), offset: Type.Optional(Type.Integer({ minimum: 1, description: "Starting line, 1-based; default 1. Continue with the previous result's nextOffset." })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "Maximum lines per file; default 200, max 500. Follow nextOffset when present." })) }), capabilities: ["readFile"],
     source: `async function main(args, api) {
   const readOne = ${READ_ONE_SOURCE};
   if (!Array.isArray(args.path)) return readOne(args, api);
@@ -100,8 +103,8 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
 }`
   },
   {
-    version: 1, name: "write", description: "Write UTF-8 files. Use path/content for one file or files:[{path,content,expectedRevision?}] to create several files atomically in one call. Existing files require expectedRevision. createParents=true creates missing parent directories.",
-    parameters: Type.Object({ path: Type.Optional(path), content: Type.Optional(Type.String({ maxLength: 524288 })), expectedRevision: revision, createParents: Type.Optional(Type.Boolean()), files: Type.Optional(Type.Array(object({ path, content: Type.String({ maxLength: 524288 }), expectedRevision: revision }), { minItems: 1, maxItems: 32 })) }, { additionalProperties: false, anyOf: [{ required: ["path", "content"] }, { required: ["files"] }] }), capabilities: ["writeFile", "writeFiles", "mkdir"],
+    version: 1, name: "write", description: "Save complete literal UTF-8 text/HTML without shell quoting. Use either path/content for one file or files:[{path,content,expectedRevision?}] for an atomic batch. Omitted expectedRevision or 0 creates only: existing files fail unchanged. To overwrite, call read first, then pass its revision as expectedRevision. On conflict read again before deciding to overwrite. createParents=true creates missing parent directories. Returns saved path, revision and bytes; no extra write is needed to confirm success.",
+    parameters: Type.Object({ path: Type.Optional(filePath), content: Type.Optional(fileContent), expectedRevision: revision, createParents: Type.Optional(Type.Boolean({ description: "Create missing parent directories; default false. Directory creation occurs before the file write batch." })), files: Type.Optional(Type.Array(object({ path: filePath, content: fileContent, expectedRevision: revision }), { minItems: 1, maxItems: 32, description: "Atomic batch of 1–32 files; cannot combine with top-level path/content. Each existing file needs its own expectedRevision." })) }, { additionalProperties: false, anyOf: [{ required: ["path", "content"] }, { required: ["files"] }] }), capabilities: ["writeFile", "writeFiles", "mkdir"],
     source: `async function main(args, api) {
   const writeOne = ${WRITE_ONE_SOURCE};
   if (!args.files) return writeOne(args, api);
@@ -117,8 +120,8 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
 }`
   },
   {
-    version: 1, name: "edit", description: "Replace exact oldText in a file with newText. Ambiguous matches fail unless replaceAll is true. Uses revision conflict detection.",
-    parameters: object({ path, oldText: Type.String({ minLength: 1 }), newText: Type.String(), replaceAll: Type.Optional(Type.Boolean()), expectedRevision: revision }), capabilities: ["readFile", "writeFile"],
+    version: 1, name: "edit", description: "Replace exact literal oldText with newText in an existing file; not a regex or patch. Read first to obtain the actual text. Ambiguous matches fail unless replaceAll is true. Uses revision conflict detection; expectedRevision is an optional additional check.",
+    parameters: object({ path: filePath, oldText: Type.String({ minLength: 1, description: "Exact existing substring, including whitespace/newlines. Include enough context for one match." }), newText: Type.String({ description: "Literal replacement text; empty string deletes oldText." }), replaceAll: Type.Optional(Type.Boolean({ description: "Replace every exact match; default false rejects multiple matches." })), expectedRevision: revision }), capabilities: ["readFile", "writeFile"],
     source: `async function main(args, api) {
   const file = await api.fs.readFile(args.path);
   if (args.expectedRevision !== undefined && args.expectedRevision !== file.revision) throw new Error("File changed; read it again");
@@ -192,10 +195,26 @@ export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
   }
 ];
 
-/** Seed missing tool files; user edits survive reloads. */
+/** Seed missing files; upgrade known default guidance only when both files are unmodified. */
 export async function installDefaultBin(fs: VirtualFileSystem): Promise<void> {
   await fs.mkdir(BIN_MANIFEST_DIRECTORY, { recursive: true });
   for (const { source, ...manifest } of DEFAULT_BIN_TOOLS) {
+    const legacy = LEGACY_FILE_TOOL_MANIFESTS.find(tool => tool.name === manifest.name);
+    if (legacy) {
+      try {
+        const js = await fs.readFile(`${BIN_DIRECTORY}/${manifest.name}.js`);
+        const json = await fs.readFile(`${BIN_MANIFEST_DIRECTORY}/${manifest.name}.tool.json`);
+        // Compare exact old definitions, never infer ownership from a tool name.
+        if (js.content === source && json.content === JSON.stringify(legacy, null, 2)) {
+          await fs.writeFiles([
+            { path: js.path, content: source, expectedRevision: js.revision },
+            { path: json.path, content: JSON.stringify(manifest, null, 2), expectedRevision: json.revision }
+          ]);
+        }
+      } catch (error) {
+        if (!(error instanceof FileSystemError) || !["not_found", "conflict"].includes(error.code)) throw error;
+      }
+    }
     for (const [path, content] of [[`${BIN_DIRECTORY}/${manifest.name}.js`, source], [`${BIN_MANIFEST_DIRECTORY}/${manifest.name}.tool.json`, JSON.stringify(manifest, null, 2)]]) {
       try { await fs.writeFile(path, content, { expectedRevision: 0 }); }
       catch (error) { if (!(error instanceof Error && "code" in error && error.code === "conflict")) throw error; }

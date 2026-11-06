@@ -1,7 +1,28 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { assert, browser, fixtureProvider, sequence, tool } from "./browser-fixture.mjs";
 const { call, evaluate, wait, ready, send, connect, durable } = browser("agr-agent-bash");
+const literalHtml = '<!doctype html>\n<p title="quoted">雨夜\'s $HOME `literal` \\ text</p>\n';
+let recoveryStep = 0;
 const provider = await fixtureProvider({
+  "Tool recovery": body => {
+    const definitions = body.tools.map(tool => tool.function);
+    assert(definitions.find(tool => tool.name === "bash").parameters.properties.script.description.includes("quoted heredoc"), "Bash parameter guidance did not reach the provider");
+    assert(definitions.find(tool => tool.name === "write").parameters.properties.expectedRevision.description.includes("read the file first"), "Revision guidance did not reach the provider");
+    switch (recoveryStep++) {
+      case 0: return [tool("literal-html", "bash", { script: `cat > ~/recovery.html <<'HTML'\n${literalHtml}HTML\n` })];
+      case 1: return [tool("empty-bash", "bash", {})];
+      case 2: return [tool("create-only", "write", { path: "~/recovery.html", content: "replacement" })];
+      case 3: return [tool("get-revision", "read", { path: "~/recovery.html" })];
+      case 4: {
+        const current = JSON.parse(body.messages.at(-1).content);
+        assert(current.content === literalHtml, "Heredoc expanded literal HTML");
+        return [tool("retry-with-revision", "write", { path: "~/recovery.html", content: literalHtml + "<!-- revised -->", expectedRevision: current.revision })];
+      }
+      case 5: return [tool("verify-recovery", "read", { path: "~/recovery.html" })];
+      case 6: return "Tool recovery verified";
+      default: throw new Error("Unexpected recovery request");
+    }
+  },
   "P4 mixed": sequence([
     [tool("create", "BaSh", { script: "MkDiR -p ~/project; CD ~/project; PrInTf 'alpha\\nbeta\\n' > source.txt; CP source.txt copied.txt; GrEp alpha copied.txt | HeAd -n 1" })],
     [tool("read", "READ", { path: "source.txt" })],
@@ -42,6 +63,15 @@ try {
   const delivered = provider.requests.flatMap(request => request.messages).filter(message => message.role === "tool");
   assert(delivered.some(message => message.tool_call_id === "create" && JSON.parse(message.content).stdout === "alpha\n") && delivered.some(message => message.tool_call_id === "help" && message.content.includes("maxSteps")), "Results or native help did not reach real provider request");
   check("AI uses actual Worker and shared IDB; structured tools, skills, cwd and byte/revision audit interoperate");
+  await send("Tool recovery: save literal HTML and recover from invalid arguments");
+  assert(await evaluate("return document.querySelector('#run-status').textContent==='done'"), "Tool recovery did not finish");
+  state = await durable(workspace);
+  assert(file("/home/user/recovery.html")?.content === literalHtml + "<!-- revised -->", "Recovered write did not save exact HTML");
+  const recoveryErrors = state.events.filter(event => event.type === "tool_finished" && event.isError && ["empty-bash", "create-only"].includes(event.toolCallId));
+  assert(recoveryErrors.length === 2, "Expected validation and create-only errors were not surfaced");
+  const recoveryResults = provider.requests.flatMap(request => request.messages).filter(message => message.role === "tool");
+  assert(recoveryResults.some(message => message.tool_call_id === "create-only" && message.content.includes("returned revision as expectedRevision")), "Actionable conflict guidance did not reach the provider");
+  check("parameter guidance reaches HTTP provider; literal HTML survives heredoc; missing script and revision errors recover through read/write");
   await call("click", "#mode-toggle"); await send("pwd; cat /tmp/from-json.txt");
   assert(await evaluate("return [...document.querySelectorAll('[data-channel=stdout]')].at(-1).textContent.includes('/home/user\\nstructured')"), "Agent cwd leaked to human shell or human cannot read agent file");
   check("human cwd is separate and immediately reads agent writes");

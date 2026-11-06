@@ -11,7 +11,19 @@ AI 另有原生 `bash` tool，不是可編輯的 bin JS，也不允許同名自�
 
 bash 的 `readBytes`／metadata／寫入／remove 紀錄由同一筆 VFS 交易取得 path 與 revision；只記錄成功提交的寫入。取消後才完成的已 dispatch 交易仍歸到原 run。這些存取沒有 `readRange`，不證明模型看過全文；需要完整閱讀證據時使用結構化 read 的成功回傳範圍。未知寫入不自動重播，先讀回確認。
 
-一般檔案操作以 Bash 為主；bin 的 ls／find／grep 保留相容性。需要 revision、完整閱讀證據、原子多檔寫入或精確替換時使用 read／write／edit。工具名稱不分大小寫，參數內容與 JSON 欄位保留大小寫。完整的兩邊工具清單見 [agents.md](../agents.md)，產品工作區也會在 `~/agents.md` 寫入工具清單並保留既有自訂規則。
+一般檔案操作以 Bash 為主；bin 的 ls／find／grep 保留相容性。需要 revision、完整閱讀證據、原子多檔寫入或精確替換時使用 read／write／edit。工具名稱不分大小寫，參數內容與 JSON 欄位保留大小寫。工具說明與參數 schema 透過 `help` 按需取得；`~/agents.md` 僅保留入口與關鍵操作原則，更新標記區塊時保留既有自訂規則。
+
+`bash` 必須提供 `script`，不能呼叫空的 `{}`。寫多行文字或 HTML 時使用 quoted heredoc，避免引號、`$`、反引號與換行被 Shell 展開：
+
+```js
+bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nHTML\n"})
+```
+
+`>` 取代整份內容，`>>` 才是附加；結束標記必須獨佔一行且不能縮排。`exitCode: 0` 且 stdout 為空是正常寫入結果，不需要重寫。若要避開 Shell quoting，也可直接使用結構化 `write` 傳入原始文字。
+
+`write({path: "main.html", content: "..."})` 只會新增；省略 `expectedRevision` 或設為 0 時，既有檔案不會被覆寫。覆寫流程為先 `read({path: "main.html"})`，檢查內容，再把回傳的 `revision` 放到 `write` 的 `expectedRevision`。多檔批次需在各項提供對應 revision。衝突後重新讀取再決定是否覆寫，不能猜 revision 或原樣重試；取消或結果不確定時也先讀回。
+
+既有工作區啟動時會更新已知舊版的預設 read／write／edit 說明及參數；只有 JS 與 manifest 都仍為原始預設內容才更新，並以 revision 檢查原子提交。任一檔案已有自訂修改則保留整組。工具說明與參數都直接提供給模型，不需要每次先呼叫 help。
 
 ## 預設工具
 
@@ -122,7 +134,7 @@ async function main(args, api) {
 
 單次執行預設 10 秒、最多 8192 次 filesystem RPC、結果最多 128000 字元；Worker 可被 Stop 中止。若寫入已開始但工具未完成，回報 `outcome_unknown`，需要先讀回，不能自動重做。每檔最多 512 KiB，workspace 最多 2048 個節點及 16 MiB bytes。
 
-預設安裝只補缺檔，保留自訂工具，不自動升級使用者修改過的來源。移除損壞的自訂 manifest 可用 shell `rm ~/bin/manifests/hello.tool.json`，再請 AI 呼叫 `reload_tools({})`。舊 `restore-bin`／`rehash` CLI 已移除。
+預設安裝會補缺檔並更新已知、未經修改的舊版工具說明；保留自訂工具，不升級使用者修改過的來源。移除損壞的自訂 manifest 可用 shell `rm ~/bin/manifests/hello.tool.json`，再請 AI 呼叫 `reload_tools({})`。舊 `restore-bin`／`rehash` CLI 已移除。
 
 ## 整合前驗證紀錄（歷史）
 

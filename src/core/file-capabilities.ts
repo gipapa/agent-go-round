@@ -1,4 +1,4 @@
-import { resolvePath, type FileNode, type VirtualFileSystem } from "./fs";
+import { FileSystemError, resolvePath, type FileNode, type VirtualFileSystem } from "./fs";
 import type { FileReadRange } from "./session";
 
 export const FILE_METHODS = ["stat", "readFile", "listDirectory", "writeFile", "writeFiles", "mkdir", "remove"] as const satisfies readonly (keyof VirtualFileSystem)[];
@@ -19,6 +19,16 @@ function revision(value: unknown): number | undefined {
   return value as number | undefined;
 }
 
+async function writeWithGuidance<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); }
+  catch (error) {
+    if (error instanceof FileSystemError && error.code === "conflict") {
+      throw new FileSystemError("conflict", `${error.message}. No file contents were written. Call read with the target path, inspect the current content, then pass its returned revision as expectedRevision in write (per file for a batch). Omitted expectedRevision or 0 in write means create only. Do not retry the same write unchanged.`);
+    }
+    throw error;
+  }
+}
+
 /** Validate untrusted worker messages in the host before calling the typed VFS. */
 export async function executeFileCapability(method: FileMethod, values: unknown[], context: CapabilityContext): Promise<FileCapabilityResults[FileMethod]> {
   const { fs, cwd, onAccess, onRead, mutation } = context;
@@ -29,7 +39,7 @@ export async function executeFileCapability(method: FileMethod, values: unknown[
       if (!entry || typeof entry.path !== "string" || typeof entry.content !== "string") throw new Error("Invalid file in write batch");
       return { path: resolvePath(entry.path, cwd), content: entry.content, expectedRevision: revision(entry.expectedRevision) };
     });
-    const result = await mutation(() => fs.writeFiles(files));
+    const result = await mutation(() => writeWithGuidance(() => fs.writeFiles(files)));
     for (const file of result) onAccess({ method: "writeFile", path: file.path, revision: file.revision });
     return result;
   }
@@ -46,7 +56,7 @@ export async function executeFileCapability(method: FileMethod, values: unknown[
       if (typeof values[1] !== "string") throw new Error("File content must be text");
       const content = values[1], options = values[2] as { expectedRevision?: unknown } | undefined;
       const expectedRevision = revision(options?.expectedRevision);
-      const file = await mutation(() => fs.writeFile(path, content, { expectedRevision }));
+      const file = await mutation(() => writeWithGuidance(() => fs.writeFile(path, content, { expectedRevision })));
       onAccess({ method, path, revision: file.revision }); return file;
     }
     case "mkdir": return mutation(() => fs.mkdir(path, { recursive: (values[1] as { recursive?: unknown } | undefined)?.recursive === true }));

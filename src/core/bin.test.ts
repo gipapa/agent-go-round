@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { BinRegistry, type BinFileAccess } from "./bin";
 import { DEFAULT_BIN_TOOLS, FILE_METHODS, installDefaultBin } from "./bin-defaults";
+import { LEGACY_FILE_TOOL_MANIFESTS } from "./bin-defaults-legacy";
 import { MemoryFileSystem } from "./fs";
 import type { BinExecutor, FileRpc } from "./bin-sandbox";
 import { AgentSession, MemorySessionEventStore } from "./session";
@@ -150,6 +151,30 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect((await fs.readFile("~/bin/manifests/read.tool.json")).revision).toBe(revision);
   });
 
+  it("upgrades known default guidance in existing workspaces, preserving either kind of customization", async () => {
+    for (const customization of ["none", "js", "manifest"] as const) {
+      const { fs, bin } = await setup();
+      for (const legacy of LEGACY_FILE_TOOL_MANIFESTS) {
+        await fs.writeFile(`~/bin/manifests/${legacy.name}.tool.json`, JSON.stringify(legacy, null, 2));
+      }
+      const js = await fs.readFile("~/bin/write.js");
+      const manifest = await fs.readFile("~/bin/manifests/write.tool.json");
+      const customJs = `${js.content}\n// Personal customization`;
+      const customManifest = manifest.content.replace('"Write UTF-8 files.', '"My custom writer.');
+      if (customization === "js") await fs.writeFile(js.path, customJs);
+      if (customization === "manifest") await fs.writeFile(manifest.path, customManifest);
+      await installDefaultBin(fs); await bin.reload();
+      expect(bin.list().find(tool => tool.name === "read")!.description).toContain("write.expectedRevision");
+      expect((await fs.readFile(js.path)).content).toBe(customization === "js" ? customJs : js.content);
+      expect((await fs.readFile(manifest.path)).content).toBe(customization === "none"
+        ? JSON.stringify((({ source: _source, ...tool }) => tool)(DEFAULT_BIN_TOOLS.find(tool => tool.name === "write")!), null, 2)
+        : customization === "manifest" ? customManifest : manifest.content);
+      const installed = await fs.readFile(manifest.path);
+      await installDefaultBin(fs);
+      expect(await fs.readFile(manifest.path)).toMatchObject({ content: installed.content, revision: installed.revision });
+    }
+  });
+
   it("runs host reads from editable bin JS with source identity, with explicit no-host errors", async () => {
     const plain = await setup();
     await expect(plain.bin.execute("read_host_page", {})).rejects.toThrow("目前沒有連接宿主頁");
@@ -234,6 +259,27 @@ describe("VFS ~/bin JavaScript tools", () => {
     await expect(bin.execute("grep", { pattern: "[", regex: true })).rejects.toThrow();
     expect((await fs.readFile("~/repeat.md")).content).toBe("same same");
     expect(await bin.execute("edit", { path: "repeat.md", oldText: "same", newText: "new", replaceAll: true })).toMatchObject({ replacements: 2 });
+  });
+
+  it("explains create-only conflicts and recovers with read revisions without losing batch atomicity", async () => {
+    const { fs, bin } = await setup();
+    await bin.execute("write", { path: "main.html", content: "Original" });
+    const writes = [
+      { path: "main.html", content: "Replacement" },
+      { path: "main.html", content: "Replacement", expectedRevision: 0 },
+      { files: [{ path: "new.html", content: "New" }, { path: "main.html", content: "Replacement" }] }
+    ];
+    for (const args of writes) {
+      await expect(bin.execute("write", args)).rejects.toThrow(/Call read.*returned revision as expectedRevision/);
+      expect((await fs.readFile("~/main.html")).content).toBe("Original");
+      await expect(fs.readFile("~/new.html")).rejects.toThrow(/Not found/);
+    }
+    const first = await bin.execute("read", { path: "main.html" }) as { revision: number };
+    await fs.writeFile("~/main.html", "Concurrent change");
+    await expect(bin.execute("write", { path: "main.html", content: "Replacement", expectedRevision: first.revision })).rejects.toThrow(/Do not retry/);
+    const current = await bin.execute("read", { path: "main.html" }) as { revision: number };
+    expect(await bin.execute("write", { path: "main.html", content: "Replacement", expectedRevision: current.revision })).toMatchObject({ revision: current.revision + 1 });
+    expect((await fs.readFile("~/main.html")).content).toBe("Replacement");
   });
 
   it("loads new JS tools, enforces capabilities, and pins already-registered tool definitions", async () => {
