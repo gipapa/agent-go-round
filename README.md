@@ -77,7 +77,7 @@ Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒
 
 ## AGENTS.md、skills 與工具
 
-工作區以 `/home/user` 對應 `~`。啟動時預先建立空白的 `~/skills/` 與 `~/agents.md`，預設規則為「請回覆繁體中文」，並附上 just-bash 指令／內建、bin 工具列表與 Bash 優先的使用原則。既有 AGENTS.md／agents.md 保留自訂規則，只更新 `agent-go-round:tools` 標記內的工具清單，不另建大小寫重複檔。開發期間直接使用目前格式的新工作區，不匯入或搬移舊資料。
+工作區以 `/home/user` 對應 `~`。啟動時預先建立空白的 `~/skills/` 與 `~/agents.md`，預設規則為「請回覆繁體中文」，只附上 Bash 優先的使用原則與按需查詢入口。工具用途與 JSON schema 使用 `help({command: "工具名稱"})`，just-bash 指令／內建與限制使用 `help({command: "bash"})`，不再把完整清單重複放入每次請求的系統提示。既有 AGENTS.md／agents.md 保留自訂規則，只更新 `agent-go-round:tools` 標記內的精簡入口，不另建大小寫重複檔。開發期間直接使用目前格式的新工作區，不匯入或搬移舊資料。
 
 安裝 joke demo 後的典型結構如下：
 

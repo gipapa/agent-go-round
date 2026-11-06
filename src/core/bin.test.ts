@@ -9,6 +9,7 @@ import { AgentSession, MemorySessionEventStore } from "./session";
 import { createScriptedSession } from "./scripted";
 import { createAssistantMessageEventStream, type AssistantMessage, type ToolCall } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { SHELL_COMMANDS, SHELL_BUILTINS } from "./shell-catalog";
 
 // Browser smoke separately exercises the actual opaque iframe + Worker executor.
 const testExecutor: BinExecutor = {
@@ -26,6 +27,24 @@ async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}
 }
 
 describe("VFS ~/bin JavaScript tools", () => {
+  it("loads full tool and shell reference through help on demand", async () => {
+    const { bin } = await setup();
+    const catalog = await bin.execute("help", {}) as { text: string };
+    expect(catalog.text).toContain('help({command: "bash"})');
+    expect(catalog.text).toContain("~/bin/manifests/<name>.tool.json");
+    for (const tool of bin.list()) expect(catalog.text).toContain(tool.name);
+    const shell = await bin.execute("HeLp", { command: "BaSh" }) as { text: string };
+    expect(shell.text).toContain(`Commands: ${SHELL_COMMANDS.join(", ")}`);
+    expect(shell.text).toContain(`Builtins: ${SHELL_BUILTINS.join(", ")}`);
+    expect(shell.text).toContain("No host disk, network, Node/Python");
+    expect(shell.text).toContain("job-control");
+    expect(shell.text).toContain("maxSteps");
+    const read = await bin.execute("help", { command: "read" }) as { text: string };
+    expect(read.text).toContain("nextOffset");
+    expect(read.text).toContain('"path"');
+    expect(read.text).not.toContain("Commands:");
+  });
+
   it("routes structured calls through editable agents bin JS with trusted caller context", async () => {
     const calls: unknown[] = [];
     const { fs, bin } = await setup({ tabAgents: async (args, _signal, context) => { calls.push({ args, context }); return { status: "pending", requestId: "request-a" }; } });
