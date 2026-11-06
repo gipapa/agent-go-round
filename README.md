@@ -12,11 +12,11 @@ Pi 擁有唯一的模型／工具循環，使用 Groq 的 OpenAI 相容 Chat Com
 - 從 VFS 載入 AGENTS.md 與 skills，記錄實際讀寫的路徑和 revision；`~/agents.md` 保留操作原則；工具說明與參數透過 `help` 按需查詢。
 - 歷史對話可在 reload、重新連接 Groq 或關閉 tab 後恢復；不會自動重送未完成的模型請求或工具副作用。
 - `~/main.html` 支援 HTML／CSS／SVG 預覽，popup 使用同一 workspace 的檔案；刷新預覽保留 popup 對話與草稿。
-- `~/bin/agents.js` 讓 AI 列出 agents、向指定 tab 發送任務並讀取實際回覆；另保留手動跨 tab 提問 UI。
+- `~/bin/agents.js` 讓 AI 列出 agents、向指定 tab 發送任務並讀取實際回覆；跨分頁提問使用 AI 的 agents 工具。
 
 [線上版本](https://gipapa.github.io/agent-go-round/) · [檔案工具](docs/bin-tools.md) · [工具實測](docs/tool-audit.md) · [主頁與 popup](docs/page-preview.md) · [笑話驗收](docs/joke-acceptance.md) · [工具列表](agents.md) · [待辦與現況](docs/plan.md#後續工作順序待排期) · [just-bash 計畫](docs/just-bash-plan.md)
 
-[just-bash 與 VFS 整合](docs/just-bash-plan.md) 已接入主終端：固定 `just-bash@3.6.0`、bytes VFS、opaque iframe／Worker 與受限 filesystem RPC。AI 的原生 `bash` tool 使用同一 runtime／VFS，也保留結構化工具、skills、宿主讀取與跨 tab agents。人類 editor 重做另列後續。
+[just-bash 與 VFS 整合](docs/just-bash-plan.md) 已接入主終端：固定 `just-bash@3.6.0`、bytes VFS、opaque iframe／Worker 與受限 filesystem RPC。AI 的原生 `bash` tool 使用同一 runtime／VFS，也保留結構化工具、skills、宿主讀取與跨 tab agents。人類 Preview／Edit 以左下角齒輪上方的按鈕啟動。
 
 新版檔案資料庫為 `agent-go-round.vfs.bytes-v2`（schema 1），沿用 workspace 隔離。舊 `agent-go-round.vfs` 留存但不讀取、不清空、不自動搬移；原有對話資料庫維持不變。文字工具使用嚴格 UTF-8 facade，二進位檔改用 SDK 的 `readBytes`／`writeBytes`；不合法 UTF-8 會回報錯誤。
 
@@ -55,17 +55,18 @@ for file in *.txt; do echo "$file"; done
 
 Shell 只操作目前 workspace 的虛擬 `/`，`~`／HOME 為 `/home/user`；沒有宿主磁碟、任意 binary、網路、Node／Python、hard links、gzip codecs 或 sqlite3。執行有來源／步數／記憶體／輸出與時間上限，Stop 會終止 Worker；已開始提交的寫入可能成功，結果不確定時先讀回。
 
-對話使用分頁管理，預覽與工作區操作由 AI 呼叫 bin 工具：
+對話使用分頁管理；人類預覽／編輯使用左下角按鈕，其餘工作區操作由 AI 呼叫 bin 工具：
 
 | 操作 | 入口 |
 |---|---|
 | Shell／AI 切換 | pane 上方 AI／Shell toggle；agent 中也可 `/exit` 返回 shell |
 | 獨立對話、還原分頁 | 開啟新分頁建立 session；重新整理還原已開啟分頁 |
-| HTML 預覽 | AI 呼叫 `open_preview({path: "~/main.html"})` |
+| HTML 預覽 | 左下角 Preview 按鈕，輸入 HTML 路徑開啟 |
+| 人類檔案編輯 | 左下角 Edit 按鈕，瀏覽／開啟檔案、儲存與還原草稿 |
 | 笑話範例與 JS 工具更新 | AI 呼叫 `install_joke_demo({})`／`reload_tools({})` |
 | 回到 home、用法 | AI 呼叫 `bash({script: "cd ~"})`／`help({command: "bash"})` |
 
-Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒有同名 CLI／JSON 相容層；也不執行使用者 JS 作為 trusted shell command。人類 editor 已退出本階段。
+Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒有同名 CLI／JSON 相容層；也不執行使用者 JS 作為 trusted shell command。人類 Edit 按鈕可瀏覽、開啟／新增與儲存 UTF-8 檔案，並備份未儲存草稿。
 
 ## 跨 tab 的 agent 溝通
 
@@ -104,7 +105,7 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 一般讀取、列目錄、搜尋與文字轉換優先使用 `bash`；列目錄與搜尋使用 Bash 的 `ls`／`find`／`grep`。需要 revision、完整讀取證據、原子多檔寫入或精確替換時，使用結構化 `read`／`write`／`edit`。工具參數及 Shell 指令清單使用 `help({command: "工具名稱"})` 查詢。工具呼叫與 `help` 查詢名稱不分大小寫；Bash 的 `if`／`then`／`for` 等語法關鍵字仍採標準大小寫。
 
-預設結構化工具為 `read`、`write`、`edit`、`skill_load`、`read_host_page`、`help`、`agents`、`open_preview`、`install_joke_demo`、`reload_tools`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設結構化工具為 `read`、`write`、`edit`、`skill_load`、`read_host_page`、`help`、`agents`、`install_joke_demo`、`reload_tools`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
 
 快速體驗檔案式 skill：
 
@@ -117,17 +118,19 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 ## 主頁預覽與 popup
 
-使用 AI 呼叫 `open_preview({path: "~/main.html"})`。檔案不存在時，按「建立主頁範本」才會寫入；也可先用 shell 重導向建立檔案。
+使用左下角齒輪上方的 Preview 按鈕，輸入檔案路徑開啟。檔案不存在時，按「建立主頁範本」才會寫入；也可先用 Edit 或 shell 建立檔案。Preview 不提供給 AI，也不需要連接模型。
 
-右下角「開啟 Pi」會打開共用該 workspace 檔案的 popup。連接 Groq 後，可要求 agent 修改 `~/main.html`。檔案有更新時，按「重新載入預覽」套用內容；刷新只更新頁面 iframe，保留 popup 的對話、草稿與 active run。
+右下角「回到 AI 模式」會打開共用該 workspace 檔案的 popup。連接 Groq 後，可要求 agent 修改 `~/main.html`。檔案有更新時，按「重新載入預覽」套用內容；刷新只更新頁面 iframe，保留 popup 的對話、草稿與 active run。
 
-「開啟主頁」提供隱藏編輯器外框的 page view，例如 `?workspace=my-space&view=page`；「工作區」可另開 shell／agent。預覽 entry 和 popup surface 會持久化，整頁 reload 後可恢復，Groq 需要重新連線。
+「放大顯示」提供隱藏工作區外框的 page view，例如 `?workspace=my-space&view=page`。預覽 entry 和 popup surface 會持久化，整頁 reload 後可恢復，Groq 需要重新連線。
 
 目前支援 UTF-8 HTML、CSS、相對 CSS import 與 SVG 圖片。頁面在隔離 iframe 呈現，頁面腳本、外部網路資源與導航不執行；二進位圖片匯入、完整頁面 JavaScript、VFS 匯出／發布另列後續。詳見 [主頁預覽](docs/page-preview.md)。
 
 手機輸入欄位使用 16px；鍵盤縮小可視區時精簡標題列，保留直式 tab 列，保留輸入列及可捲動的對話區。Popup 跟隨宿主的可視區尺寸與位移，調整尺寸時保留草稿。已做瀏覽器可視區模擬，iPhone Safari 原生鍵盤仍需實機驗證。
 
 ## 儲存與工作區
+
+Edit 支援瀏覽目錄、開啟／新增 UTF-8 檔案與 ⌘S／Ctrl+S 儲存。草稿獨立備份於目前 workspace／surface，關閉或重新整理後可還原；只有按儲存才寫入原檔。若 AI 或其他分頁已修改原檔，儲存會保留草稿並提示衝突。
 
 UI 使用 IndexedDB 保存 bytes 檔案、tabs、cwd、輸入草稿、session transcript、歷史與 lifecycle／來源版本紀錄；不匯入舊 localStorage 或舊 VFS namespace。關閉 tab 保留對話歷史；reload 後重連 Groq 會接續原 messages 與 active skill。
 
@@ -146,7 +149,7 @@ npm run verify:dist
 
 2026-11-06 本機驗證：32 個測試檔、183 項測試通過，production build（含 typecheck）與 `verify:dist` 通過。瀏覽器驗證包含正式 Shell 的 12 項、AI Bash／bin 的 3 組、跨 tab 的 2 組與手機／popup 的 12 項檢查。報告與各輪範圍見 [驗證紀錄](docs/just-bash-progress.md)。
 
-回歸涵蓋歷史接續、provider、VFS bytes／交易、結構化工具／skills、預覽、popup identity，以及指令／工具大小寫、AI 預設模式與 toggle。舊 JSON CLI 與人類 editor 已移除。一般 `npm test` 不呼叫模型或消耗額度；just-bash 版的外部模型 smoke 與 iPhone Safari 真機驗收仍待完成。
+回歸涵蓋歷史接續、provider、VFS bytes／交易、結構化工具／skills、預覽、popup identity，以及指令／工具大小寫、AI 預設模式與 toggle。舊 JSON CLI 已移除；人類編輯使用 Edit 按鈕。一般 `npm test` 不呼叫模型或消耗額度；just-bash 版的外部模型 smoke 與 iPhone Safari 真機驗收仍待完成。
 
 瀏覽器 runners 已改用 just-bash 與現行 UI；agent／host／tabs 預設使用本機 HTTP／SSE fixture 驅動真正 Pi loop，不呼叫外部模型。瀏覽器 runner 使用 agent-browser CLI，可透過 `AGENT_BROWSER_CLI` 指定 executable 或 JS 入口：
 
@@ -231,7 +234,7 @@ just-bash／bytes VFS 的 P0–P5 已落地；後續以 [主計畫](docs/plan.md
 |---|---|
 | 待驗收 | just-bash 版的真實 Groq 工具／笑話／預覽 smoke；iPhone Safari 原生鍵盤、中文輸入、旋轉與 popup 操作 |
 | 部分完成 | Context budget、模型 context length 與可調整的 40% 自動裁切已做；原始歷史封存、真正摘要、可檢閱的 compaction 紀錄與超限處理仍待補齊 |
-| 未實作 | 工作區匯出／匯入；歷史搜尋、重新命名、封存／刪除、Markdown／程式碼呈現；人類檔案 editor 重做 |
+| 未實作 | 工作區匯出／匯入；歷史搜尋、重新命名、封存／刪除、Markdown／程式碼呈現 |
 | 未實作 | PNG／JPEG 等二進位預覽與匯入介面、受控頁面 JavaScript、HTML／資源匯出及訪客可見的發布 |
 | 刻意延後 | 跨輸入保留完整 Shell 狀態、hard links、多使用者權限、Node／Python／網路執行；MCP、遠端磁碟、ChatGPT 訂閱 adapter、自動 delegation、voice 與多模態 |
 

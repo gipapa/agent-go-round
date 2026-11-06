@@ -120,3 +120,18 @@ export async function runWorkspaceToolInPage(baseUrl, name, args = {}, doc = doc
 }
 
 export const workspaceToolScript = (baseUrl, name, args = {}) => `(${runWorkspaceToolInPage.toString()})(${JSON.stringify(baseUrl)},${JSON.stringify(name)},${JSON.stringify(args)})`;
+
+// Human-only Preview is opened by UI controls, without a model or provider connection.
+export async function openHumanPreviewInPage(path = "~/main.html", doc = document) {
+  const until = async test => {
+    const start = Date.now();
+    while (!test()) { if (Date.now() - start > 25000) throw new Error("Human preview timed out"); await new Promise(resolve => setTimeout(resolve, 30)); }
+  };
+  await until(() => doc.querySelector("#human-preview") && !doc.querySelector("#human-preview").disabled);
+  doc.querySelector("#human-preview").click();
+  doc.querySelector("#human-preview-path").value = path;
+  doc.querySelector("#human-preview-form").requestSubmit();
+  await until(() => doc.querySelector("#human-preview-dialog").hidden && doc.querySelector("#pane-type").textContent === "頁面預覽");
+  return true;
+}
+export const humanPreviewScript = (path = "~/main.html") => `(${openHumanPreviewInPage.toString()})(${JSON.stringify(path)})`;

@@ -1,7 +1,7 @@
 import { executeFileCapability, FILE_METHODS, BIN_CAPABILITIES, type BinCapability, type FileMethod, type BinFileAccess } from "./file-capabilities";
 import { validateToolArguments, type TSchema } from "@earendil-works/pi-ai";
 import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, type BinManifest } from "./bin-defaults";
-import { VFS_HOME, resolvePath, type FileNode, type VirtualFileSystem } from "./fs";
+import { VFS_HOME, type FileNode, type VirtualFileSystem } from "./fs";
 import { ToolOutcomeUnknownError, type SessionTool, type FileReadRange } from "./session";
 import type { BinExecutor } from "./bin-sandbox";
 import { commandHelp } from "./shell-help";
@@ -16,7 +16,6 @@ export class BinRegistry {
   constructor(readonly fs: VirtualFileSystem, private readonly executor: BinExecutor, private readonly services: {
     readHostPage?: (args: { offset?: number; limit?: number }, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
     tabAgents?: (args: unknown, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
-    openPreview?: (entry: string, signal: AbortSignal, context: BinHostContext) => Promise<unknown>;
   } = {}) {}
 
   /** Atomically replace the catalog; tools already registered in a run keep immutable definitions. */
@@ -31,6 +30,8 @@ export class BinRegistry {
       const manifest = JSON.parse(metadata.content) as BinManifest;
       if (manifest.version !== 1 || typeof manifest.name !== "string" || !/^[a-z][a-z0-9_]{0,63}$/i.test(manifest.name) || file.path.split("/").pop()!.toLowerCase() !== `${manifest.name.toLowerCase()}.tool.json`) throw new Error(`Invalid tool identity: ${file.path}`);
       if (typeof manifest.description !== "string" || !manifest.description.trim() || manifest.description.length > 2000) throw new Error(`Invalid tool description: ${file.path}`);
+      // Preview is a human UI action, including in workspaces with customized legacy tools.
+      if (manifest.name.toLowerCase() === "open_preview" || Array.isArray(manifest.capabilities) && (manifest.capabilities as readonly string[]).includes("openPreview")) continue;
       if (!manifest.parameters || (manifest.parameters as { type?: string }).type !== "object" || !Array.isArray(manifest.capabilities) || manifest.capabilities.some((value) => !BIN_CAPABILITIES.includes(value))) throw new Error(`Invalid tool schema or capabilities: ${file.path}`);
       const source = await this.fs.readFile(`${BIN_DIRECTORY}/${manifest.name}.js`);
       if (!source.content.trim() || source.content.length > 64_000) throw new Error(`Invalid tool source: ${source.path}`);
@@ -74,11 +75,6 @@ export class BinRegistry {
         }
         await this.reload();
         return { tools: this.list().map(tool => tool.name), message: "AI tools reloaded. New definitions apply on the next run; running calls keep their original definitions." };
-      }
-      if (method === "openPreview") {
-        if (!Array.isArray(values) || values.length > 1 || values[0] !== undefined && (typeof values[0] !== "string" || !values[0].length || values[0].length > 1024)) throw new Error("Invalid preview path");
-        if (!this.services.openPreview) throw new Error("Preview UI unavailable");
-        return this.services.openPreview(resolvePath((values[0] as string | undefined) ?? "~/main.html", cwd), execution.signal, context);
       }
       if (method === "tabAgents") {
         if (!Array.isArray(values) || values.length !== 1) throw new Error("Invalid agents arguments");

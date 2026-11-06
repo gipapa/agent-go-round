@@ -3,7 +3,7 @@ import type { FileReadRange } from "./session";
 
 export const FILE_METHODS = ["stat", "readFile", "listDirectory", "writeFile", "writeFiles", "mkdir", "remove"] as const satisfies readonly (keyof VirtualFileSystem)[];
 export type FileMethod = typeof FILE_METHODS[number];
-export const BIN_CAPABILITIES = [...FILE_METHODS, "loadSkill", "readHostPage", "commandHelp", "tabAgents", "home", "openPreview", "reloadTools"] as const;
+export const BIN_CAPABILITIES = [...FILE_METHODS, "loadSkill", "readHostPage", "commandHelp", "tabAgents", "home", "reloadTools"] as const;
 export type BinCapability = typeof BIN_CAPABILITIES[number];
 export type BinFileAccess = { method: FileMethod; path: string; revision?: number; readRange?: FileReadRange };
 export type FileCapabilityArguments = { [K in FileMethod]: Parameters<VirtualFileSystem[K]> };

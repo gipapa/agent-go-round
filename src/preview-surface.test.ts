@@ -18,6 +18,8 @@ describe("preview and popup lifecycle", () => {
       expect(new URL(original).searchParams.get("workspace")).toBe("test-space");
       expect(new URL(original).searchParams.get("surface")).toBe("popup-test");
       expect(surface.frame.getAttribute("sandbox")).toBe("");
+      expect([...surface.element.querySelectorAll(".preview-toolbar a")].map(link => link.textContent)).toEqual(["放大顯示"]);
+      expect(surface.widget.element.shadowRoot!.querySelector(".launcher")!.textContent).toBe("回到 AI 模式");
       surface.widget.open();
       await fs.writeFile("~/main.html", '<link rel="stylesheet" href="styles.css"><h1>After</h1>');
       await fs.writeFile("~/styles.css", "h1{color:blue}");

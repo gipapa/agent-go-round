@@ -184,28 +184,6 @@ describe("main workspace UI", () => {
     document.documentElement.classList.remove("keyboard-open");
   });
 
-  it("routes an explicit question to the other tab without creating a queue", async () => {
-    await loadApp();
-    document.querySelector<HTMLButtonElement>("#add-tab")!.click();
-    const routeButton = document.querySelector<HTMLButtonElement>("#route-tab");
-    const routeDialog = document.querySelector<HTMLElement>("#route-dialog");
-    const routeTarget = document.querySelector<HTMLSelectElement>("#route-target");
-    const routeMessage = document.querySelector<HTMLTextAreaElement>("#route-message");
-    const routeForm = document.querySelector<HTMLFormElement>("#route-form");
-    if (!routeButton || !routeDialog || !routeTarget || !routeMessage || !routeForm) throw new Error("Expected route controls");
-
-    routeButton.click();
-    expect(routeDialog.hidden).toBe(false);
-    expect(routeTarget.options).toHaveLength(1);
-    routeMessage.value = "Check the review tab";
-    routeMessage.dispatchEvent(new Event("input", { bubbles: true }));
-    routeForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-
-    expect(routeDialog.hidden).toBe(true);
-    await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
-    expect(document.querySelectorAll("#tab-list .tab")).toHaveLength(2);
-  });
-
   it("persists and restores a draft without requiring a provider key", async () => {
     await loadApp();
     const prompt = document.querySelector<HTMLTextAreaElement>("#prompt");

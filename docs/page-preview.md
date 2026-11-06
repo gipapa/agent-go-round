@@ -1,30 +1,30 @@
 # VFS 主頁與 Pi popup
 
-更新：2026-11-04。現行終端與 AI bash 使用 just-bash；人類 editor 已移除。完整整合與驗收狀態見 [驗證紀錄](just-bash-progress.md)。
+更新：2026-11-06。現行終端與 AI bash 使用 just-bash；人類 Preview／Edit 使用左下角齒輪上方的按鈕。完整整合與驗收狀態見 [驗證紀錄](just-bash-progress.md)。
 
-在 shell 建立 HTML，再使用 AI 呼叫 `open_preview({path: "~/main.html"})` 開啟。預設 entry 為 `~/main.html`；檔案不存在時，按「建立主頁範本」才寫入，不覆寫已有內容。
+在 shell 或 Edit 編輯器建立 HTML，再按左下角 Preview，輸入檔案路徑開啟。預設 entry 為 `~/main.html`；檔案不存在時，按「建立主頁範本」才寫入，不覆寫已有內容。Preview 不提供給 AI，也不需要連接 provider。
 
 ```sh
 printf '<h1>我的主頁</h1>' > ~/main.html
 ```
 
-預覽右下角的「開啟 Pi」掛載現有 popup。連接 Groq，即可要求 agent 透過 bash 或結構化工具讀寫同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。每個新分頁建立獨立 session，重新整理還原已開啟的分頁；`/exit` 返回 shell。
+預覽右下角的「回到 AI 模式」掛載現有 popup。連接 Groq，即可要求 agent 透過 bash 或結構化工具讀寫同一 workspace 的檔案，包括 AGENTS.md、skills 與 main.html。每個新分頁建立獨立 session，重新整理還原已開啟的分頁；`/exit` 返回 shell。
 
 檔案更新後顯示「檔案有更新」，按「重新載入預覽」才套用。刷新僅替換頁面 iframe，保留 popup 對話、草稿及執行中的任務；切換 tabs 也保留 popup。整頁 reload 恢復 entry、surface 與對話，未保存 key 時需重新連線，不自動重送模型請求或工具副作用。
 
-「開啟主頁」開啟隱藏工作區外框的 page view，例如：
+「放大顯示」開啟隱藏工作區外框的 page view，例如：
 
 ```text
 /?workspace=my-space&view=page&entry=%2Fhome%2Fuser%2Fmain.html&surface=page
 ```
 
-workspace 決定檔案與歷史範圍，surface 決定持久化版面；popup 的 surface identity 隨預覽 tab 保存。page view 的「工作區」連結可回到 shell／AI 工作區。
+workspace 決定檔案與歷史範圍，surface 決定持久化版面；popup 的 surface identity 隨預覽 tab 保存。page view 可透過「回到 AI 模式」打開共用檔案的 popup。
 
 ## 手機與 popup
 
 手機／窄螢幕與 popup 僅顯示直式 tab 列；桌面工作區僅顯示橫式列，皆可新增、切換、關閉及開啟 provider settings。Popup loader 指定 `tabs=vertical`。
 
-just-bash 指令名稱不分大小寫；變數、路徑與參數保留大小寫，路徑與內容保留大小寫。每次送出獨立 script，僅保存 cwd；shell 的 read／help 使用上游定義。AI 模式使用 UI 切換，沒有舊 JSON CLI 或 editor 指令。
+just-bash 指令名稱不分大小寫；變數、路徑與參數保留大小寫，路徑與內容保留大小寫。每次送出獨立 script，僅保存 cwd；shell 的 read／help 使用上游定義。AI 模式使用 UI 切換，沒有舊 JSON CLI 或 editor 指令；人類檔案編輯使用 Edit 按鈕。
 
 觸控輸入欄位採 16px。鍵盤縮小可視區時保留 tab 操作、精簡標題與 composer，terminal 仍可捲動。App 和 popup 跟隨 visual viewport 的高度、寬度與位移，不 remount iframe、不丟失草稿。`test:mobile:browser` 以真實 Chrome 模擬 360px 高可視區；這是版面回歸，未取代 iPhone Safari 的實體鍵盤驗收。
 

@@ -1,6 +1,6 @@
 # AgentGoRound：輕量前端 harness 規劃
 
-目前交付依 [just-bash／VFS 計畫](just-bash-plan.md)：人類與 AI 的 bash 共用 opaque Worker／IndexedDB VFS，保留結構化工具、skills、歷史、跨 tab 與宿主來源身分。舊 parser／JSON CLI／人類 editor 已移除；editor 重做與完整互動 shell session 列為後續。[程式與驗證紀錄](just-bash-progress.md) 記錄最新 gates 與未執行的外部模型 smoke。
+目前交付依 [just-bash／VFS 計畫](just-bash-plan.md)：人類與 AI 的 bash 共用 opaque Worker／IndexedDB VFS，保留結構化工具、skills、歷史、跨 tab 與宿主來源身分。舊 parser／JSON CLI 已移除；人類 Preview／Edit 改由左下角按鈕開啟，完整互動 shell session 列為後續。[程式與驗證紀錄](just-bash-progress.md) 記錄整合 gates。
 
 2026-11-06 盤點：新分頁預設 AI、AI／Shell toggle、指令／工具名稱不分大小寫與 AGENTS.md 兩套工具清單已完成。AI 一般檔案操作以 Bash 為主，bin 保留相容與版本化功能。
 
@@ -78,7 +78,7 @@ Pi 仍擁有唯一模型／工具循環；沒有另加 verifier agent、自動�
 | P2 | 未實作 | 工作區備份與搬移：明確匯出／匯入 bytes 與必要 metadata，驗證格式、大小、衝突，不含 credentials；舊 v2 匯入規則需另訂 |
 | P3 | 未實作 | 歷史管理與閱讀：搜尋、重新命名、封存／刪除、Markdown／程式碼呈現，保持 session identity 與閱讀位置 |
 | P4 | 未實作 | 頁面資源與發布：PNG／JPEG 匯入／預覽、JavaScript 隔離／權限、HTML／資源匯出、訪客可見發布，分項驗收；底層 VFS bytes 已完成 |
-| 後續 | 未實作 | 人類檔案 editor 重做；先定義新 UI／檔案瀏覽與編輯契約，不恢復已移除的舊 editor CLI |
+| 人類工具 | 已實作 | 左下角 Preview／Edit 按鈕；檔案瀏覽、UTF-8 開啟／新增／儲存、草稿備份及 revision 衝突保護，不恢復舊 editor CLI |
 
 AI 跨 tab 的 `agents list/send/read` 已完成，無須重做；自動 delegation／編排仍延後。完整跨輸入 Shell 狀態、hard links、多使用者權限、Node／Python／網路／任意系統 binary 仍是刻意延後的能力。
 

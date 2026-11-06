@@ -12,7 +12,7 @@ vi.mock("./core/bin-sandbox", async () => {
     async execute(source: string, args: unknown, rpc: import("./core/bin-sandbox").FileRpc) {
       return structuredClone(await runInNewContext(`(${source})`, {}, { timeout: 1000 })(args, {
         fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])),
-        workspace: { home: () => rpc("home", []), openPreview: (path?: string) => rpc("openPreview", [path]) },
+        workspace: { home: () => rpc("home", []) },
         tools: { help: (command?: string) => rpc("commandHelp", [command]), reload: () => rpc("reloadTools", []) }
       }));
     }
@@ -61,15 +61,12 @@ async function callTool(name: string, args: unknown = {}) {
   await enterAgent(); await connect();
   nextTool = { name, arguments: JSON.stringify(args) };
   await send(`Call ${name}`);
-  if (name === "open_preview") {
-    const tabs = document.querySelectorAll<HTMLButtonElement>("#tab-list .tab");
-    tabs[0].click();
-    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
-    document.querySelectorAll<HTMLButtonElement>("#tab-list .tab")[tabs.length - 1].click();
-  }
+
 }
 async function openPreviewFixture(path: string) {
-  await callTool("open_preview", { path });
+  document.querySelector<HTMLButtonElement>("#human-preview")!.click();
+  document.querySelector<HTMLInputElement>("#human-preview-path")!.value = path;
+  document.querySelector<HTMLFormElement>("#human-preview-form")!.requestSubmit();
   await vi.waitFor(() => expect(document.querySelector("#pane-type")!.textContent).toBe("頁面預覽"));
 }
 async function installDemo() { await callTool("install_joke_demo"); }
@@ -147,13 +144,35 @@ describe("Tab sessions at the real provider request boundary", () => {
     expect((await fs.readFile("~/agents.md")).revision).toBe(1);
   });
 
+  it("opens human tools above settings without model calls and restores an unsaved editor draft", async () => {
+    await loadApp();
+    const fs = new IndexedDbFileSystem(window.indexedDB);
+    await fs.writeFile("~/main.html", "Original");
+    const footer = document.querySelector(".sidebar-footer")!;
+    expect([...footer.querySelectorAll("button")].map(button => button.id)).toEqual(["human-preview", "human-edit", "sidebar-provider-toggle"]);
+    document.querySelector<HTMLButtonElement>("#human-edit")!.click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("Original"));
+    const content = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
+    content.value = "Saved by human"; content.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector<HTMLButtonElement>("#editor-save")!.click();
+    await vi.waitFor(async () => expect((await fs.readFile("~/main.html")).content).toBe("Saved by human"));
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#editor-save")!.disabled).toBe(true));
+    content.value = "Unsaved draft"; content.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector<HTMLButtonElement>("#editor-close")!.click();
+    await vi.waitFor(async () => expect(await new IndexedWorkspaceRecords(window.indexedDB).transaction(false, tx => tx.get<{content:string}>("human-editor:workspace"))).toMatchObject({ content: "Unsaved draft" }));
+    await loadApp(); document.querySelector<HTMLButtonElement>("#human-edit")!.click();
+    await vi.waitFor(() => expect(document.querySelector<HTMLTextAreaElement>("#editor-content")!.value).toBe("Unsaved draft"));
+    expect((await fs.readFile("~/main.html")).content).toBe("Saved by human");
+    expect(requests).toHaveLength(0);
+  });
+
   it("defaults new tabs to AI and switches modes without replacing the conversation", async () => {
     await loadApp();
     const toggle = document.querySelector<HTMLButtonElement>("#mode-toggle")!;
     expect(toggle.getAttribute("role")).toBe("switch");
     expect(toggle.getAttribute("aria-checked")).toBe("true");
-    for (const selector of ["#new-conversation", "#history-toggle", "#conversation-history", ".workspace-menu"]) expect(document.querySelector(selector)).toBeNull();
-    expect(document.querySelectorAll(".pane-tools button")).toHaveLength(1);
+    for (const selector of ["#new-conversation", "#history-toggle", "#conversation-history", ".workspace-menu", "#route-tab", "#route-dialog", ".pane-tools"]) expect(document.querySelector(selector)).toBeNull();
+    expect(document.querySelector(".pane-header-actions > #mode-toggle")).toBe(toggle);
     const before = (await saved())!.tabs[0].session.sessionId;
     toggle.click();
     await vi.waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("false"));
@@ -170,7 +189,7 @@ describe("Tab sessions at the real provider request boundary", () => {
     await send("/EXIT");
     expect(document.querySelector("#pane-type")!.textContent).toBe("just-bash");
   });
-  it("preserves preview path case when opening through bin", async () => {
+  it("preserves preview path case when opening with the human button", async () => {
     await loadApp();
     const fs = new IndexedDbFileSystem(window.indexedDB);
     await fs.writeFile("~/Mixed.html", "<h1>MiXeD Content</h1>");

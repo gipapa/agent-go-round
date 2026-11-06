@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { browser, workspaceToolFixture, workspaceToolScript, writeFiles } from "./browser-fixture.mjs";
+import { browser, workspaceToolFixture, workspaceToolScript, humanPreviewScript, writeFiles } from "./browser-fixture.mjs";
 
 const ui = browser(`agr-workspace-tools-${process.pid}`);
 const fixture = await workspaceToolFixture();
@@ -20,21 +20,21 @@ const shell = async script => {
 try {
   await mkdir("test-results", { recursive: true });
   await ui.call("open", url.href); await ui.ready(); await ui.call("snapshot");
-  assert(await ui.evaluate('return !document.querySelector("#history-toggle,#conversation-history,.workspace-menu,#new-conversation")&&document.querySelectorAll(".pane-tools button").length===1'), "Removed UI still present");
+  assert(await ui.evaluate('return !document.querySelector("#history-toggle,#conversation-history,.workspace-menu,#new-conversation,#route-tab,#route-dialog,.pane-tools")&&document.querySelectorAll(".pane-header-actions > #mode-toggle").length===1'), "Removed UI still present");
   const initial = (await layout()).tabs[0].session.sessionId;
   await ui.call("screenshot", "test-results/workspace-tools-desktop.png");
   await ui.call("set", "viewport", "390", "844");
   assert(await ui.evaluate('return document.documentElement.scrollWidth<=innerWidth'), "Mobile layout overflows");
   await ui.call("screenshot", "test-results/workspace-tools-mobile.png");
   await ui.call("set", "viewport", "1280", "900");
-  check("desktop/mobile show only the session mode toggle");
+  check("desktop/mobile place the session mode toggle in the header without route controls");
 
   await shell("mkdir -p ~/Project; cd /tmp");
   await shell(writeFiles([{ path: "~/Project/Mixed.html", content: "<h1>Shared VFS preview</h1>" }, { path: "~/home.txt", content: "home-file" }]));
   await runTool("help", { command: "bash" });
   assert(JSON.stringify(fixture.requests.at(-1).messages).includes("Commands:"), "Shell guide did not reach the model");
   const exposed = fixture.requests.at(-1).tools.map(tool => tool.function.name);
-  assert(exposed.length === 11 && !["shell_guide", "home", "ls", "find", "grep"].some(name => exposed.includes(name)), "Redundant default tools remain exposed");
+  assert(exposed.length === 10 && !["shell_guide", "home", "ls", "find", "grep", "open_preview"].some(name => exposed.includes(name)), "Redundant default tools remain exposed");
   await runTool("bash", { script: "cd ~/Project" });
   await runTool("bash", { script: "cd ~" });
   await runTool("read", { path: "home.txt" });
@@ -61,15 +61,15 @@ try {
   check("reload_tools exposes a newly created VFS bin tool on the next run");
 
   await runTool("bash", { script: "cd ~/Project" });
-  await runTool("open_preview", { path: "Mixed.html" });
+  await ui.evaluate(`return ${humanPreviewScript("~/Project/Mixed.html")}`);
   await ui.wait('document.querySelector(".preview-surface > iframe")?.srcdoc.includes("Shared VFS preview")');
   let saved = await layout();
   assert(saved.tabs.find(tab => tab.mode === "preview").preview.entry === "/home/user/Project/Mixed.html", "Preview ignored the source agent cwd/path case");
   assert(saved.tabs.find(tab => tab.id === "main").session.sessionId === initial, "Preview replaced the source session");
   await ui.evaluate('document.querySelector("#tab-list .tab").click();return true');
-  await runTool("open_preview", { path: "Mixed.html" });
+  await ui.evaluate(`return ${humanPreviewScript("~/Project/Mixed.html")}`);
   assert((await layout()).tabs.filter(tab => tab.mode === "preview").length === 1, "Preview duplicated the existing tab");
-  check("open_preview uses the source agent cwd and reuses the existing preview tab");
+  check("human Preview opens the selected file and reuses the existing preview tab");
 
   await ui.evaluate('document.querySelector("#tab-list .tab").click();document.querySelector("#add-tab").click();return true');
   const before = await layout();

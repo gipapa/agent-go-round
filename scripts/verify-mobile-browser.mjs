@@ -1,4 +1,4 @@
-import { workspaceToolFixture, workspaceToolScript } from "./browser-fixture.mjs";
+import { humanPreviewScript } from "./browser-fixture.mjs";
 // Geometry regression: simulates the visual viewport above an on-screen keyboard.
 // Does not claim to exercise a physical iOS keyboard. No model credentials needed.
 import { execFile } from "node:child_process";
@@ -26,15 +26,15 @@ async function viewport(height, offsetTop = 0, width = 390, offsetLeft = 0) {
   await new Promise(resolve => setTimeout(resolve, 200));
 }
 const url = new URL(process.env.AGENT_GO_ROUND_APP_URL || "http://127.0.0.1:4173/"); url.searchParams.set("workspace", `keyboard-${Date.now()}`);
-const toolsFixture = await workspaceToolFixture();
+
 const report = { url: url.href, simulatedVisualViewport: true, checks: [], status: "running" };
 const check = name => report.checks.push({ name, status: "pass" });
 try {
   await call("open", url.href); await call("set", "viewport", "1280", "900");
   await wait("!!document.querySelector('#send')&&!document.querySelector('#send').disabled"); await call("snapshot");
-  assert(await evaluate("getComputedStyle(document.querySelector('.sidebar')).display==='none'&&getComputedStyle(document.querySelector('.tab-bar')).display!=='none'&&document.querySelector('#provider-toggle').getBoundingClientRect().width>0"), "Desktop should show horizontal tabs and accessible settings only");
+  assert(await evaluate("getComputedStyle(document.querySelector('.sidebar-body')).display==='none'&&getComputedStyle(document.querySelector('.tab-bar')).display!=='none'&&document.querySelector('#human-preview').getBoundingClientRect().width>0&&document.querySelector('#human-edit').getBoundingClientRect().width>0&&document.querySelector('#sidebar-provider-toggle').getBoundingClientRect().width>0"), "Desktop should show horizontal tabs and a lower-left human tool rail");
   await call("screenshot", "test-results/tabs-desktop.png");
-  check("desktop shows horizontal tabs only with accessible provider settings");
+  check("desktop shows horizontal tabs with lower-left human tools and settings");
   await call("set", "viewport", "390", "844");
   assert(await evaluate("getComputedStyle(document.querySelector('.sidebar')).display!=='none'&&getComputedStyle(document.querySelector('.tab-bar')).display==='none'"), "Mobile should show vertical tabs only");
   const initialTabs = await evaluate("document.querySelectorAll('#agent-list .agent-row').length");
@@ -64,7 +64,7 @@ try {
   assert(await evaluate("(() => {const t=document.querySelector('#terminal');t.scrollTop=0;const first=t.scrollTop;t.scrollTop=t.scrollHeight;return t.scrollTop>first;})()"), "Transcript cannot scroll with keyboard open");
   report.compact = compact; check("360px visible viewport keeps composer visible and transcript scrollable");
   await call("screenshot", "test-results/mobile-keyboard-simulated.png");
-  await call("click", "#mode-toggle"); assert(await evaluate("document.querySelector('#pane-type').textContent==='AI agent'"), "ai did not enter agent mode");
+  await call("click", "#mode-toggle"); await wait("document.querySelector('#pane-type').textContent==='AI agent'");
   const mobileStatusBar = await evaluate("(() => {const footer=document.querySelector('.terminal-footer'),model=document.querySelector('#footer-model'),footerBox=footer.getBoundingClientRect(),modelBox=model.getBoundingClientRect();return {text:model.textContent,height:footerBox.height,modelHeight:modelBox.height,modelWidth:modelBox.width,modelScrollWidth:model.scrollWidth,modelClientWidth:model.clientWidth};})()");
   assert(mobileStatusBar.text.includes("context") && mobileStatusBar.text.includes("compact") && mobileStatusBar.modelHeight > 12 && mobileStatusBar.modelScrollWidth === mobileStatusBar.modelClientWidth, "Mobile AI status bar clipped context usage");
   check("mobile AI status bar wraps model and context usage instead of clipping it");
@@ -80,7 +80,7 @@ try {
   assert(await evaluate("(() => {const input=document.querySelector('#api-key'),button=document.querySelector('button[form=provider-form]'),a=input.getBoundingClientRect(),b=button.getBoundingClientRect();return getComputedStyle(input).fontSize==='16px'&&a.top>=60&&a.bottom<=420&&b.bottom<=420;})()"), "Settings controls covered by keyboard");
   await call("click", "#close-settings"); await viewport(844);
   check("provider inputs and connect action fit the visible viewport");
-  await evaluate(workspaceToolScript(toolsFixture.baseUrl, "open_preview"));
+  await evaluate(humanPreviewScript());
   await wait("[...document.querySelectorAll('.preview-toolbar button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
   await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('我的 Pi 主頁')");
@@ -104,7 +104,7 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }
 finally {
-  await toolsFixture.close();
+
   await mkdir("test-results", { recursive: true });
   await writeFile("test-results/mobile-browser.json", JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report)); await call("close");

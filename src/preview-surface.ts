@@ -28,18 +28,16 @@ export class PreviewSurface {
     this.refresh.addEventListener("click", () => void this.reload());
     this.create.type = "button"; this.create.textContent = "建立主頁範本"; this.create.hidden = true;
     this.create.addEventListener("click", () => void this.createStarter());
-    const page = document.createElement("a"); page.textContent = "開啟主頁"; page.target = "_blank"; page.rel = "noopener";
+    const page = document.createElement("a"); page.textContent = "放大顯示"; page.target = "_blank"; page.rel = "noopener";
     const url = new URL(window.location.href);
     url.searchParams.set("workspace", workspaceId); url.searchParams.set("view", "page"); url.searchParams.set("entry", config.entry); url.searchParams.set("surface", "page");
     page.href = url.href;
-    const workspace = document.createElement("a"); workspace.textContent = "工作區";
     const workspaceUrl = new URL(url); for (const name of ["view", "entry", "surface"]) workspaceUrl.searchParams.delete(name);
-    workspace.href = workspaceUrl.href; workspace.target = "_blank"; workspace.rel = "noopener";
-    toolbar.append(title, this.status, this.refresh, this.create, page, workspace);
+    toolbar.append(title, this.status, this.refresh, this.create, page);
     this.frame.title = `預覽 ${displayPath(config.entry)}`;
     this.frame.setAttribute("sandbox", ""); this.frame.setAttribute("referrerpolicy", "no-referrer");
     this.element.append(toolbar, this.frame);
-    this.widget = mount({ target: this.element, appUrl: workspaceUrl.href, workspaceId, surfaceId: config.surfaceId, title: "Pi · 頁面工作區", buttonLabel: "開啟 Pi", width: 700, height: 800,
+    this.widget = mount({ target: this.element, appUrl: workspaceUrl.href, workspaceId, surfaceId: config.surfaceId, title: "Pi · 頁面工作區", buttonLabel: "回到 AI 模式", width: 700, height: 800,
       hostPageReader: async (offset, limit) => {
         const file = await this.fs.readFile(this.config.entry);
         if (offset > file.content.length) throw new Error("Host page offset exceeds HTML length");

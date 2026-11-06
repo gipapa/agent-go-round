@@ -47,11 +47,6 @@ const WRITE_ONE_SOURCE = `async function main(args, api) {
 
 export const DEFAULT_BIN_TOOLS: readonly BinDefinition[] = [
   {
-    version: 1, name: "open_preview", description: "Open a VFS HTML file in a preview tab, or focus its existing preview. path defaults to ~/main.html; relative paths use this agent's working directory. Requires the app preview UI.",
-    parameters: object({ path: Type.Optional(path) }), capabilities: ["openPreview"],
-    source: "async function main(args, api) { return api.workspace.openPreview(args.path); }"
-  },
-  {
     version: 1, name: "install_joke_demo", description: "Install the optional joke demo files, skill and rules in the shared VFS. Only creates missing files and preserves existing files and lowercase rules. Returns created/kept paths and a suggested prompt; does not run the demo.",
     parameters: object({}), capabilities: ["mkdir", "listDirectory", "writeFiles"],
     source: JOKE_DEMO_SOURCE

@@ -1,5 +1,7 @@
 # 工具實測與精簡（2026-11-06）
 
+後續介面調整：Preview 已改為人類按鈕，open_preview 不再提供給 AI；以下保留當時的實測紀錄。
+
 使用 Groq `openai/gpt-oss-120b` 逐項測試原本的 16 個工具（原生 Bash 與 15 個 bin）。模型使用產品的提示、schema、Pi loop 與 VFS；Node 測試執行磁碟上的 bin JS。預覽、宿主頁及另一分頁的回覆在此測試使用 fixture，另以瀏覽器驗證真實 Worker、bridge 與分頁 router。
 
 ## 逐項結果

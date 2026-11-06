@@ -17,7 +17,7 @@ import { SHELL_COMMANDS, SHELL_BUILTINS } from "./shell-catalog";
 const testExecutor: BinExecutor = {
   async execute(source, args, rpc: FileRpc) {
     const main = runInNewContext(`(${source})`, {}, { timeout: 1000 });
-    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]), reload: () => rpc("reloadTools", []) }, workspace: { home: () => rpc("home", []), openPreview: (path?: string) => rpc("openPreview", [path]) }, agents: { execute: (options: unknown) => rpc("tabAgents", [options]) } }));
+    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]), reload: () => rpc("reloadTools", []) }, workspace: { home: () => rpc("home", []) }, agents: { execute: (options: unknown) => rpc("tabAgents", [options]) } }));
   }
 };
 async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}) {
@@ -62,7 +62,7 @@ describe("VFS ~/bin JavaScript tools", () => {
           expect(bin.list().map(tool => tool.name)).not.toContain(tool.name);
         } else {
           expect((await fs.readFile(`~/bin/${tool.name}.js`)).content).toContain(customization === "js" ? "// My tool" : tool.source);
-          expect(bin.list().some(current => current.name === tool.name)).toBe(true);
+          expect(bin.list().some(current => current.name === tool.name)).toBe(tool.name !== "open_preview");
         }
       }
       await installDefaultBin(fs);
@@ -97,18 +97,17 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect((await fs.readFile("~/agents.md")).content).toBe("personal rules");
   });
 
-  it("binds preview and relative file paths to the caller, not the visible tab", async () => {
-    const calls: unknown[] = [];
-    const { fs, bin } = await setup({ openPreview: async (entry, _signal, context) => { calls.push({ entry, context }); return { entry }; } });
-    await fs.mkdir("~/Project");
-    let cwd = "/home/user/Project";
-    const tools = bin.sessionTools(() => cwd, undefined, undefined, "caller-session", value => { cwd = value; });
-    await tools.find(tool => tool.name === "open_preview")!.execute("preview-call", { path: "Mixed.html" });
-    expect(calls).toEqual([{ entry: "/home/user/Project/Mixed.html", context: { sessionId: "caller-session", toolCallId: "preview-call" } }]);
-    await fs.writeFile("~/Project/local.txt", "local data");
-    expect(await tools.find(tool => tool.name === "read")!.execute("read-local", { path: "local.txt" })).toMatchObject({ details: { content: "local data" } });
-    const plain = await setup();
-    await expect(plain.bin.execute("open_preview", {})).rejects.toThrow("Preview UI unavailable");
+  it("keeps preview unavailable to AI, including customized legacy manifests", async () => {
+    const { fs, bin } = await setup();
+    const { source, ...manifest } = RETIRED_DEFAULT_BIN_TOOLS.find(tool => tool.name === "open_preview")!;
+    await fs.writeFile("~/bin/open_preview.js", source + "\n// customized");
+    await fs.writeFile("~/bin/manifests/open_preview.tool.json", JSON.stringify(manifest));
+    await fs.writeFile("~/bin/renamed_preview.js", source);
+    await fs.writeFile("~/bin/manifests/renamed_preview.tool.json", JSON.stringify({ ...manifest, name: "renamed_preview" }));
+    await bin.reload();
+    expect(bin.list().some(tool => /preview/.test(tool.name))).toBe(false);
+    await expect(bin.execute("open_preview", {})).rejects.toThrow("Command not found");
+    expect((await fs.readFile("~/bin/open_preview.js")).content).toContain("customized");
   });
 
   it("reloads edited tools through bin while preserving current definitions and recovering from invalid manifests", async () => {
@@ -124,12 +123,10 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await bin.execute("read", { path: "value.txt" })).toEqual({ edited: true });
     await fs.remove("~/bin/manifests/broken.tool.json");
     await expect(bin.execute("reload_tools", {})).resolves.toMatchObject({ tools: expect.arrayContaining(["reload_tools"]) });
-    await fs.writeFile("~/bin/help.js", 'async function main(args, api) { return api.workspace.openPreview(42); }');
+    await fs.writeFile("~/bin/help.js", 'async function main(args, api) { return api.fs.writeFile("~/forbidden", "text"); }');
     await bin.reload();
     await expect(bin.execute("help", {})).rejects.toThrow("capability");
-    await fs.writeFile("~/bin/open_preview.js", 'async function main(args, api) { return api.workspace.openPreview(42); }');
-    await bin.reload();
-    await expect(bin.execute("open_preview", {})).rejects.toThrow("Invalid preview path");
+
   });
 
   it("routes structured calls through editable agents bin JS with trusted caller context", async () => {

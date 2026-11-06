@@ -130,5 +130,25 @@ export const RETIRED_DEFAULT_BIN_TOOLS = [
       "readFile"
     ],
     "source": "async function main(args, api) {\n  const expression = args.regex ? new RegExp(args.pattern, args.ignoreCase ? \"iu\" : \"u\") : undefined;\n  const needle = args.ignoreCase ? args.pattern.toLowerCase() : args.pattern;\n  const queue = [await api.fs.stat(args.path || \".\")];\n  const matches = [];\n  const maximum = args.limit || 100;\n  while (queue.length) {\n    const node = queue.shift();\n    if (node.kind === \"directory\") { queue.push(...await api.fs.listDirectory(node.path)); continue; }\n    const file = await api.fs.readFile(node.path);\n    const lines = file.content.split(\"\\n\");\n    for (let index = 0; index < lines.length; index++) {\n      const line = lines[index];\n      if (expression ? expression.test(line) : (args.ignoreCase ? line.toLowerCase() : line).includes(needle)) {\n        if (matches.length >= maximum) return { matches, truncated: true };\n        if (line.length > 16000) throw new Error(\"Matching line exceeds 16000 characters\");\n        matches.push({ path: file.path, revision: file.revision, line: index + 1, text: line });\n      }\n    }\n  }\n  return { matches, truncated: false };\n}"
+  },
+  {
+    "version": 1,
+    "name": "open_preview",
+    "description": "Open a VFS HTML file in a preview tab, or focus its existing preview. path defaults to ~/main.html; relative paths use this agent's working directory. Requires the app preview UI.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": [
+      "openPreview"
+    ],
+    "source": "async function main(args, api) { return api.workspace.openPreview(args.path); }"
   }
 ] as const;

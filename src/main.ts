@@ -2,6 +2,7 @@ import { TerminalView, type TerminalLine as TranscriptLine } from "./terminal/vi
 import { initializeWorkspace } from "./core/workspace-bootstrap";
 import "./styles.css";
 import { PreviewSurface, type PreviewConfig } from "./preview-surface";
+import { FileEditor, type EditorDraft } from "./file-editor";
 import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath } from "./core/fs";
 import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
@@ -66,6 +67,7 @@ if (!/^[a-zA-Z0-9_-]{1,64}$/.test(surfaceId)) throw new Error("Invalid surface i
 document.body.classList.toggle("page-view", pageView);
 document.body.classList.toggle("vertical-tabs", locationParams.get("tabs") === "vertical");
 const previews = new Map<string, PreviewSurface>();
+let fileEditor: FileEditor | undefined;
 const shellBootHint = "just-bash 已就緒。使用 AI／Shell toggle 切換；每次送出獨立 script，僅保存 cwd。";
 const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
@@ -127,11 +129,6 @@ const filesReady = (async () => {
         if (!source) throw new Error("Cross-tab source session is no longer open");
         return tabAgents.execute(source.id, args, signal);
       },
-      openPreview: async (entry, signal, context) => {
-        if (signal.aborted) throw new Error("Preview cancelled");
-        if (!state.tabs.some(tab => tab.session.sessionId === context.sessionId)) throw new Error("Preview source session is no longer open");
-        return openPreview(entry);
-      },
       readHostPage: async (args, signal, context) => {
         if (!hostToolSpecs.has("read_host_page")) throw new Error(NO_HOST_PAGE);
         return requestHostTool(context.sessionId ?? activeTab().session.sessionId, context.toolCallId ?? makeId("host-read"), "read_host_page", args, signal);
@@ -157,6 +154,8 @@ app.innerHTML = `
         <span id="agent-count" class="sr-only">0</span>
       </div>
       <div class="sidebar-footer">
+        <button id="human-preview" class="footer-button human-tool-button" type="button" aria-label="Preview · 開啟預覽" title="Preview · 開啟預覽" disabled><span aria-hidden="true">▣</span><span>Preview</span></button>
+        <button id="human-edit" class="footer-button human-tool-button" type="button" aria-label="Edit · 編輯檔案" title="Edit · 編輯檔案" disabled><span aria-hidden="true">✎</span><span>Edit</span></button>
         <button id="sidebar-provider-toggle" class="footer-button" type="button" aria-label="Provider settings" title="Provider settings">⚙</button>
       </div>
     </aside>
@@ -175,12 +174,9 @@ app.innerHTML = `
       <section class="pane" aria-label="Active agent pane">
         <header class="pane-header">
           <div class="pane-agent-title"><span id="pane-status-dot" class="status-dot idle">○</span><strong id="pane-title">main</strong><span id="pane-type" class="agent-type">簡易 bash</span></div>
-          <div class="pane-header-actions"><div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div><button id="route-tab" class="pane-action" type="button">ask another tab</button></div>
+          <div class="pane-header-actions"><div class="pane-meta"><span id="pane-model">scripted model</span><span id="pane-path">~/agent-go-round</span></div><button id="mode-toggle" type="button" class="mode-toggle" role="switch" aria-label="AI mode" aria-checked="true"><span class="mode-shell">Shell</span><span class="mode-track" aria-hidden="true"><span class="mode-thumb"></span></span><span class="mode-ai">AI</span></button></div>
         </header>
 
-        <nav class="pane-tools" aria-label="Session mode">
-          <button id="mode-toggle" type="button" class="mode-toggle" role="switch" aria-label="AI mode" aria-checked="true"><span class="mode-shell">Shell</span><span class="mode-track" aria-hidden="true"><span class="mode-thumb"></span></span><span class="mode-ai">AI</span></button>
-        </nav>
         <div id="terminal" class="terminal" role="log" aria-live="polite"></div>
         <div id="page-previews" class="page-previews" hidden></div>
 
@@ -205,21 +201,15 @@ app.innerHTML = `
         </footer>
       </section>
 
-      <div id="route-backdrop" class="route-backdrop" aria-hidden="true" hidden></div>
-      <aside id="route-dialog" class="route-dialog" role="dialog" aria-modal="true" aria-labelledby="route-title" aria-hidden="true" hidden>
-        <div class="surface-header"><div><span class="drawer-kicker">TAB ROUTE</span><h2 id="route-title">Ask another tab</h2></div><button id="close-route" class="drawer-close" type="button" aria-label="Close tab route">×</button></div>
-        <div class="surface-scroll">
-          <p class="drawer-copy">Send one explicit question to an idle tab. The receiving tab gets it as user input; the reply will return here without starting another run.</p>
-          <form id="route-form" class="provider-form">
-            <label>Target tab<select id="route-target" required></select></label>
-            <label>Question<textarea id="route-message" rows="5" placeholder="What should the other tab check?" required></textarea></label>
-            <p id="route-preview" class="route-preview" aria-live="polite"></p>
-            <p id="route-status" class="settings-status" role="status" aria-live="polite"></p>
-          </form>
-        </div>
-        <div class="surface-actions"><button id="cancel-route" class="drawer-button muted-button" type="button">Cancel</button><button id="send-route" class="drawer-button" type="submit" form="route-form">Send to tab</button></div>
-      </aside>
 
+      <section id="human-preview-dialog" class="human-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="human-preview-title" hidden>
+        <div class="human-tool-backdrop"></div>
+        <form id="human-preview-form" class="human-preview-panel">
+          <div class="editor-header"><strong id="human-preview-title">Preview · 開啟預覽</strong><button id="human-preview-close" class="drawer-close" type="button" aria-label="關閉預覽選擇">×</button></div>
+          <label for="human-preview-path">HTML 檔案路徑</label><input id="human-preview-path" value="~/main.html" autocomplete="off" spellcheck="false" required>
+          <p id="human-preview-status" role="status" aria-live="polite"></p><button class="drawer-button" type="submit">開啟預覽</button>
+        </form>
+      </section>
       <div id="settings-backdrop" class="settings-backdrop" aria-hidden="true" hidden></div>
       <aside id="settings-drawer" class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-label="Provider settings" aria-hidden="true" hidden>
         <div class="surface-header"><div><span class="drawer-kicker">RUNTIME</span><h2 id="settings-title">Provider connection</h2></div><button id="close-settings" class="drawer-close" type="button" aria-label="Close settings">×</button></div>
@@ -358,20 +348,10 @@ const terminalView = new TerminalView(get<HTMLDivElement>("terminal"));
 const promptElement = get<HTMLTextAreaElement>("prompt");
 const sendButton = get<HTMLButtonElement>("send");
 const stopButton = get<HTMLButtonElement>("stop");
-const routeButton = get<HTMLButtonElement>("route-tab");
-const routeBackdrop = get<HTMLDivElement>("route-backdrop");
-const routeDialog = get<HTMLElement>("route-dialog");
-const routeTarget = get<HTMLSelectElement>("route-target");
-const routeMessage = get<HTMLTextAreaElement>("route-message");
-const routePreview = get<HTMLParagraphElement>("route-preview");
-const routeStatus = get<HTMLParagraphElement>("route-status");
-const sendRouteButton = get<HTMLButtonElement>("send-route");
 const settingsDrawer = get<HTMLElement>("settings-drawer");
 const settingsBackdrop = get<HTMLDivElement>("settings-backdrop");
 const settingsStatus = get<HTMLParagraphElement>("settings-status");
 const workspaceStatus = get<HTMLSpanElement>("workspace-status");
-let routeSourceTabId: string | null = null;
-let routeReturnFocus: HTMLElement | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
 let workspaceSaveTimer: number | undefined;
 let workspaceSaveInFlight = false;
@@ -696,6 +676,8 @@ async function runTabPrompt(tab: AgentTab, input: string, signal?: AbortSignal) 
 }
 
 function openPreview(entry: string): { tabId: string; entry: string } {
+  entry = resolvePath(entry);
+  if (!entry.startsWith(VFS_HOME + "/")) throw new Error("請選擇家目錄（~/）內的 HTML 檔案。");
   const existing = state.tabs.find(tab => tab.preview?.entry === entry);
   if (existing) { existing.mode = "preview"; selectTab(existing.id); return { tabId: existing.id, entry }; }
   const id = `preview-${state.nextTabNumber++}`;
@@ -866,9 +848,6 @@ function handleRouteEvent(event: TabRouteEvent): void {
         role: "system",
         text: `question to ${tabDisplayName(event.message.targetTabId)} · ${routeRejectText(event.reason)}`
       });
-    }
-    if (event.message?.sourceTabId === routeSourceTabId && !routeDialog.hidden) {
-      routeStatus.textContent = routeRejectText(event.reason);
     }
   }
   if (event.type === "route_reply") {
@@ -1043,7 +1022,8 @@ function renderPane(tab: AgentTab): void {
   sendButton.disabled = running || !workspaceReady;
   stopButton.disabled = !running;
   promptElement.disabled = running || !workspaceReady;
-  routeButton.disabled = state.tabs.length < 2;
+  get<HTMLButtonElement>("human-preview").disabled = !workspaceReady || !fileRuntime || !!fileRuntimeError;
+  get<HTMLButtonElement>("human-edit").disabled = !workspaceReady || !fileRuntime || !!fileRuntimeError;
   const previewing = tab.mode === "preview" && !!tab.preview;
   get<HTMLDivElement>("terminal").hidden = previewing;
   get<HTMLElement>("terminal-form").hidden = previewing;
@@ -1294,28 +1274,44 @@ promptElement.addEventListener("keydown", (event) => {
 stopButton.addEventListener("click", () => { activeTab().commandAbort?.abort(); activeTab().session.stop(); });
 get<HTMLButtonElement>("add-tab").addEventListener("click", addTab);
 get<HTMLButtonElement>("add-vertical-tab").addEventListener("click", addTab);
-routeButton.addEventListener("click", (event) => openRouteDialog(event.currentTarget as HTMLElement));
-get<HTMLButtonElement>("close-route").addEventListener("click", closeRouteDialog);
-get<HTMLButtonElement>("cancel-route").addEventListener("click", closeRouteDialog);
-routeBackdrop.addEventListener("click", closeRouteDialog);
-routeTarget.addEventListener("change", renderRoutePreview);
-routeMessage.addEventListener("input", renderRoutePreview);
-get<HTMLFormElement>("route-form").addEventListener("submit", (event) => {
+const previewDialog = get<HTMLElement>("human-preview-dialog");
+function closeHumanPreview(): void { previewDialog.hidden = true; get<HTMLButtonElement>("human-preview").focus(); }
+get<HTMLButtonElement>("human-preview").addEventListener("click", () => {
+  fileEditor?.close(); closeSettings();
+  const editorPath = fileEditor?.path;
+  get<HTMLInputElement>("human-preview-path").value = displayPath(editorPath && /\.html?$/i.test(editorPath) ? editorPath : activeTab().preview?.entry ?? "~/main.html");
+  get<HTMLElement>("human-preview-status").textContent = "";
+  previewDialog.hidden = false; get<HTMLInputElement>("human-preview-path").focus();
+});
+get<HTMLButtonElement>("human-preview-close").addEventListener("click", closeHumanPreview);
+previewDialog.querySelector(".human-tool-backdrop")!.addEventListener("click", closeHumanPreview);
+previewDialog.addEventListener("keydown", event => {
+  if (event.key === "Escape") { event.preventDefault(); closeHumanPreview(); }
+  if (event.key === "Tab") {
+    const controls = [...previewDialog.querySelectorAll<HTMLElement>("button,input")];
+    if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
+    else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
+  }
+});
+get<HTMLFormElement>("human-preview-form").addEventListener("submit", event => {
   event.preventDefault();
-  const sourceTabId = routeSourceTabId;
-  const targetTabId = routeTarget.value;
-  const text = routeMessage.value.trim();
-  if (!sourceTabId || !targetTabId || !text) {
-    routeStatus.textContent = "Choose a target and enter a question first.";
-    renderRoutePreview();
-    return;
+  try {
+    const entry = resolvePath(get<HTMLInputElement>("human-preview-path").value, activeTab().cwd);
+    closeHumanPreview(); openPreview(entry);
+  } catch (error) { previewDialog.hidden = false; get<HTMLElement>("human-preview-status").textContent = error instanceof Error ? error.message : String(error); }
+});
+get<HTMLButtonElement>("human-edit").addEventListener("click", async () => {
+  if (!fileRuntime || !workspaceReady) return;
+  closeSettings(); previewDialog.hidden = true;
+  if (!fileEditor) {
+    const records = conversations().records, key = `human-editor:${surfaceId}`;
+    fileEditor = new FileEditor(fileRuntime.fs, {
+      load: () => records.transaction(false, tx => tx.get<EditorDraft>(key)),
+      save: draft => records.transaction(true, tx => draft ? tx.set(key, draft) : tx.delete(key))
+    });
+    app!.append(fileEditor.element);
   }
-  const receipt = tabRouter.sendQuestion(sourceTabId, targetTabId, text);
-  if (receipt.status === "accepted") {
-    closeRouteDialog();
-  } else {
-    routeStatus.textContent = routeRejectText(receipt.reason);
-  }
+  await fileEditor.show(activeTab().cwd);
 });
 get<HTMLButtonElement>("sidebar-provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("command-hint").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
@@ -1365,49 +1361,8 @@ get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
   settingsStatus.textContent = "Saved API key cleared from this browser.";
 });
 
-function renderRoutePreview(): void {
-  const source = routeSourceTabId ? tabDisplayName(routeSourceTabId) : "current tab";
-  const target = routeTarget.selectedOptions[0]?.textContent || "no target";
-  const text = routeMessage.value.trim() || "(enter a question)";
-  routePreview.textContent = `Preview · ${source} → ${target}: ${text}`;
-  sendRouteButton.disabled = routeTarget.value === "" || routeMessage.value.trim() === "";
-}
-
-function openRouteDialog(returnFocus: HTMLElement | null = document.activeElement as HTMLElement | null): void {
-  if (state.tabs.length < 2) return;
-  routeSourceTabId = activeTab().id;
-  routeReturnFocus = returnFocus;
-  routeTarget.replaceChildren();
-  for (const tab of state.tabs) {
-    if (tab.id === routeSourceTabId) continue;
-    const option = document.createElement("option");
-    option.value = tab.id;
-    option.textContent = `${tab.name} · ${statusLabel(tab.status)}`;
-    routeTarget.append(option);
-  }
-  routeMessage.value = promptElement.value.trim();
-  routeStatus.textContent = "Review the destination and message before sending.";
-  routeBackdrop.hidden = false;
-  routeDialog.hidden = false;
-  routeBackdrop.setAttribute("aria-hidden", "false");
-  routeDialog.setAttribute("aria-hidden", "false");
-  renderRoutePreview();
-  requestAnimationFrame(() => routeMessage.focus());
-}
-
-function closeRouteDialog(): void {
-  if (routeDialog.hidden) return;
-  routeBackdrop.hidden = true;
-  routeDialog.hidden = true;
-  routeBackdrop.setAttribute("aria-hidden", "true");
-  routeDialog.setAttribute("aria-hidden", "true");
-  routeSourceTabId = null;
-  const returnFocus = routeReturnFocus;
-  routeReturnFocus = null;
-  returnFocus?.focus();
-}
-
 function openSettings(message = "", returnFocus: HTMLElement | null = document.activeElement as HTMLElement | null): void {
+  fileEditor?.close(); get<HTMLElement>("human-preview-dialog").hidden = true;
   settingsReturnFocus = returnFocus;
   settingsBackdrop.hidden = false;
   settingsDrawer.hidden = false;
@@ -1451,33 +1406,6 @@ document.addEventListener("keydown", (event) => {
 });
 
 settingsDrawer.addEventListener("focusin", (event) => {
-  const target = event.target;
-  if (!(target instanceof HTMLElement)) return;
-  requestAnimationFrame(scrollFocusedSurfaceControlIntoView);
-});
-
-document.addEventListener("keydown", (event) => {
-  if (routeDialog.hidden) return;
-  if (event.key === "Escape") {
-    event.preventDefault();
-    closeRouteDialog();
-    return;
-  }
-  if (event.key !== "Tab") return;
-  const focusable = Array.from(routeDialog.querySelectorAll<HTMLElement>("button, input, textarea, select, [href], [tabindex]:not([tabindex='-1'])")).filter((element) => !element.hasAttribute("disabled"));
-  if (focusable.length === 0) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-});
-
-routeDialog.addEventListener("focusin", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   requestAnimationFrame(scrollFocusedSurfaceControlIntoView);

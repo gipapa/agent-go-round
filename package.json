@@ -31,6 +31,7 @@
     "test:agent:bash:browser": "node scripts/verify-agent-bash-browser.mjs",
     "test:embed:vfs:browser": "node scripts/verify-embed-vfs-browser.mjs",
     "test:host:browser": "node scripts/verify-host-browser.mjs",
+    "test:human:browser": "node scripts/verify-human-tools-browser.mjs",
     "test:workspace:browser": "node scripts/verify-workspace-tools-browser.mjs",
     "test:tabs:browser": "node scripts/verify-tabs-browser.mjs"
   },

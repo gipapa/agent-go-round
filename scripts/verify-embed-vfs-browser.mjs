@@ -1,4 +1,4 @@
-import { workspaceToolFixture, runWorkspaceToolInPage } from "./browser-fixture.mjs";
+import { openHumanPreviewInPage } from "./browser-fixture.mjs";
 // Cross-origin HTTP embed + native IndexedDB/Worker regression; no API key needed.
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
@@ -38,7 +38,7 @@ async function enterWidget() {
 }
 
 // Test-only diagnostics are injected into fixture HTML; production code has no probe.
-function installProbe(hostOrigin, toolBaseUrl, runTool) {
+function installProbe(hostOrigin, openPreview) {
   window.addEventListener("message", async event => {
     if (event.source !== parent || event.origin !== hostOrigin || event.data?.source !== "embed-vfs-test") return;
     const { id, command, shellTab, previewEntry, stop, queryStop } = event.data;
@@ -52,7 +52,7 @@ function installProbe(hostOrigin, toolBaseUrl, runTool) {
       committed = !!row && new TextDecoder().decode(row.content) === "popup-committed"; db.close();
     }
     if (stop) document.querySelector("#stop").click();
-    if (previewEntry) await runTool(toolBaseUrl, "open_preview", { path: previewEntry });
+    if (previewEntry) await openPreview(previewEntry);
     if (shellTab) document.querySelector("#agent-list .agent-row").click();
     if (command !== undefined) {
       if (document.querySelector("#mode-toggle").getAttribute("aria-checked") === "true") {
@@ -80,7 +80,6 @@ function installProbe(hostOrigin, toolBaseUrl, runTool) {
   });
 }
 
-const toolsFixture = await workspaceToolFixture();
 let app, host;
 let hostOrigin;
 const basePath = process.env.VITE_BASE_PATH || "/";
@@ -97,7 +96,7 @@ try {
           if (url.pathname !== basePath && url.pathname !== "/") return next();
           const disableUUID = url.searchParams.has("without-random-uuid") ? 'Object.defineProperty(Crypto.prototype,"randomUUID",{configurable:true,value:undefined});' : "";
           response.setHeader("Content-Type", "text/html");
-          response.end(index.replace("<head>", `<head><script>${disableUUID}(${installProbe.toString()})(${JSON.stringify(hostOrigin)},${JSON.stringify(toolsFixture.baseUrl)},${runWorkspaceToolInPage.toString()});</script>`));
+          response.end(index.replace("<head>", `<head><script>${disableUUID}(${installProbe.toString()})(${JSON.stringify(hostOrigin)},${openHumanPreviewInPage.toString()});</script>`));
         });
       }
     }]
@@ -156,7 +155,6 @@ try {
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }
 finally {
-  await toolsFixture.close();
   await call("close").catch(() => {});
   if (host) await new Promise(resolve => host.close(resolve));
   if (app) await new Promise(resolve => app.httpServer.close(resolve));

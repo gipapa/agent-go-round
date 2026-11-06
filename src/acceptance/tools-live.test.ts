@@ -22,7 +22,6 @@ const prompts: Record<string, string> = {
   write: "用 write 將 ~/Project/sample.txt 覆寫為 revised。先 read 取得 revision，寫完再讀回確認。",
   edit: "先 read ~/Project/sample.txt，再用 edit 將其中 alpha 精確替換為 gamma，保留 beta，最後讀回確認。",
   skill_load: "請使用 skill_load 載入 probe 技能，依照內容讀取引用檔並回覆驗證碼。",
-  open_preview: "請使用 open_preview 開啟 ~/Project/main.html 的預覽。",
   read_host_page: "請使用 read_host_page 讀取已連接的宿主頁面，回覆頁面標題。",
   install_joke_demo: "請使用 install_joke_demo 安裝笑話範例，簡短回報新增結果。",
   reload_tools: "請使用 reload_tools 重新載入目前的自訂工具 catalog，回報是否成功。",
@@ -42,7 +41,7 @@ it("audits every exposed tool with a real model and records actual calls, argume
   );
   const selected = process.env.AGENT_GO_ROUND_AUDIT_TOOLS?.split(",");
   expect(selected?.every(name => tasks.some(task => task.name === name)) ?? true).toBe(true);
-  const report = { provider: "groq", model: runtime.model.id, transport: "real model; Node VFS/bin executor; host/preview/other-tab responses are fixtures", startedAt: new Date().toISOString(), status: "running", tools: [] as Array<Record<string, unknown>> };
+  const report = { provider: "groq", model: runtime.model.id, transport: "real model; Node VFS/bin executor; host/other-tab responses are fixtures", startedAt: new Date().toISOString(), status: "running", tools: [] as Array<Record<string, unknown>> };
   const reportPath = process.env.AGENT_GO_ROUND_AUDIT_REPORT || "test-results/tools-live.json";
   await mkdir("test-results", { recursive: true });
   for (const { name, expectedTools, prompt } of tasks.filter(task => !selected || selected.includes(task.name))) {
@@ -61,12 +60,11 @@ it("audits every exposed tool with a real model and records actual calls, argume
         fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])),
         skills: { load: (name: string) => rpc("loadSkill", [name]) },
         tools: { help: (name?: string) => rpc("commandHelp", [name]), reload: () => rpc("reloadTools", []) },
-        workspace: { home: () => rpc("home", []), openPreview: (path?: string) => rpc("openPreview", [path]) },
+        workspace: { home: () => rpc("home", []) },
         host: { readPage: (options: unknown) => rpc("readHostPage", [options]) },
         agents: { execute: (options: unknown) => rpc("tabAgents", [options]) }
       }));
     } }, {
-      openPreview: async entry => { sideEffects.push({ kind: "preview", value: entry }); return { entry, opened: true }; },
       readHostPage: async () => ({ html: "<html><title>Audit host</title></html>" }),
       tabAgents: async args => {
         const value = args as { action: string; target?: string; text?: string; requestId?: string };
@@ -108,7 +106,6 @@ it("audits every exposed tool with a real model and records actual calls, argume
         if (!run.text.includes("audit-skill-42")) answerWarnings.push("Model changed ASCII hyphens in the displayed code; the tool delivered the exact original code.");
       }
       if (name === "read_host_page") expect(run.text).toContain("Audit host");
-      if (name === "open_preview") expect(sideEffects).toContainEqual({ kind: "preview", value: "/home/user/Project/main.html" });
       if (name === "install_joke_demo") expect((await fs.listDirectory("~/jokes")).length).toBe(5);
       if (name === "agents") { expect(sends).toBe(1); expect(run.text).toContain("audit-reply"); }
     } catch (error) { failure = error instanceof Error ? error.message : String(error); }

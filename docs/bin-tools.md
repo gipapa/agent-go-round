@@ -29,6 +29,8 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
 
 ## 預設工具
 
+Preview 與人類 Edit 使用左下角齒輪上方的按鈕，不需要連接模型。原始預設 open_preview 檔案會在啟動時清除；自訂過的版本保留檔案，但停用 AI 呼叫。
+
 ```text
 ~/bin/
   read.js
@@ -38,7 +40,6 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
   read_host_page.js
   help.js
   agents.js
-  open_preview.js
   install_joke_demo.js
   reload_tools.js
   manifests/
@@ -49,14 +50,12 @@ bash({script: "cat > main.html <<'HTML'\n<!doctype html>\n<p>雨夜書信</p>\nH
     read_host_page.tool.json
     help.tool.json
     agents.tool.json
-    open_preview.tool.json
     install_joke_demo.tool.json
     reload_tools.tool.json
 ```
 
 | 工具 | 參數與行為 |
 |---|---|
-| open_preview | 選填 `path`，預設 `~/main.html`；相對路徑依呼叫 agent 的 cwd 解析。開啟或切換至同一檔案的預覽 tab；需要 app 預覽服務 |
 | install_joke_demo | `{}`；在 bin JS 透過 VFS 安裝笑話範例，只補缺檔，回傳 created／kept 與建議 prompt，不直接執行評分 |
 | reload_tools | `{}`；原子重載 JS 與 manifests，失敗保留舊 catalog；新定義在下一次 agent run 生效，進行中的 run 保留原定義 |
 | read | `path` 可為單一路徑或最多 32 個路徑的陣列，選填 `offset`（行號，從 1 開始）、`limit`；回傳內容、revision、totalLines、nextOffset |
@@ -73,7 +72,7 @@ VFS 的 `stat`／`listDirectory`／寫入結果只提供 `FileStat`；只有 `re
 
 上表是 AI tool 的 JSON 參數契約。Shell 直接使用 just-bash 的語法與 builtins；`read` 是 shell 的輸入變數指令，`help` 是上游 help，沒有 `write JSON`、`edit PATH`、`agents send` 或其他舊 CLI bridge。一般檔案操作可用 `printf`／重導向、`cat`、`grep`、`find`、`cp`、`mv` 等 shell 指令。
 
-AI 的 `help` 查詢工具 catalog／schema，`agents` 維持結構化 list／send／read。目標須已進入 AI 且已連線；pending 時讀同一 requestId，不重新 send。手動跨 tab 提問 UI 仍使用相同 router。來源身份從呼叫中的 session 綁定，切換目前可見 tab 不會改變來源。
+AI 的 `help` 查詢工具 catalog／schema，`agents` 維持結構化 list／send／read。目標須已進入 AI 且已連線；pending 時讀同一 requestId，不重新 send。來源身份從呼叫中的 session 綁定，切換目前可見 tab 不會改變來源。
 
 跨 tab 請求在本頁記憶體保存；reload 不重播。取消 read 只停止來源等待；停止目標需切到該 tab 按 Stop。對話／工具結果仍保存在各 tab 的 session。
 
@@ -109,7 +108,7 @@ async function main(args, api) {
 
 工具函式可用的 `api.fs` 方法為 `stat`、`readFile`、`listDirectory`、`writeFile`、`writeFiles`、`mkdir`、`remove`；每一項必須列在 manifest capabilities。相對路徑依呼叫 tab 的 cwd 解析，所有路徑限定在該 workspace 的虛擬 `/`，`~` 為 `/home/user`。`stat` / `listDirectory` 不回傳檔案正文，內容必須透過 `readFile` 取得。寫入可帶 `{ expectedRevision }`，新增可用 0。
 
-為相容自訂工具，保留 `api.workspace.home()` 與 `home` capability，由呼叫 session 的 cwd callback 更新本輪目錄；`api.workspace.openPreview(path?)` 需要 `openPreview` capability，宿主重新驗證路徑並依呼叫 cwd 解析，再交由 UI 開啟預覽。工具只能透過這個受控入口操作預覽，沒有 DOM 存取權。`api.tools.reload()` 需要 `reloadTools` capability，由 registry 原子重載，沒有直接操控 session 的能力。
+為相容自訂工具，保留 `api.workspace.home()` 與 `home` capability，由呼叫 session 的 cwd callback 更新本輪目錄。Preview 僅供人類按鈕啟動，`open_preview`、`openPreview` capability 與 `api.workspace.openPreview` 已移除；舊版自訂 Preview 檔案保留，但不載入 AI catalog。`api.tools.reload()` 需要 `reloadTools` capability，由 registry 原子重載，沒有直接操控 session 的能力。
 
 `api.skills.load(name)` 需要 manifest 的 `loadSkill` capability，並只在 Pi 配置過的本輪 skill catalog 中解析名稱。工具 JS 無法自行把任意文字當作工作區指示。
 
