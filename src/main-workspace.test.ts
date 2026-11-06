@@ -166,6 +166,55 @@ describe("Tab sessions at the real provider request boundary", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("moves between Preview and Edit on the same file and marks an unsaved draft on the Edit button", async () => {
+    await loadApp();
+    const fs = new IndexedDbFileSystem(window.indexedDB);
+    await fs.writeFile("~/main.html", "<h1>Original</h1>");
+    await fs.mkdir("~/docs", { recursive: true });
+    await fs.writeFile("~/docs/other.html", "<h1>Other</h1>");
+    const frame = () => document.querySelector<HTMLIFrameElement>(".preview-surface:not([hidden]) > iframe")!;
+    const editButton = document.querySelector<HTMLButtonElement>("#human-edit")!;
+
+    document.querySelector<HTMLButtonElement>("#human-preview")!.click();
+    const rows = () => [...document.querySelectorAll<HTMLButtonElement>(".human-preview-option")];
+    await vi.waitFor(() => expect(rows().map(row => row.title).sort()).toEqual(["~/docs/other.html", "~/main.html"]));
+    rows().find(row => row.title === "~/main.html")!.click();
+    await vi.waitFor(() => expect(frame()?.srcdoc).toContain("Original"));
+    expect(document.querySelector("#human-preview-dialog")!.hasAttribute("hidden")).toBe(true);
+    expect(document.querySelector(".pane")!.classList.contains("previewing")).toBe(true);
+
+    [...document.querySelectorAll<HTMLButtonElement>(".preview-surface:not([hidden]) .preview-toolbar button")].find(button => button.textContent === "編輯")!.click();
+    const content = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
+    await vi.waitFor(() => expect(content.value).toBe("<h1>Original</h1>"));
+    expect(document.querySelector(".file-editor")!.hasAttribute("hidden")).toBe(false);
+
+    content.value = "<h1>Saved from editor</h1>"; content.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(editButton.classList.contains("has-draft")).toBe(true);
+    expect(editButton.getAttribute("aria-label")).toContain("未儲存草稿");
+
+    document.querySelector<HTMLButtonElement>("#editor-preview")!.click();
+    await vi.waitFor(() => expect(frame()?.srcdoc).toContain("Saved from editor"));
+    expect(document.querySelector(".file-editor")!.hasAttribute("hidden")).toBe(true);
+    expect((await fs.readFile("~/main.html")).content).toBe("<h1>Saved from editor</h1>");
+    expect(editButton.classList.contains("has-draft")).toBe(false);
+    expect(document.querySelectorAll(".preview-surface")).toHaveLength(1);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("marks a draft restored from the last visit before the editor is opened", async () => {
+    await loadApp();
+    const fs = new IndexedDbFileSystem(window.indexedDB);
+    await fs.writeFile("~/main.html", "Original");
+    document.querySelector<HTMLButtonElement>("#human-edit")!.click();
+    const content = document.querySelector<HTMLTextAreaElement>("#editor-content")!;
+    await vi.waitFor(() => expect(content.value).toBe("Original"));
+    content.value = "Unsaved"; content.dispatchEvent(new Event("input", { bubbles: true }));
+    document.querySelector<HTMLButtonElement>("#editor-close")!.click();
+    await vi.waitFor(async () => expect(await new IndexedWorkspaceRecords(window.indexedDB).transaction(false, tx => tx.get<{content:string}>("human-editor:workspace"))).toMatchObject({ content: "Unsaved" }));
+    await loadApp();
+    await vi.waitFor(() => expect(document.querySelector("#human-edit")!.classList.contains("has-draft")).toBe(true));
+  });
+
   it("defaults new tabs to AI and switches modes without replacing the conversation", async () => {
     await loadApp();
     const toggle = document.querySelector<HTMLButtonElement>("#mode-toggle")!;

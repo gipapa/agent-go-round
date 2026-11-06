@@ -88,7 +88,7 @@ const EMBED_STYLES = `
   .launcher {
     position: fixed;
     right: 20px;
-    bottom: 20px;
+    bottom: var(--agr-launcher-bottom, 20px);
     z-index: 2147483000;
     border: 1px solid #8768af;
     border-radius: 999px;
@@ -147,7 +147,7 @@ const EMBED_STYLES = `
   .widget-root[data-mode="inline"] .panel { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
   .widget-root[data-mode="inline"] .close { display: none; }
   @media (max-width: 600px) {
-    .launcher { right: 14px; bottom: 14px; }
+    .launcher { right: 14px; bottom: var(--agr-launcher-bottom, 14px); }
     .overlay { align-items: stretch; justify-content: stretch; padding: 0; }
     .panel { width: 100%; height: 100%; border: 0; border-radius: 0; }
   }

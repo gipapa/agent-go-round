@@ -141,10 +141,10 @@ try {
   await call("screenshot", "test-results/preview-page-mobile.png");
   const other = new URL(pageUrl); other.searchParams.set("workspace", workspaceId + "-other");
   await call("open", other.href);
-  await wait("[...document.querySelectorAll('.preview-toolbar button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
+  await wait("[...document.querySelectorAll('.preview-surface button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
   let isolated = await durable(workspaceId + "-other");
   assert(!isolated.files.some(f => f.path === "/home/user/main.html"), "Missing entry was auto-created or leaked from another workspace");
-  await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
+  await evaluate("(() => {[...document.querySelectorAll('.preview-surface button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('我的 Pi 主頁')");
   state = await durable(); assert(state.files.find(f => f.path === "/home/user/main.html").content.includes("Updated by Pi"), "Template creation overwrote another workspace");
   check("workspace isolation and explicit missing-page template creation");

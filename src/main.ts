@@ -3,6 +3,7 @@ import { initializeWorkspace } from "./core/workspace-bootstrap";
 import "./styles.css";
 import { PreviewSurface, type PreviewConfig } from "./preview-surface";
 import { FileEditor, type EditorDraft } from "./file-editor";
+import { PreviewPicker } from "./preview-picker";
 import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath } from "./core/fs";
 import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
@@ -68,6 +69,7 @@ document.body.classList.toggle("page-view", pageView);
 document.body.classList.toggle("vertical-tabs", locationParams.get("tabs") === "vertical");
 const previews = new Map<string, PreviewSurface>();
 let fileEditor: FileEditor | undefined;
+let previewPicker: PreviewPicker | undefined;
 const shellBootHint = "just-bash 已就緒。使用 AI／Shell toggle 切換；每次送出獨立 script，僅保存 cwd。";
 const browserStorage = window.localStorage;
 const STORAGE_KEYS = {
@@ -201,15 +203,6 @@ app.innerHTML = `
         </footer>
       </section>
 
-
-      <section id="human-preview-dialog" class="human-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="human-preview-title" hidden>
-        <div class="human-tool-backdrop"></div>
-        <form id="human-preview-form" class="human-preview-panel">
-          <div class="editor-header"><strong id="human-preview-title">Preview · 開啟預覽</strong><button id="human-preview-close" class="drawer-close" type="button" aria-label="關閉預覽選擇">×</button></div>
-          <label for="human-preview-path">HTML 檔案路徑</label><input id="human-preview-path" value="~/main.html" autocomplete="off" spellcheck="false" required>
-          <p id="human-preview-status" role="status" aria-live="polite"></p><button class="drawer-button" type="submit">開啟預覽</button>
-        </form>
-      </section>
       <div id="settings-backdrop" class="settings-backdrop" aria-hidden="true" hidden></div>
       <aside id="settings-drawer" class="settings-drawer" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-label="Provider settings" aria-hidden="true" hidden>
         <div class="surface-header"><div><span class="drawer-kicker">RUNTIME</span><h2 id="settings-title">Provider connection</h2></div><button id="close-settings" class="drawer-close" type="button" aria-label="Close settings">×</button></div>
@@ -1027,10 +1020,14 @@ function renderPane(tab: AgentTab): void {
   const previewing = tab.mode === "preview" && !!tab.preview;
   get<HTMLDivElement>("terminal").hidden = previewing;
   get<HTMLElement>("terminal-form").hidden = previewing;
+  document.querySelector(".pane")!.classList.toggle("previewing", previewing);
   const previewPanel = get<HTMLElement>("page-previews");
   previewPanel.hidden = !previewing;
   if (previewing && fileRuntime && !previews.has(tab.id)) {
-    const preview = new PreviewSurface(fileRuntime.fs, tab.preview!, workspaceId, { expanded: pageView });
+    const preview = new PreviewSurface(fileRuntime.fs, tab.preview!, workspaceId, {
+      expanded: pageView,
+      onEdit: path => { closeSettings(); void ensureFileEditor()?.show(activeTab().cwd, path); }
+    });
     previews.set(tab.id, preview); previewPanel.append(preview.element);
   }
   for (const [id, preview] of previews) preview.element.hidden = !previewing || id !== tab.id;
@@ -1201,6 +1198,8 @@ const appReady = (async () => {
   syncHostTools();
   workspaceReady = true;
   if (fileRuntimeError) setWorkspaceStatus(`files / bin initialization failed · ${fileRuntimeError} · help for recovery`);
+  // Created up front so a draft restored from the last visit can mark the Edit button.
+  ensureFileEditor();
   render();
 })();
 
@@ -1274,44 +1273,46 @@ promptElement.addEventListener("keydown", (event) => {
 stopButton.addEventListener("click", () => { activeTab().commandAbort?.abort(); activeTab().session.stop(); });
 get<HTMLButtonElement>("add-tab").addEventListener("click", addTab);
 get<HTMLButtonElement>("add-vertical-tab").addEventListener("click", addTab);
-const previewDialog = get<HTMLElement>("human-preview-dialog");
-function closeHumanPreview(): void { previewDialog.hidden = true; get<HTMLButtonElement>("human-preview").focus(); }
-get<HTMLButtonElement>("human-preview").addEventListener("click", () => {
-  fileEditor?.close(); closeSettings();
-  const editorPath = fileEditor?.path;
-  get<HTMLInputElement>("human-preview-path").value = displayPath(editorPath && /\.html?$/i.test(editorPath) ? editorPath : activeTab().preview?.entry ?? "~/main.html");
-  get<HTMLElement>("human-preview-status").textContent = "";
-  previewDialog.hidden = false; get<HTMLInputElement>("human-preview-path").focus();
-});
-get<HTMLButtonElement>("human-preview-close").addEventListener("click", closeHumanPreview);
-previewDialog.querySelector(".human-tool-backdrop")!.addEventListener("click", closeHumanPreview);
-previewDialog.addEventListener("keydown", event => {
-  if (event.key === "Escape") { event.preventDefault(); closeHumanPreview(); }
-  if (event.key === "Tab") {
-    const controls = [...previewDialog.querySelectorAll<HTMLElement>("button,input")];
-    if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
-    else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
-  }
-});
-get<HTMLFormElement>("human-preview-form").addEventListener("submit", event => {
-  event.preventDefault();
-  try {
-    const entry = resolvePath(get<HTMLInputElement>("human-preview-path").value, activeTab().cwd);
-    closeHumanPreview(); openPreview(entry);
-  } catch (error) { previewDialog.hidden = false; get<HTMLElement>("human-preview-status").textContent = error instanceof Error ? error.message : String(error); }
-});
-get<HTMLButtonElement>("human-edit").addEventListener("click", async () => {
-  if (!fileRuntime || !workspaceReady) return;
-  closeSettings(); previewDialog.hidden = true;
-  if (!fileEditor) {
+function showEditorDraftState(dirty: boolean): void {
+  const button = get<HTMLButtonElement>("human-edit");
+  const label = dirty ? "Edit · 編輯檔案（有未儲存草稿）" : "Edit · 編輯檔案";
+  button.classList.toggle("has-draft", dirty);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+function ensureFileEditor(): FileEditor | undefined {
+  if (!fileEditor && fileRuntime && workspaceStore) {
     const records = conversations().records, key = `human-editor:${surfaceId}`;
     fileEditor = new FileEditor(fileRuntime.fs, {
       load: () => records.transaction(false, tx => tx.get<EditorDraft>(key)),
       save: draft => records.transaction(true, tx => draft ? tx.set(key, draft) : tx.delete(key))
+    }, {
+      onDirtyChange: showEditorDraftState,
+      onPreview: path => {
+        // Saving and then asking for this page is an explicit refresh of a tab it may already have.
+        const { tabId } = openPreview(path);
+        fileEditor?.close();
+        void previews.get(tabId)?.reload();
+      }
     });
     app!.append(fileEditor.element);
   }
-  await fileEditor.show(activeTab().cwd);
+  return fileEditor;
+}
+get<HTMLButtonElement>("human-preview").addEventListener("click", () => {
+  if (!fileRuntime) return;
+  fileEditor?.close(); closeSettings();
+  if (!previewPicker) {
+    previewPicker = new PreviewPicker(fileRuntime.fs, path => { openPreview(resolvePath(path, activeTab().cwd)); });
+    app!.append(previewPicker.element);
+  }
+  const editorPath = fileEditor?.path;
+  previewPicker.show(displayPath(editorPath && /\.html?$/i.test(editorPath) ? editorPath : activeTab().preview?.entry ?? "~/main.html"));
+});
+get<HTMLButtonElement>("human-edit").addEventListener("click", async () => {
+  if (!workspaceReady) return;
+  closeSettings(); previewPicker?.close();
+  await ensureFileEditor()?.show(activeTab().cwd);
 });
 get<HTMLButtonElement>("sidebar-provider-toggle").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
 get<HTMLButtonElement>("command-hint").addEventListener("click", (event) => openSettings("", event.currentTarget as HTMLElement));
@@ -1362,7 +1363,7 @@ get<HTMLButtonElement>("clear-key").addEventListener("click", () => {
 });
 
 function openSettings(message = "", returnFocus: HTMLElement | null = document.activeElement as HTMLElement | null): void {
-  fileEditor?.close(); get<HTMLElement>("human-preview-dialog").hidden = true;
+  fileEditor?.close(); previewPicker?.close();
   settingsReturnFocus = returnFocus;
   settingsBackdrop.hidden = false;
   settingsDrawer.hidden = false;

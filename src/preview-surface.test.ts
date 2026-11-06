@@ -73,4 +73,123 @@ describe("preview and popup lifecycle", () => {
       expect((await fs.readFile("~/main.html")).content).toBe("other writer");
     } finally { surface.destroy(); }
   });
+
+  describe("states", () => {
+    const surfaceFor = (fs: MemoryFileSystem, onEdit?: (path: string) => void) => {
+      const surface = new PreviewSurface(fs, { entry: "/home/user/main.html", surfaceId: "popup-state" }, "state-space", { onEdit });
+      document.body.append(surface.element);
+      return surface;
+    };
+    const message = (surface: PreviewSurface) => surface.element.querySelector<HTMLElement>(".preview-message")!;
+    const status = (surface: PreviewSurface) => surface.element.querySelector(".preview-status")!.textContent;
+    const button = (surface: PreviewSurface, label: string) => [...surface.element.querySelectorAll("button")].find(candidate => candidate.textContent === label)!;
+
+    it("replaces the blank frame with an explanation when the page is missing, then shows it once created", async () => {
+      const fs = new MemoryFileSystem();
+      const onEdit = vi.fn();
+      const surface = surfaceFor(fs, onEdit);
+      try {
+        await vi.waitFor(() => expect(message(surface).hidden).toBe(false));
+        expect(surface.element.dataset.state).toBe("missing");
+        expect(surface.frame.hidden).toBe(true);
+        expect(message(surface).textContent).toContain("~/main.html");
+        button(surface, "在編輯器中新增").click();
+        expect(onEdit).toHaveBeenCalledWith("/home/user/main.html");
+        await fs.writeFile("~/main.html", "<h1>Made elsewhere</h1>");
+        await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("Made elsewhere"), { timeout: 3000 });
+        expect(surface.element.dataset.state).toBe("ready");
+        expect(surface.frame.hidden).toBe(false);
+        expect(message(surface).hidden).toBe(true);
+      } finally { surface.destroy(); }
+    });
+
+    it("keeps the last good page on screen when a later reload fails", async () => {
+      const fs = new MemoryFileSystem();
+      await fs.writeFile("~/main.html", "<h1>Good</h1>");
+      const surface = surfaceFor(fs);
+      try {
+        await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("Good"));
+        await fs.writeFile("~/main.html", '<link rel="stylesheet" href="missing.css"><h1>Broken</h1>');
+        await surface.reload();
+        expect(surface.element.dataset.state).toBe("error");
+        expect(surface.element.dataset.hasContent).toBe("true");
+        expect(surface.frame.hidden).toBe(false);
+        expect(surface.frame.srcdoc).toContain("Good");
+        expect(message(surface).textContent).toContain("上一次可用");
+        expect(message(surface).textContent).toContain("missing.css");
+        expect(button(surface, "建立主頁範本").hidden).toBe(true);
+      } finally { surface.destroy(); }
+    });
+
+    it("keeps a failed reload's explanation until the file changes again", async () => {
+      const fs = new MemoryFileSystem();
+      await fs.writeFile("~/main.html", '<link rel="stylesheet" href="styles.css"><h1>Good</h1>');
+      await fs.writeFile("~/styles.css", "h1{color:red}");
+      const surface = surfaceFor(fs);
+      try {
+        await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("Good"));
+        await fs.writeFile("~/main.html", '<link rel="stylesheet" href="missing.css"><h1>Broken</h1>');
+        await fs.remove("~/styles.css");
+        await surface.reload();
+        expect(surface.element.dataset.state).toBe("error");
+        await new Promise(resolve => setTimeout(resolve, 2300));
+        expect(surface.element.dataset.state).toBe("error");
+        expect(message(surface).textContent).toContain("missing.css");
+        await fs.writeFile("~/main.html", "<h1>Fixed</h1>");
+        await vi.waitFor(() => expect(surface.element.dataset.state).toBe("stale"), { timeout: 3000 });
+      } finally { surface.destroy(); }
+    });
+
+    it("explains a page that never rendered instead of showing an empty frame", async () => {
+      const fs = new MemoryFileSystem();
+      await fs.writeFile("~/main.html", '<link rel="stylesheet" href="missing.css">');
+      const onEdit = vi.fn();
+      const surface = surfaceFor(fs, onEdit);
+      try {
+        await vi.waitFor(() => expect(surface.element.dataset.state).toBe("error"));
+        expect(surface.element.dataset.hasContent).toBe("false");
+        expect(surface.frame.hidden).toBe(true);
+        expect(message(surface).textContent).toContain("無法顯示這個頁面");
+        expect(button(surface, "在編輯器中修正")).toBeTruthy();
+      } finally { surface.destroy(); }
+    });
+
+    it("flags outside changes and emphasises reload without applying them itself", async () => {
+      const fs = new MemoryFileSystem();
+      await fs.writeFile("~/main.html", "<h1>Before</h1>");
+      const surface = surfaceFor(fs);
+      try {
+        await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("Before"));
+        const reload = button(surface, "重新載入預覽");
+        expect(reload.classList.contains("primary")).toBe(false);
+        await fs.writeFile("~/main.html", "<h1>After</h1>");
+        await vi.waitFor(() => expect(status(surface)).toContain("檔案有更新"), { timeout: 3000 });
+        expect(reload.classList.contains("primary")).toBe(true);
+        expect(surface.frame.srcdoc).toContain("Before");
+        reload.click();
+        await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("After"));
+        expect(reload.classList.contains("primary")).toBe(false);
+        expect(status(surface)).toBe("revision 2");
+        reload.focus();
+        await surface.reload();
+        expect(document.activeElement).toBe(reload);
+      } finally { surface.destroy(); }
+    });
+
+    it("opens its page in the editor and switches preview width", async () => {
+      const fs = new MemoryFileSystem();
+      await fs.writeFile("~/main.html", "<h1>Page</h1>");
+      const onEdit = vi.fn();
+      const surface = surfaceFor(fs, onEdit);
+      try {
+        await vi.waitFor(() => expect(surface.frame.srcdoc).toContain("Page"));
+        button(surface, "編輯").click();
+        expect(onEdit).toHaveBeenCalledWith("/home/user/main.html");
+        button(surface, "手機").click();
+        expect(surface.element.dataset.device).toBe("mobile");
+        expect(button(surface, "手機").getAttribute("aria-pressed")).toBe("true");
+        expect(button(surface, "桌面").getAttribute("aria-pressed")).toBe("false");
+      } finally { surface.destroy(); }
+    });
+  });
 });

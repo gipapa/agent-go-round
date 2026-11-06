@@ -81,8 +81,8 @@ try {
   await call("click", "#close-settings"); await viewport(844);
   check("provider inputs and connect action fit the visible viewport");
   await evaluate(humanPreviewScript());
-  await wait("[...document.querySelectorAll('.preview-toolbar button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
-  await evaluate("(() => {[...document.querySelectorAll('.preview-toolbar button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
+  await wait("[...document.querySelectorAll('.preview-surface button')].some(b=>b.textContent==='建立主頁範本'&&!b.hidden)");
+  await evaluate("(() => {[...document.querySelectorAll('.preview-surface button')].find(b=>b.textContent==='建立主頁範本').click();return true;})()");
   await wait("document.querySelector('.preview-surface > iframe')?.srcdoc.includes('我的 Pi 主頁')");
   const frame = 'document.querySelector(".preview-surface > div:last-child").shadowRoot.querySelector("iframe")';
   await wait(`!!(${frame}).contentDocument?.querySelector('#send')&&!(${frame}).contentDocument.querySelector('#send').disabled`);

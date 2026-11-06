@@ -61,8 +61,8 @@ Shell 只操作目前 workspace 的虛擬 `/`，`~`／HOME 為 `/home/user`；�
 |---|---|
 | Shell／AI 切換 | pane 上方 AI／Shell toggle；agent 中也可 `/exit` 返回 shell |
 | 獨立對話、還原分頁 | 開啟新分頁建立 session；重新整理還原已開啟分頁 |
-| HTML 預覽 | 左下角 Preview 按鈕，輸入 HTML 路徑開啟 |
-| 人類檔案編輯 | 左下角 Edit 按鈕，瀏覽／開啟檔案、儲存與還原草稿 |
+| HTML 預覽 | 左下角 Preview 按鈕，從工作區 HTML 清單選擇或輸入路徑開啟 |
+| 人類檔案編輯 | 左下角 Edit 按鈕，瀏覽／開啟檔案、儲存並預覽與還原草稿 |
 | 笑話範例與 JS 工具更新 | AI 呼叫 `install_joke_demo({})`／`reload_tools({})` |
 | 回到 home、用法 | AI 呼叫 `bash({script: "cd ~"})`／`help({command: "bash"})` |
 
@@ -118,7 +118,7 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 ## 主頁預覽與 popup
 
-使用左下角齒輪上方的 Preview 按鈕，輸入檔案路徑開啟。檔案不存在時，按「建立主頁範本」才會寫入；也可先用 Edit 或 shell 建立檔案。Preview 不提供給 AI，也不需要連接模型。
+使用左下角齒輪上方的 Preview 按鈕，從工作區 HTML 清單選擇（最近更新的在前，可搜尋、方向鍵選擇），或輸入路徑開啟。檔案不存在時，預覽會說明狀況，按「建立主頁範本」才會寫入；也可按「在編輯器中新增」或用 shell 建立，建立後預覽自動顯示。Preview 不提供給 AI，也不需要連接模型。
 
 右下角「回到 AI 模式」會打開共用該 workspace 檔案的 popup。連接 Groq 後，可要求 agent 修改 `~/main.html`。檔案有更新時，按「重新載入預覽」套用內容；刷新只更新頁面 iframe，保留 popup 的對話、草稿與 active run。
 
@@ -130,7 +130,7 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 ## 儲存與工作區
 
-Edit 支援瀏覽目錄、開啟／新增 UTF-8 檔案與 ⌘S／Ctrl+S 儲存。草稿獨立備份於目前 workspace／surface，關閉或重新整理後可還原；只有按儲存才寫入原檔。若 AI 或其他分頁已修改原檔，儲存會保留草稿並提示衝突。
+Edit 支援瀏覽目錄、開啟／新增 UTF-8 檔案、行號、Tab／Shift+Tab 縮排與 ⌘S／Ctrl+S 儲存；HTML 檔可「儲存並預覽」，預覽工具列的「編輯」則回到同一檔案。草稿獨立備份於目前 workspace／surface，關閉或重新整理後可還原，並在 Edit 按鈕標示；只有按儲存才寫入原檔。未修改的檔案會跟著外部更新；若有草稿時 AI 或其他分頁修改了原檔，編輯器會提示，儲存也不會覆寫，可複製草稿後再載入最新版本。
 
 UI 使用 IndexedDB 保存 bytes 檔案、tabs、cwd、輸入草稿、session transcript、歷史與 lifecycle／來源版本紀錄；不匯入舊 localStorage 或舊 VFS namespace。關閉 tab 保留對話歷史；reload 後重連 Groq 會接續原 messages 與 active skill。
 
