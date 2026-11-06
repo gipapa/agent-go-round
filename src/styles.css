@@ -176,7 +176,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .terminal-form { grid-template-columns: 18px minmax(0, 1fr); }
   .terminal-form-actions { grid-column: 2; justify-content: flex-end; flex-wrap: wrap; }
   .terminal-footer { align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-start; overflow-x: visible; overflow-y: visible; padding: 6px 10px; white-space: normal; }
-  .status-bar-group { gap: 5px; }
+  .status-bar-group { flex: 1 1 100%; flex-wrap: wrap; gap: 5px; overflow-wrap: anywhere; }
   .terminal-footer #footer-model { flex: 0 0 100%; width: 100%; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; line-height: 1.35; }
 
   .settings-drawer, .route-dialog { position: fixed; top: var(--viewport-offset-top); right: auto; bottom: auto; left: var(--viewport-offset-left); width: var(--viewport-width); max-height: none; border: 0; box-shadow: none; height: var(--viewport-height); }

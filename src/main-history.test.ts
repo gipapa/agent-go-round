@@ -67,6 +67,33 @@ async function saved() {
 }
 
 describe("UI history at the real provider request boundary", () => {
+  it("shows native model events while waiting and streaming, then clears them when finished", async () => {
+    let respond!: (response: Response) => void;
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const chunk = (delta: Record<string, unknown>, finish_reason: string | null = null) => encoder.encode(`data: ${JSON.stringify({ id: "status-fixture", object: "chat.completion.chunk", created: 1, model: "openai/gpt-oss-120b", choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    vi.stubGlobal("fetch", vi.fn((_input, init?: RequestInit) => init?.body
+      ? new Promise<Response>(resolve => { respond = resolve; }) : Promise.resolve(new Response("", { status: 404 }))));
+    await loadApp(); await connect(); await enterAgent();
+    document.querySelector<HTMLTextAreaElement>("#prompt")!.value = "Show native status";
+    document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
+    await vi.waitFor(() => expect(respond).toBeTypeOf("function"));
+    expect(document.querySelector("#footer-run-status")!.textContent).toBe("working");
+    expect(document.querySelector("#footer-pi-status")!.textContent).toBe("Pi · message_end · user");
+    respond(new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), { headers: { "Content-Type": "text/event-stream" } }));
+    controller.enqueue(chunk({ role: "assistant", content: "正在回覆" }));
+    await vi.waitFor(() => expect(document.querySelector("#footer-pi-status")!.textContent).toBe("Pi · text_delta"));
+    expect(document.querySelector("#run-status")!.textContent).toBe("working");
+    controller.enqueue(chunk({}, "stop"));
+    controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+    controller.close();
+    await vi.waitFor(() => expect(document.querySelector("#footer-run-status")!.textContent).toBe("done"));
+    expect(document.querySelector("#run-status")!.textContent).toBe("done");
+    expect(document.querySelector<HTMLElement>("#footer-pi-status")!.hidden).toBe(true);
+    expect(document.querySelector("#footer-pi-status")!.textContent).toBe("");
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
+  });
+
   it("initializes files, saves history and opens previews without crypto.randomUUID", async () => {
     const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
     vi.stubGlobal("crypto", { getRandomValues });

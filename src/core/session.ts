@@ -1,6 +1,6 @@
 import { Agent, type AgentEvent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Model, TSchema } from "@earendil-works/pi-ai";
-import { SessionPersistenceError, type SessionSnapshot, type SessionStore } from "./persistence";
+import { SessionPersistenceError, type InputTokenBudget, type SessionSnapshot, type SessionStore } from "./persistence";
 import type { FileAccess, FileAccessRecorder } from "./fs";
 
 export type RunStatus = "success" | "aborted" | "deadline" | "error" | "outcome_unknown" | "output_limit";
@@ -16,6 +16,9 @@ type SessionEventPayload =
   | { type: "file_access"; runId: string; toolCallId: string; method: string; path: string; revision?: number; readRange?: FileReadRange }
   | { type: "tool_result_ready"; runId: string; toolCallId: string }
   | { type: "run_started"; runId: string; input: string }
+  | { type: "compaction_started"; runId: string; reason: "context" | "input_limit" }
+  | { type: "compaction_finished"; runId: string; reason: "context" | "input_limit"; removedTurns: number }
+  | { type: "request_retry"; runId: string; reason: "input_limit"; attempt: number }
   | { type: "text_delta"; runId: string; delta: string }
   | { type: "run_finished"; runId: string; status: RunStatus; text: string; error?: string }
   | { type: "tool_started"; runId: string; toolCallId: string; toolName: string }
@@ -35,6 +38,8 @@ export type ContextUsage = {
   contextWindow: number;
   percent: number;
   autoCompactPercent: number;
+  inputTokenLimit?: number;
+  compactTargetTokens: number;
 };
 
 function estimateTextTokens(text: string): number { return Math.ceil(text.length / 4); }
@@ -198,6 +203,7 @@ export type AgentSessionOptions = {
   /** Maximum number of assistant text characters emitted by one prompt. */
   maxOutputCharacters?: number;
   autoCompactPercent?: number;
+  inputTokenBudget?: InputTokenBudget;
   eventStore?: SessionEventStore;
   initialMessages?: readonly AgentMessage[];
   activeSkill?: string;
@@ -225,7 +231,7 @@ export class AgentSession {
   readonly sessionId: string;
   readonly agent: Agent;
   activeSkill?: string;
-  private activeRun?: { runId: string; toolCallCount: number; unknownOutcome: boolean; unknownToolCalls: Set<string>; deadlineExceeded: boolean; outputLimitExceeded: boolean; outputCharacters: number; deadlineTimer?: ReturnType<typeof setTimeout> };
+  private activeRun?: { runId: string; toolCallCount: number; unknownOutcome: boolean; unknownToolCalls: Set<string>; stopRequested: boolean; deadlineExceeded: boolean; outputLimitExceeded: boolean; outputCharacters: number; deadlineTimer?: ReturnType<typeof setTimeout> };
   private readonly listeners = new Set<(event: SessionEvent) => void>();
   private toolsByName: ReadonlyMap<string, SessionTool>;
   private readonly approval?: ToolApproval;
@@ -235,10 +241,15 @@ export class AgentSession {
   private autoCompactPercent: number;
   private readonly eventStore?: SessionEventStore;
   private contextSources: ContextSource[] = [];
+  private inputTokenBudget?: InputTokenBudget;
+  private budgetModelKey: string;
+  private lastRequestTokens = 0;
 
   constructor(options: AgentSessionOptions) {
     this.sessionId = options.sessionId;
     this.activeSkill = options.activeSkill;
+    this.inputTokenBudget = options.inputTokenBudget;
+    this.budgetModelKey = this.modelKey(options.model);
     if (options.maxToolCalls !== undefined && (!Number.isInteger(options.maxToolCalls) || options.maxToolCalls < 0)) {
       throw new Error("maxToolCalls must be a non-negative integer");
     }
@@ -290,8 +301,11 @@ export class AgentSession {
   contextUsage(): ContextUsage {
     const modelWindow = this.agent.state.model.contextWindow;
     const contextWindow = Number.isSafeInteger(modelWindow) && modelWindow > 0 ? modelWindow : 128_000;
-    const usedTokens = estimateContextTokens(this.agent.state.systemPrompt, this.agent.state.messages, this.agent.state.tools as SessionTool[]);
-    return { usedTokens, contextWindow, percent: Math.round((usedTokens / contextWindow) * 100), autoCompactPercent: this.autoCompactPercent };
+    const budget = this.currentInputTokenBudget();
+    const scale = budget?.estimateScale ?? 1;
+    const usedTokens = Math.ceil(estimateContextTokens(this.agent.state.systemPrompt, this.agent.state.messages, this.agent.state.tools as SessionTool[]) * scale);
+    return { usedTokens, contextWindow, percent: Math.round((usedTokens / contextWindow) * 100), autoCompactPercent: this.autoCompactPercent,
+      compactTargetTokens: Math.floor(this.compactTargetTokens() * scale), ...(budget ? { inputTokenLimit: budget.limit } : {}) };
   }
 
   recovery(): SessionRecovery {
@@ -345,10 +359,9 @@ export class AgentSession {
     const cleanInput = input.trim();
     if (!cleanInput) throw new Error("訊息不可為空");
     if (this.activeRun) throw new SessionBusyError(this.sessionId);
-    this.compactBeforePrompt(cleanInput);
 
     const runId = makeId("run");
-    const run = { runId, toolCallCount: 0, unknownOutcome: false, unknownToolCalls: new Set<string>(), deadlineExceeded: false, outputLimitExceeded: false, outputCharacters: 0, deadlineTimer: undefined as ReturnType<typeof setTimeout> | undefined };
+    const run = { runId, toolCallCount: 0, unknownOutcome: false, unknownToolCalls: new Set<string>(), stopRequested: false, deadlineExceeded: false, outputLimitExceeded: false, outputCharacters: 0, deadlineTimer: undefined as ReturnType<typeof setTimeout> | undefined };
     this.activeRun = run;
     if (this.deadlineMs !== undefined) {
       run.deadlineTimer = setTimeout(() => {
@@ -402,7 +415,17 @@ export class AgentSession {
     });
 
     try {
-      await this.agent.prompt(cleanInput);
+      this.compactBeforePrompt(cleanInput);
+      if (!run.stopRequested && !run.deadlineExceeded) await this.agent.prompt(cleanInput);
+      // Continue only the rejected model request. Completed tools remain in the
+      // latest turn, so recovering an input-limit error cannot replay them.
+      for (let retry = 0; finalAssistant && retry <= 1; retry++) {
+        if (run.unknownOutcome || run.stopRequested || run.deadlineExceeded || run.outputLimitExceeded || !this.recoverInputLimit(finalAssistant, retry < 1)) break;
+        this.emit({ type: "request_retry", runId, reason: "input_limit", attempt: retry + 1 });
+        if (run.stopRequested || run.deadlineExceeded) break;
+        finalAssistant = undefined;
+        await this.agent.continue();
+      }
       const fullText = textFromAssistant(finalAssistant);
       const emptyFinal = finalAssistant?.stopReason === "stop" && !fullText.trim();
       const text = this.maxOutputCharacters === undefined ? fullText : fullText.slice(0, this.maxOutputCharacters);
@@ -412,7 +435,7 @@ export class AgentSession {
         ? "deadline"
         : this.activeRun?.outputLimitExceeded || finalAssistant?.stopReason === "length"
         ? "output_limit"
-        : finalAssistant?.stopReason === "aborted" || this.agent.signal?.aborted
+        : run.stopRequested || finalAssistant?.stopReason === "aborted" || this.agent.signal?.aborted
         ? "aborted"
         : finalAssistant?.stopReason === "error" || this.agent.state.errorMessage || emptyFinal
           ? "error"
@@ -457,12 +480,14 @@ export class AgentSession {
 
   stop(): boolean {
     if (!this.activeRun) return false;
+    this.activeRun.stopRequested = true;
     this.agent.abort();
     return true;
   }
 
   snapshot(): SessionSnapshot {
     if (this.isRunning) throw new SessionPersistenceError("Cannot snapshot a running session");
+    const budget = this.currentInputTokenBudget();
     return {
       version: 1,
       sessionId: this.sessionId,
@@ -471,7 +496,8 @@ export class AgentSession {
       messages: [...this.agent.state.messages],
       savedAt: Date.now(),
       ...(this.activeSkill ? { activeSkill: this.activeSkill } : {}),
-      autoCompactPercent: this.autoCompactPercent
+      autoCompactPercent: this.autoCompactPercent,
+      ...(budget ? { inputTokenBudget: { ...budget } } : {})
     };
   }
 
@@ -490,28 +516,76 @@ export class AgentSession {
       systemPrompt: snapshot.systemPrompt,
       initialMessages: snapshot.messages,
       activeSkill: snapshot.activeSkill,
-      autoCompactPercent: snapshot.autoCompactPercent
+      autoCompactPercent: snapshot.autoCompactPercent,
+      inputTokenBudget: snapshot.inputTokenBudget
     });
   }
 
   private compactTargetTokens(): number {
     const modelWindow = this.agent.state.model.contextWindow;
     const contextWindow = Number.isSafeInteger(modelWindow) && modelWindow > 0 ? modelWindow : 128_000;
-    return Math.max(1, Math.floor(contextWindow * this.autoCompactPercent / 100));
+    const budget = this.currentInputTokenBudget();
+    return Math.max(1, Math.floor(Math.min(contextWindow * this.autoCompactPercent / 100,
+      budget ? budget.limit * 0.9 : Infinity) / (budget?.estimateScale ?? 1)));
   }
 
   private compactContext(messages: AgentMessage[]): AgentMessage[] {
-    return compactMessages(this.agent.state.systemPrompt, messages, this.agent.state.tools as SessionTool[], this.compactTargetTokens()).messages;
+    const compacted = this.compactWithProgress(messages).messages;
+    this.lastRequestTokens = estimateContextTokens(this.agent.state.systemPrompt, compacted, this.agent.state.tools as SessionTool[]);
+    return compacted;
+  }
+
+  private modelKey(model: Model<any>): string { return JSON.stringify([model.provider, model.baseUrl, model.id]); }
+
+  private currentInputTokenBudget(): InputTokenBudget | undefined {
+    return this.modelKey(this.agent.state.model) === this.budgetModelKey ? this.inputTokenBudget : undefined;
+  }
+
+  private compactWithProgress(messages: readonly AgentMessage[], reason: "context" | "input_limit" = "context"): CompactResult {
+    const target = this.compactTargetTokens();
+    const run = this.activeRun;
+    const report = run && messages.filter(message => message.role === "user").length > 1
+      && estimateContextTokens(this.agent.state.systemPrompt, messages, this.agent.state.tools as SessionTool[]) > target;
+    if (report) this.emit({ type: "compaction_started", runId: run.runId, reason });
+    const result = compactMessages(this.agent.state.systemPrompt, messages, this.agent.state.tools as SessionTool[], target);
+    if (report) this.emit({ type: "compaction_finished", runId: run.runId, reason, removedTurns: result.removed });
+    return result;
+  }
+
+  private recoverInputLimit(failure: AssistantMessage, allowRetry: boolean): boolean {
+    const error = failure.errorMessage ?? "";
+    // ITPM is an input budget. Do not treat ordinary 429s or combined TPM /
+    // output limits as an input cap; those require different retry policies.
+    const match = error.match(/\b413\b[\s\S]*Request too large[\s\S]*input tokens per minute\s*\(ITPM\):\s*Limit\s+([\d,]+),\s*Requested\s+([\d,]+)/i);
+    if (failure.stopReason !== "error" || !match || this.lastRequestTokens <= 0) return false;
+    const limit = Number(match[1].replaceAll(",", ""));
+    const requested = Number(match[2].replaceAll(",", ""));
+    if (!Number.isSafeInteger(limit) || limit <= 0 || !Number.isSafeInteger(requested) || requested <= limit) return false;
+    const previous = this.currentInputTokenBudget();
+    this.budgetModelKey = this.modelKey(this.agent.state.model);
+    this.inputTokenBudget = { limit, estimateScale: Math.max(previous?.estimateScale ?? 1, requested / this.lastRequestTokens) };
+    const messages = this.agent.state.messages;
+    const withoutFailure = messages.at(-1) === failure ? messages.slice(0, -1) : [];
+    const result = this.compactWithProgress(withoutFailure, "input_limit");
+    const reducedTokens = estimateContextTokens(this.agent.state.systemPrompt, result.messages, this.agent.state.tools as SessionTool[]);
+    const hasOutput = failure.content.some(block => block.type !== "text" || block.text.length > 0);
+    if (result.removed) this.agent.state.messages = [...result.messages, failure];
+    if (allowRetry && !hasOutput && result.removed && reducedTokens < this.lastRequestTokens && reducedTokens * this.inputTokenBudget.estimateScale < limit) {
+      this.agent.state.messages = result.messages;
+      return true;
+    }
+    failure.errorMessage = `${error}\n輸入超過服務端 ITPM 上限 ${limit.toLocaleString()} tokens（與模型 context window 不同）。${allowRetry ? "目前訊息、工具結果或固定提示仍過大，無法再靠壓縮舊回合縮小請求" : "壓縮後重試仍超限"}；請縮小輸入／工具輸出，或改用輸入額度較高的模型。`;
+    return false;
   }
 
   private compactState(): void {
-    const result = compactMessages(this.agent.state.systemPrompt, this.agent.state.messages, this.agent.state.tools as SessionTool[], this.compactTargetTokens());
+    const result = this.compactWithProgress(this.agent.state.messages);
     if (result.removed) this.agent.state.messages = result.messages;
   }
 
   private compactBeforePrompt(input: string): void {
     const prompt: AgentMessage = { role: "user", content: input, timestamp: Date.now() };
-    const result = compactMessages(this.agent.state.systemPrompt, [...this.agent.state.messages, prompt], this.agent.state.tools as SessionTool[], this.compactTargetTokens());
+    const result = this.compactWithProgress([...this.agent.state.messages, prompt]);
     if (result.removed && result.messages.at(-1) === prompt) this.agent.state.messages = result.messages.slice(0, -1);
   }
 

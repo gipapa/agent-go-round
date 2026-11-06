@@ -3,6 +3,8 @@ import type { Model } from "@earendil-works/pi-ai";
 
 export const SESSION_SNAPSHOT_VERSION = 1 as const;
 
+export type InputTokenBudget = { limit: number; estimateScale: number };
+
 export type SessionSnapshot = {
   version: typeof SESSION_SNAPSHOT_VERSION;
   sessionId: string;
@@ -12,6 +14,7 @@ export type SessionSnapshot = {
   savedAt: number;
   activeSkill?: string;
   autoCompactPercent?: number;
+  inputTokenBudget?: InputTokenBudget;
 };
 
 export class SessionPersistenceError extends Error {
@@ -51,6 +54,10 @@ export function validateSessionSnapshot(value: unknown): SessionSnapshot {
   if (typeof snapshot.savedAt !== "number" || !Number.isFinite(snapshot.savedAt)) throw new SessionPersistenceError("Session snapshot is missing savedAt");
   if (snapshot.activeSkill !== undefined && typeof snapshot.activeSkill !== "string") throw new SessionPersistenceError("Invalid active skill");
   if (snapshot.autoCompactPercent !== undefined && (!Number.isInteger(snapshot.autoCompactPercent) || snapshot.autoCompactPercent < 1 || snapshot.autoCompactPercent > 99)) throw new SessionPersistenceError("Invalid auto compact percentage");
+  if (snapshot.inputTokenBudget !== undefined) {
+    const budget = snapshot.inputTokenBudget;
+    if (!budget || !Number.isSafeInteger(budget.limit) || budget.limit <= 0 || !Number.isFinite(budget.estimateScale) || budget.estimateScale < 1) throw new SessionPersistenceError("Invalid input token budget");
+  }
   return snapshot as SessionSnapshot;
 }
 

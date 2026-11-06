@@ -36,6 +36,8 @@ type AgentTab = {
   transcript: TranscriptLine[];
   activeLineId?: string;
   status: TabStatus;
+  workflowStatus?: string;
+  piStatus?: string;
   unread: number;
   draft: string;
   unregisterRoute: () => void;
@@ -198,8 +200,10 @@ app.innerHTML = `
         <footer class="terminal-footer" aria-label="Status bar">
           <div class="status-bar-group">
             <span class="status-bar-label">STATUS</span>
+            <span>AgentGoRound ·</span>
             <span id="footer-status-dot" class="status-dot idle" aria-hidden="true">○</span>
-            <span id="footer-run-status" role="status" aria-live="polite">idle</span>
+            <span id="footer-run-status" role="status" aria-label="AgentGoRound status" aria-live="polite">idle</span>
+            <span id="footer-pi-status" role="status" aria-label="Pi status" aria-live="polite" hidden></span>
             <span class="status-bar-separator" aria-hidden="true">·</span>
             <span id="workspace-status" role="status" aria-live="polite">workspace · local</span>
           </div>
@@ -232,7 +236,8 @@ app.innerHTML = `
             <label id="model-select-label" hidden>Available models<select id="model-select"></select></label>
             <label>Model<input id="model" type="text" autocomplete="off" required /></label>
             <label>Context length (tokens)<input id="context-window" type="number" min="1" step="1" required /></label>
-            <label>Auto compact target (% of context)<input id="auto-compact-percent" type="number" min="1" max="99" step="1" required /></label>
+            <label>Auto compact target (% of model context)<input id="auto-compact-percent" type="number" min="1" max="99" step="1" required /></label>
+            <p class="drawer-copy">Token usage is estimated. Provider input limits are separate from the model context window; a learned input limit can trigger earlier compaction.</p>
             <label>API key<input id="api-key" type="password" placeholder="gsk_…" autocomplete="off" /></label>
             <button id="refresh-models" class="drawer-button muted-button" type="button">Refresh models</button>
             <p id="models-status" class="settings-status" role="status" aria-live="polite">Models can also be entered manually.</p>
@@ -774,12 +779,27 @@ function attachSession(tab: AgentTab, session: AgentSession): void {
   tab.detach();
   tab.session = session;
   tab.committedSession = session.snapshot();
-  tab.detach = session.subscribe((event) => handleSessionEvent(tab, event));
+  tab.workflowStatus = undefined;
+  tab.piStatus = undefined;
+  const detachSession = session.subscribe((event) => handleSessionEvent(tab, event));
+  const detachAgent = session.agent.subscribe((event) => {
+    const status = event.type === "message_update" ? event.assistantMessageEvent.type
+      : "toolName" in event ? `${event.type} · ${event.toolName}`
+      : "message" in event ? `${event.type} · ${event.message.role}` : event.type;
+    if (tab.piStatus === status) return;
+    tab.piStatus = status;
+    if (event.type === "message_update" || (event.type === "message_start" && event.message.role === "assistant")) tab.workflowStatus = undefined;
+    if (tab.id === state.activeTabId) renderPane(tab);
+    else renderSidebar();
+  });
+  tab.detach = () => { detachSession(); detachAgent(); };
 }
 
 function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
   if (event.type === "run_started") {
     tab.status = "working";
+    tab.workflowStatus = undefined;
+    tab.piStatus = undefined;
     const line: TranscriptLine = { id: makeId("assistant"), role: "assistant", text: "", streaming: true };
     tab.activeLineId = line.id;
     tab.transcript.push(line);
@@ -802,6 +822,8 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
       tab.transcript.push(line);
     }
     tab.activeLineId = undefined;
+    tab.workflowStatus = undefined;
+    tab.piStatus = undefined;
     tab.status = event.status === "success" ? "done" : event.status === "aborted" ? "idle" : "error";
     syncHostTools();
     const payload = { version: EMBED_BRIDGE_VERSION, instanceId: embedInstanceId, sessionId: tab.session.sessionId, runId: event.runId, phase: "finished", status: event.status, text: event.text, ...(event.error ? { error: event.error } : {}) };
@@ -811,6 +833,15 @@ function handleSessionEvent(tab: AgentTab, event: SessionEvent): void {
   }
   if (event.type === "context_loaded") {
     tab.transcript.push({ id: makeId("context"), role: "system", text: `loaded ${displayPath(event.source.path)} · revision ${event.source.revision}` });
+  }
+  if (event.type === "compaction_started") tab.workflowStatus = "壓縮中";
+  if (event.type === "compaction_finished") {
+    tab.workflowStatus = undefined;
+    tab.transcript.push({ id: makeId("compact"), role: "system", text: `AgentGoRound · 壓縮完成 · 移除 ${event.removedTurns} 個舊回合 · ${event.reason === "input_limit" ? "ITPM 輸入上限" : "context 門檻"}` });
+  }
+  if (event.type === "request_retry") {
+    tab.workflowStatus = "重試中";
+    tab.transcript.push({ id: makeId("retry"), role: "system", text: `AgentGoRound · 壓縮後重試 · 第 ${event.attempt} 次 · ITPM 輸入上限` });
   }
   if (event.type === "file_access") {
     tab.transcript.push({ id: makeId("file"), role: "system", text: `${event.method} ${displayPath(event.path)}${event.revision !== undefined ? ` · revision ${event.revision}` : ""}${event.readRange ? ` · returned lines ${event.readRange.startLine}–${event.readRange.endLine}/${event.readRange.totalLines}` : ""}` });
@@ -897,6 +928,10 @@ function statusLabel(status: TabStatus): string {
   return status === "working" ? "working" : status === "done" ? "done" : status === "blocked" ? "needs you" : status;
 }
 
+function tabStatusLabel(tab: AgentTab): string {
+  return tab.status === "working" && tab.workflowStatus ? tab.workflowStatus : statusLabel(tab.status);
+}
+
 function statusGlyph(status: TabStatus): string {
   return status === "working" ? "●" : status === "done" ? "✓" : status === "blocked" ? "!" : "○";
 }
@@ -928,7 +963,7 @@ function renderSidebar(): void {
     const name = document.createElement("strong");
     name.textContent = tab.name;
     const detail = document.createElement("small");
-    detail.textContent = `${statusLabel(tab.status)} · Pi`;
+    detail.textContent = `${tabStatusLabel(tab)} · Pi${tab.piStatus ? ` · ${tab.piStatus}` : ""}`;
     copy.append(name, detail);
     button.append(dot, copy);
     if (tab.unread > 0) {
@@ -996,23 +1031,26 @@ function renderPane(tab: AgentTab): void {
   const statusDot = get<HTMLSpanElement>("pane-status-dot");
   statusDot.className = `status-dot ${statusClass(tab.status)}`;
   statusDot.textContent = statusGlyph(tab.status);
-  const statusText = statusLabel(tab.status);
+  const statusText = tabStatusLabel(tab);
   get<HTMLSpanElement>("run-status").textContent = statusText;
   const footerStatusDot = get<HTMLSpanElement>("footer-status-dot");
   footerStatusDot.className = `status-dot ${statusClass(tab.status)}`;
   footerStatusDot.textContent = statusGlyph(tab.status);
   footerStatusDot.title = statusText;
   get<HTMLSpanElement>("footer-run-status").textContent = statusText;
+  const piStatus = get<HTMLSpanElement>("footer-pi-status");
+  piStatus.hidden = tab.status !== "working" || !tab.piStatus;
+  piStatus.textContent = piStatus.hidden ? "" : `Pi · ${tab.piStatus}`;
   const running = tab.session.isRunning || !!tab.commandAbort;
   const modelLabel = tab.session.agent.state.model.name;
   const context = tab.session.contextUsage();
   const contextLabel = tab.mode === "agent"
-    ? ` · context ${context.percent}% (${context.usedTokens.toLocaleString()}/${context.contextWindow.toLocaleString()}) · compact ${context.autoCompactPercent}%`
+    ? ` · context ~${context.percent}% (~${context.usedTokens.toLocaleString()}/${context.contextWindow.toLocaleString()}) · compact ${context.autoCompactPercent}%${context.inputTokenLimit ? ` · input cap ${context.inputTokenLimit.toLocaleString()} · compact ≤${context.compactTargetTokens.toLocaleString()} tokens` : ""}`
     : "";
   get<HTMLSpanElement>("pane-model").textContent = tab.mode === "shell" ? "virtual shell" : modelLabel;
   const footerModel = get<HTMLSpanElement>("footer-model");
   footerModel.textContent = `${tab.mode} · ${displayPath(tab.cwd)} · ${modelLabel}${contextLabel}${!tab.connected ? " · reconnect required" : ""}`;
-  footerModel.title = footerModel.textContent;
+  footerModel.title = `${footerModel.textContent}${tab.mode === "agent" ? " · Context usage is estimated against the model context window. Provider rate limits are separate and may reject smaller requests." : ""}`;
   promptElement.placeholder = tab.mode === "shell" ? `${displayPath(tab.cwd)} $ script…` : "Ask AI to work with your files…";
   if (promptElement.dataset.tabId !== tab.id) {
     promptElement.value = tab.draft;

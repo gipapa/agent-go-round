@@ -107,7 +107,9 @@ describe("main workspace UI", () => {
     await vi.waitFor(() => expect(document.querySelector("#pane-type")?.textContent).toBe("AI agent"));
     const footer = document.querySelector("#footer-model")!.textContent ?? "";
     expect(footer).toContain("context");
+    expect(footer).toContain("context ~");
     expect(footer).toContain("compact 40%");
+    expect(document.querySelector("#footer-model")!.getAttribute("title")).toContain("Provider rate limits are separate");
     expect(document.querySelector(".terminal-footer")?.getAttribute("aria-label")).toBe("Status bar");
     expect(document.querySelector("#footer-run-status")?.textContent).toBe("idle");
 

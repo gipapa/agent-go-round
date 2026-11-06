@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createScriptedSession } from "./scripted";
-import { SessionBusyError } from "./session";
+import { SessionBusyError, type SessionEvent } from "./session";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 
 describe("AgentSession", () => {
@@ -8,8 +8,14 @@ describe("AgentSession", () => {
     const session = createScriptedSession(["first answer", "second answer"], { sessionId: "compact-session", autoCompactPercent: 40 });
     session.agent.state.model = { ...session.agent.state.model, contextWindow: 100 };
     expect(session.contextUsage()).toMatchObject({ contextWindow: 100, percent: 0, autoCompactPercent: 40 });
+    const progress: SessionEvent[] = [];
+    session.subscribe(event => { if (event.type.startsWith("compaction_")) progress.push(event); });
     await session.prompt("a".repeat(80));
-    await session.prompt("b".repeat(80));
+    const result = await session.prompt("b".repeat(80));
+    expect(progress).toMatchObject([
+      { type: "compaction_started", runId: result.runId, reason: "context" },
+      { type: "compaction_finished", runId: result.runId, reason: "context", removedTurns: 1 }
+    ]);
     const text = session.agent.state.messages.flatMap(message => {
       if (!("content" in message)) return [];
       if (typeof message.content === "string") return [message.content];

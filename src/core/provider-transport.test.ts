@@ -56,15 +56,16 @@ describe("Groq OpenAI-compatible transport", () => {
     expect(requests[0].body).toMatchObject({ model: "openai/gpt-oss-120b", stream: true });
   });
 
-  it("retries a rate-limited model request after a tool without repeating its side effect", async () => {
+  it.each([429, 413])("recovers an HTTP %s after a tool without repeating its side effect", async status => {
     const requests: Array<Record<string, unknown>> = [];
     const server = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk;
       requests.push(JSON.parse(raw) as Record<string, unknown>);
       if (requests.length === 2) {
-        response.writeHead(429, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ error: { message: "Rate limit reached. Please try again in 0.001s." } }));
+        response.writeHead(status, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: { message: status === 429 ? "Rate limit reached. Please try again in 0.001s."
+          : "Request too large for model on input tokens per minute (ITPM): Limit 7000, Requested 7033, please reduce your message size and try again.", type: "tokens", code: "rate_limit_exceeded" } }));
         return;
       }
       response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
@@ -99,10 +100,16 @@ describe("Groq OpenAI-compatible transport", () => {
       }]
     });
 
+    session.addContextMessage("obsolete history ".repeat(1200));
     await expect(session.prompt("Look up cust-42 and report the plan")).resolves.toMatchObject({ status: "success", text: "verified pro" });
     expect(calls).toEqual([{ id: "cust-42" }]);
     expect(requests).toHaveLength(3);
     expect(JSON.stringify(requests[1])).toContain("customer cust-42 is pro");
-    expect(requests[2]).toEqual(requests[1]);
+    if (status === 429) expect(requests[2]).toEqual(requests[1]);
+    else {
+      expect(JSON.stringify(requests[2])).not.toContain("obsolete history");
+      expect(JSON.stringify(requests[2])).toContain("customer cust-42 is pro");
+      expect(session.contextUsage().inputTokenLimit).toBe(7000);
+    }
   });
 });
