@@ -99,7 +99,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .terminal-form textarea::placeholder { color: #666370; }
 .terminal-form textarea:focus { box-shadow: none; }
 .terminal-form-actions { align-items: center; }
-.run-status { color: #7d788b; font-size: 10px; }
+.execution-status { display: flex; min-width: 0; max-width: 360px; flex-wrap: wrap; justify-content: flex-end; gap: 3px 10px; color: #b9a9d0; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.execution-status[hidden] { display: none; }
+.run-status { color: #7d788b; font-size: 10px; white-space: nowrap; }
 .terminal-button, .drawer-button { border: 1px solid #454151; color: #b9b3c7; background: #242230; padding: 6px 10px; font-size: 10px; }
 .terminal-button:hover, .drawer-button:hover { border-color: #9a7ac5; color: #f5f0ff; }
 .send-button { border-color: #8768af; color: #eadfff; background: #392d51; }
@@ -175,6 +177,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .terminal { padding: 15px 13px 22px; }
   .terminal-form { grid-template-columns: 18px minmax(0, 1fr); }
   .terminal-form-actions { grid-column: 2; justify-content: flex-end; flex-wrap: wrap; }
+  .execution-status { flex: 1 1 100%; max-width: none; }
   .terminal-footer { align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-start; overflow-x: visible; overflow-y: visible; padding: 6px 10px; white-space: normal; }
   .status-bar-group { flex: 1 1 100%; flex-wrap: wrap; gap: 5px; overflow-wrap: anywhere; }
   .terminal-footer #footer-model { flex: 0 0 100%; width: 100%; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; line-height: 1.35; }
@@ -219,6 +222,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .keyboard-open .terminal-form { grid-template-columns: 14px minmax(0, 1fr) auto; gap: 6px; padding: 7px 10px; }
   .keyboard-open .terminal-form textarea { width: 100%; min-width: 0; min-height: 32px; max-height: 80px; resize: none; }
   .keyboard-open .terminal-form-actions { grid-column: auto; flex-wrap: nowrap; gap: 6px; }
+  .keyboard-open .execution-status { flex: 0 1 auto; max-width: min(24vw, 120px); }
   .keyboard-open .run-status, .keyboard-open .stop-button:disabled { display: none; }
 }
 

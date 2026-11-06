@@ -195,15 +195,16 @@ app.innerHTML = `
           <span class="terminal-prompt" aria-hidden="true">❯</span>
           <label class="sr-only" for="prompt">Message</label>
           <textarea id="prompt" rows="1" placeholder="Ask this agent to do something…" autocomplete="off" required></textarea>
-          <div class="terminal-form-actions"><span id="run-status" class="run-status">idle</span><button id="stop" class="terminal-button stop-button" type="button" disabled>esc stop</button><button id="send" class="terminal-button send-button" type="submit">send</button></div>
+          <div class="terminal-form-actions">
+            <span id="execution-status" class="execution-status" role="status" aria-label="Execution status" aria-live="polite" hidden><span id="workflow-status" hidden></span><span id="pi-status" hidden></span></span>
+            <span id="run-status" class="run-status">idle</span><button id="stop" class="terminal-button stop-button" type="button" disabled>esc stop</button><button id="send" class="terminal-button send-button" type="submit">send</button>
+          </div>
         </form>
         <footer class="terminal-footer" aria-label="Status bar">
           <div class="status-bar-group">
             <span class="status-bar-label">STATUS</span>
-            <span>AgentGoRound ·</span>
             <span id="footer-status-dot" class="status-dot idle" aria-hidden="true">○</span>
             <span id="footer-run-status" role="status" aria-label="AgentGoRound status" aria-live="polite">idle</span>
-            <span id="footer-pi-status" role="status" aria-label="Pi status" aria-live="polite" hidden></span>
             <span class="status-bar-separator" aria-hidden="true">·</span>
             <span id="workspace-status" role="status" aria-live="polite">workspace · local</span>
           </div>
@@ -1032,15 +1033,19 @@ function renderPane(tab: AgentTab): void {
   statusDot.className = `status-dot ${statusClass(tab.status)}`;
   statusDot.textContent = statusGlyph(tab.status);
   const statusText = tabStatusLabel(tab);
-  get<HTMLSpanElement>("run-status").textContent = statusText;
+  get<HTMLSpanElement>("run-status").textContent = statusLabel(tab.status);
   const footerStatusDot = get<HTMLSpanElement>("footer-status-dot");
   footerStatusDot.className = `status-dot ${statusClass(tab.status)}`;
   footerStatusDot.textContent = statusGlyph(tab.status);
   footerStatusDot.title = statusText;
-  get<HTMLSpanElement>("footer-run-status").textContent = statusText;
-  const piStatus = get<HTMLSpanElement>("footer-pi-status");
+  get<HTMLSpanElement>("footer-run-status").textContent = statusLabel(tab.status);
+  const workflowStatus = get<HTMLSpanElement>("workflow-status");
+  workflowStatus.hidden = tab.status !== "working" || !tab.workflowStatus;
+  workflowStatus.textContent = workflowStatus.hidden ? "" : `AgentGoRound · ${tab.workflowStatus}`;
+  const piStatus = get<HTMLSpanElement>("pi-status");
   piStatus.hidden = tab.status !== "working" || !tab.piStatus;
   piStatus.textContent = piStatus.hidden ? "" : `Pi · ${tab.piStatus}`;
+  get<HTMLSpanElement>("execution-status").hidden = workflowStatus.hidden && piStatus.hidden;
   const running = tab.session.isRunning || !!tab.commandAbort;
   const modelLabel = tab.session.agent.state.model.name;
   const context = tab.session.contextUsage();

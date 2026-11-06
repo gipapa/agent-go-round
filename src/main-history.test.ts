@@ -79,18 +79,20 @@ describe("UI history at the real provider request boundary", () => {
     document.querySelector<HTMLFormElement>("#terminal-form")!.requestSubmit();
     await vi.waitFor(() => expect(respond).toBeTypeOf("function"));
     expect(document.querySelector("#footer-run-status")!.textContent).toBe("working");
-    expect(document.querySelector("#footer-pi-status")!.textContent).toBe("Pi · message_end · user");
+    expect(document.querySelector("#pi-status")!.textContent).toBe("Pi · message_end · user");
+    expect(document.querySelector(".terminal-form-actions")!.firstElementChild?.id).toBe("execution-status");
+    expect(document.querySelector("#execution-status")!.nextElementSibling?.id).toBe("run-status");
     respond(new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), { headers: { "Content-Type": "text/event-stream" } }));
     controller.enqueue(chunk({ role: "assistant", content: "正在回覆" }));
-    await vi.waitFor(() => expect(document.querySelector("#footer-pi-status")!.textContent).toBe("Pi · text_delta"));
+    await vi.waitFor(() => expect(document.querySelector("#pi-status")!.textContent).toBe("Pi · text_delta"));
     expect(document.querySelector("#run-status")!.textContent).toBe("working");
     controller.enqueue(chunk({}, "stop"));
     controller.enqueue(encoder.encode("data: [DONE]\n\n"));
     controller.close();
     await vi.waitFor(() => expect(document.querySelector("#footer-run-status")!.textContent).toBe("done"));
     expect(document.querySelector("#run-status")!.textContent).toBe("done");
-    expect(document.querySelector<HTMLElement>("#footer-pi-status")!.hidden).toBe(true);
-    expect(document.querySelector("#footer-pi-status")!.textContent).toBe("");
+    expect(document.querySelector<HTMLElement>("#execution-status")!.hidden).toBe(true);
+    expect(document.querySelector("#pi-status")!.textContent).toBe("");
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>("#send")!.disabled).toBe(false));
   });
 
