@@ -287,6 +287,70 @@ describe("VFS ~/bin JavaScript tools", () => {
     expect(await bin.execute("edit", { path: "repeat.md", oldText: "same", newText: "new", replaceAll: true })).toMatchObject({ replacements: 2 });
   });
 
+  it("returns complete-call guidance for invalid direct edits without retaining earlier arguments", async () => {
+    const { bin, fs } = await setup();
+    await fs.writeFile("~/main.html", "<title>月下狐影</title>");
+    const original = await fs.readFile("~/main.html");
+    for (const args of [
+      { oldText: original.content, newText: "<title>狐影新篇</title>" },
+      { path: "main.html", oldText: original.content },
+      { path: "main.html", oldText: original.content, newText: [] }
+    ]) {
+      await expect(bin.execute("edit", args)).rejects.toThrow('Required arguments in every call: ["path","oldText","newText"]');
+      expect(await fs.readFile("~/main.html")).toEqual(original);
+    }
+    expect(await bin.execute("edit", { path: "main.html", oldText: original.content, newText: "" })).toMatchObject({ revision: 2, replacements: 1 });
+    expect((await fs.readFile("~/main.html")).content).toBe("");
+  });
+
+  it("delivers validation recovery guidance through Pi before executing only the complete edit", async () => {
+    const { bin, fs } = await setup();
+    const originalText = "<title>月下狐影</title>";
+    const replacement = "<title>狐影新篇</title>";
+    await fs.writeFile("~/main.html", originalText);
+    const original = await fs.readFile("~/main.html");
+    const argumentsByTurn = [
+      { oldText: originalText, newText: replacement },
+      { path: "main.html", oldText: originalText },
+      { path: "main.html", oldText: originalText, newText: replacement }
+    ];
+    const model = createScriptedSession([]).agent.state.model;
+    let turn = 0;
+    const streamFn: StreamFn = (_model, context) => {
+      const previous = context.messages.at(-1);
+      if (turn === 1 || turn === 2) {
+        expect(previous).toMatchObject({ role: "toolResult", isError: true });
+        const feedback = JSON.stringify(previous);
+        expect(feedback).toContain("Tool was not executed");
+        expect(feedback).toContain("preserving the fields that were already correct");
+        expect(feedback).toContain("arguments from earlier calls are not retained");
+      }
+      const args = argumentsByTurn[turn];
+      const message: AssistantMessage = {
+        role: "assistant", api: "openai-completions", provider: "scripted", model: model.id,
+        content: args ? [{ type: "toolCall", id: `edit-${turn++}`, name: "EdIt", arguments: args }] : [{ type: "text", text: "verified" }],
+        stopReason: args ? "toolUse" : "stop", timestamp: Date.now(),
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+      };
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: args ? "toolUse" : "stop", message });
+      stream.end(message);
+      return stream;
+    };
+    const accesses: BinFileAccess[] = [];
+    const session = new AgentSession({ sessionId: "edit-recovery", model, streamFn, tools: bin.sessionTools(undefined, access => accesses.push(access)) });
+    expect(session.agent.state.tools.find(tool => tool.name === "edit")!.description).toContain('["path","oldText","newText"]');
+    expect(await session.prompt("修改標題")).toMatchObject({ status: "success", text: "verified" });
+    const results = session.agent.state.messages.filter(message => message.role === "toolResult");
+    expect(results.map(result => result.isError)).toEqual([true, true, false]);
+    expect(JSON.stringify(results[0])).toContain("required properties path");
+    expect(JSON.stringify(results[1])).toContain("required properties newText");
+    expect(accesses.filter(access => access.method === "writeFile")).toHaveLength(1);
+    expect(await fs.readFile("~/main.html")).toMatchObject({ content: replacement, revision: original.revision + 1 });
+    expect(argumentsByTurn[0]).not.toHaveProperty("path");
+    expect(argumentsByTurn[1]).not.toHaveProperty("newText");
+  });
+
   it("explains create-only conflicts and recovers with read revisions without losing batch atomicity", async () => {
     const { fs, bin } = await setup();
     await bin.execute("write", { path: "main.html", content: "Original" });
@@ -306,6 +370,23 @@ describe("VFS ~/bin JavaScript tools", () => {
     const current = await bin.execute("read", { path: "main.html" }) as { revision: number };
     expect(await bin.execute("write", { path: "main.html", content: "Replacement", expectedRevision: current.revision })).toMatchObject({ revision: current.revision + 1 });
     expect((await fs.readFile("~/main.html")).content).toBe("Replacement");
+  });
+
+  it("explains alternative write arguments and required batch fields before creating anything", async () => {
+    const { bin, fs } = await setup();
+    for (const args of [
+      { path: "~/missing/new.html", createParents: true },
+      { content: "new" },
+      { files: [{ path: "~/missing/new.html" }], createParents: true }
+    ]) {
+      const failure = await bin.execute("write", args).catch(error => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: expect.stringContaining('Required argument alternatives: ["path","content"] OR ["files"]') });
+      expect(failure).toMatchObject({ message: expect.stringContaining('Each "files" item requires ["path","content"]') });
+      await expect(fs.stat("~/missing")).rejects.toMatchObject({ code: "not_found" });
+    }
+    expect(await bin.execute("write", { path: "~/missing/new.html", content: "", createParents: true })).toMatchObject({ revision: 1 });
+    expect((await fs.readFile("~/missing/new.html")).content).toBe("");
   });
 
   it("loads new JS tools, enforces capabilities, and pins already-registered tool definitions", async () => {

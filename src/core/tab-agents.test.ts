@@ -58,6 +58,20 @@ describe("cross-tab agent commands", () => {
     expect(await execute({ action: "read", requestId: sent.requestId })).toMatchObject({ status: "error", error: "target_closed" });
   });
 
+  it("explains complete send/read arguments without dispatching incomplete requests", async () => {
+    const { execute, calls, finish } = setup();
+    for (const input of [{ action: "send", target: "other" }, { action: "send", text: "hi" }]) {
+      await expect(execute(input)).rejects.toThrow('Resend one complete object: {"action":"send","target":"<tab ID from list>","text":"<task>"}');
+    }
+    expect(calls()).toBe(0);
+    const sent = await execute({ action: "send", target: "other", text: "hi" }) as { requestId: string };
+    await expect(execute({ action: "read" })).rejects.toThrow('Resend one complete object: {"action":"read","requestId":"<ID returned by send>"}');
+    expect(await execute({ action: "read", requestId: sent.requestId, waitMs: 0 })).toMatchObject({ status: "pending" });
+    finish();
+    expect(await execute({ action: "read", requestId: sent.requestId })).toMatchObject({ status: "success" });
+    expect(calls()).toBe(1);
+  });
+
   it("cancels only the read wait and lets the caller recover the same accepted request", async () => {
     const { execute, finish, calls } = setup();
     const sent = await execute({ action: "send", target: "other", text: "hi" }) as { requestId: string };

@@ -2,6 +2,7 @@ import { Agent, type AgentEvent, type AgentMessage, type AgentTool, type StreamF
 import type { AssistantMessage, Model, TSchema } from "@earendil-works/pi-ai";
 import { SessionPersistenceError, type InputTokenBudget, type SessionSnapshot, type SessionStore } from "./persistence";
 import type { FileAccess, FileAccessRecorder } from "./fs";
+import { requiredArgumentsGuidance, validateArgumentsWithGuidance } from "./tool-arguments";
 
 export type RunStatus = "success" | "aborted" | "deadline" | "error" | "outcome_unknown" | "output_limit";
 
@@ -670,6 +671,10 @@ export class AgentSession {
   private wrapTool(tool: SessionTool): SessionTool {
     return {
       ...tool,
+      description: `${tool.description} ${requiredArgumentsGuidance(tool)}Each call is independent; retries must include the complete arguments object.`,
+      // Pi validates before execute or approval. Preserve existing argument
+      // preparation, then add actionable validation failures for every tool.
+      prepareArguments: (args) => validateArgumentsWithGuidance(tool, tool.prepareArguments ? tool.prepareArguments(args) : args),
       execute: async (toolCallId, params, signal, onUpdate) => {
         try {
           return await tool.execute(toolCallId, params, signal, onUpdate);

@@ -54,7 +54,7 @@ export class TabAgents {
       };
     }
     if (args.action === "send") {
-      if (!args.target || !args.text?.trim() || args.requestId !== undefined || args.waitMs !== undefined) throw new Error("agents send requires target and text only");
+      if (!args.target || !args.text?.trim() || args.requestId !== undefined || args.waitMs !== undefined) throw new Error('agents send requires target and text only. No request was sent. Resend one complete object: {"action":"send","target":"<tab ID from list>","text":"<task>"}. Keep correct fields; arguments from earlier calls are not retained.');
       const target = tabs.find(tab => tab.id === args.target);
       if (!target) throw new Error("Target tab is closed or unavailable; use agents list");
       if (target.mode !== "agent" || !target.connected) throw new Error("Target is not a connected AI agent; run ai in that tab first");
@@ -63,7 +63,7 @@ export class TabAgents {
       if (receipt.status === "rejected") return { status: "rejected", reason: receipt.reason };
       return { status: "pending", requestId: receipt.message.messageId, target: args.target };
     }
-    if (!args.requestId || args.target !== undefined || args.text !== undefined) throw new Error("agents read requires requestId and optional waitMs");
+    if (!args.requestId || args.target !== undefined || args.text !== undefined) throw new Error('agents read requires requestId and optional waitMs. Resend one complete object: {"action":"read","requestId":"<ID returned by send>"}. Keep the same requestId when pending; do not send the task again.');
     const request = this.requests.get(args.requestId);
     if (!request || request.message.sourceTabId !== sourceTabId) throw new Error("Request not found for this tab; requests expire on page reload or after 200 completed requests");
     if (!request.reply && !request.failure && (args.waitMs ?? 5000) > 0) await this.wait(request, args.waitMs ?? 5000, signal);

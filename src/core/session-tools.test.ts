@@ -190,6 +190,25 @@ describe("AgentSession tools", () => {
 
     expect(calls).toEqual([]);
     expect(store.list().find((event) => event.type === "tool_finished")).toMatchObject({ toolName: "lookup", isError: true });
+    const result = session.agent.state.messages.find(message => message.role === "toolResult");
+    expect(JSON.stringify(result)).toContain('Required arguments in every call: [\\"value\\"]');
+    expect(JSON.stringify(result)).toContain("preserving the fields that were already correct");
+  });
+
+  it("preserves custom argument preparation and validates it before requesting approval", async () => {
+    for (const input of ["alpha", ""] as const) {
+      const calls: string[] = [], approvals: string[] = [];
+      const tool = createLookupTool(calls, true);
+      tool.prepareArguments = args => ({ value: (args as { input: string }).input });
+      const session = new AgentSession({
+        sessionId: `prepared-${input}`, model: MODEL, streamFn: toolStream({ input }), tools: [tool],
+        approval: request => { approvals.push((request.args as { value: string }).value); return true; }
+      });
+      await session.prompt("look up the prepared value");
+      expect(calls).toEqual(input ? [input] : []);
+      expect(approvals).toEqual(calls);
+      expect(session.agent.state.messages.find(message => message.role === "toolResult")).toMatchObject({ isError: !input });
+    }
   });
 
   it("does not execute a tool when the run is aborted while approval is pending", async () => {

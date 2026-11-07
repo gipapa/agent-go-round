@@ -1,13 +1,15 @@
 import { executeFileCapability, FILE_METHODS, BIN_CAPABILITIES, type BinCapability, type FileMethod, type BinFileAccess } from "./file-capabilities";
-import { validateToolArguments, type TSchema } from "@earendil-works/pi-ai";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { BIN_DIRECTORY, BIN_MANIFEST_DIRECTORY, type BinManifest } from "./bin-defaults";
 import { VFS_HOME, type FileNode, type VirtualFileSystem } from "./fs";
 import { ToolOutcomeUnknownError, type SessionTool, type FileReadRange } from "./session";
 import type { BinExecutor } from "./bin-sandbox";
 import { commandHelp } from "./shell-help";
 import { AGENTS_PARAMETERS } from "./tab-agents";
+import { validateArgumentsWithGuidance } from "./tool-arguments";
 
 type LoadedBin = { manifest: BinManifest; source: string };
+
 export type { BinFileAccess } from "./file-capabilities";
 export const NO_HOST_PAGE = "目前沒有連接宿主頁，請從 Host page 開啟 popup。";
 export type BinHostContext = { sessionId?: string; toolCallId?: string; tabId?: string };
@@ -52,8 +54,7 @@ export class BinRegistry {
 
   private async executeDefinition(definition: LoadedBin, args: unknown, cwd: string, signal?: AbortSignal, onAccess?: (access: BinFileAccess) => void, loadSkill?: (name: string, signal: AbortSignal) => Promise<unknown>, context: BinHostContext = {}, onCwd?: (cwd: string) => void): Promise<unknown> {
     const { manifest, source } = definition;
-    const name = manifest.name;
-    const validated = validateToolArguments({ name, description: manifest.description, parameters: manifest.parameters as TSchema }, { type: "toolCall", id: "bin", name, arguments: args as Record<string, unknown> });
+    const validated = validateArgumentsWithGuidance(manifest, args);
     let active = true;
     let mutations = 0;
     let tabDispatchStarted = false;

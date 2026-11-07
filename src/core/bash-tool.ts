@@ -1,7 +1,8 @@
-import { Type, validateToolArguments } from "@earendil-works/pi-ai";
+import { Type } from "@earendil-works/pi-ai";
 import type { AgentSession, SessionTool } from "./session";
 import type { ShellExecutor } from "./shell-runtime";
 import { SHELL_LIMITS } from "./shell-protocol";
+import { validateArgumentsWithGuidance } from "./tool-arguments";
 
 export type AgentFileRun = { cwd: string };
 export const BASH_PARAMETERS = Type.Object({
@@ -18,7 +19,7 @@ export function createBashTool(session: AgentSession, shell: ShellExecutor, cont
     name: "bash", label: "bash", parameters: BASH_PARAMETERS,
     description: BASH_DESCRIPTION,
     execute: async (toolCallId, args, signal) => {
-      const params = validateToolArguments({ name: "bash", description: BASH_DESCRIPTION, parameters: BASH_PARAMETERS }, { type: "toolCall", id: toolCallId, name: "bash", arguments: args as Record<string, unknown> });
+      const params = validateArgumentsWithGuidance({ name: "bash", description: BASH_DESCRIPTION, parameters: BASH_PARAMETERS }, args, toolCallId);
       const record = session.bindFileAccessRecorder(toolCallId);
       let wrote = false;
       const result = await shell.execute(params.script, {

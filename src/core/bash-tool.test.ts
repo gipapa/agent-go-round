@@ -74,7 +74,10 @@ describe.each([
     expect(await session.prompt("將一篇短篇小說寫入 main.html")).toMatchObject({ status: "success" });
     expect(await fs.readFile("~/main.html")).toMatchObject({ content: html + "<!-- revised -->", revision: 3 });
     const results = session.agent.state.messages.filter(message => message.role === "toolResult");
-    expect(JSON.stringify(results.find(message => message.toolCallId === "empty"))).toContain("script");
+    const invalidBash = results.find(message => message.toolCallId === "empty");
+    expect(JSON.stringify(invalidBash)).toContain('Required arguments in every call: [\\"script\\"]');
+    expect(JSON.stringify(invalidBash)).toContain("preserving the fields that were already correct");
+    expect(events.list().some(event => event.type === "file_access" && event.toolCallId === "empty")).toBe(false);
     expect(JSON.stringify(results.find(message => message.toolCallId === "conflict"))).toContain("returned revision as expectedRevision");
     expect(events.list().filter(event => event.type === "tool_finished" && event.isError).map(event => event.type === "tool_finished" && event.toolCallId)).toEqual(["empty", "conflict"]);
   });
