@@ -64,6 +64,7 @@ Shell 只操作目前 workspace 的虛擬 `/`，`~`／HOME 為 `/home/user`；�
 | HTML 預覽 | 左下角 Preview 按鈕，從工作區 HTML 清單選擇或輸入路徑開啟 |
 | 人類檔案編輯 | 左下角 Edit 按鈕，瀏覽／開啟檔案、儲存並預覽與還原草稿 |
 | 笑話範例與 JS 工具更新 | AI 呼叫 `install_joke_demo({})`／`reload_tools({})` |
+| 完整還原虛擬工作區 | AI 呼叫 `reset_workspace({})`，清除所有自訂檔案並還原初始內容，保留對話與分頁 |
 | 回到 home、用法 | AI 呼叫 `bash({script: "cd ~"})`／`help({command: "bash"})` |
 
 Shell 的 `read`／`help` 使用上游定義。`~/bin` 的結構化 AI 工具沒有同名 CLI／JSON 相容層；也不執行使用者 JS 作為 trusted shell command。人類 Edit 按鈕可瀏覽、開啟／新增與儲存 UTF-8 檔案，並備份未儲存草稿。
@@ -105,7 +106,9 @@ AI 另有原生 `bash` tool（不在可編輯的 `~/bin` 中），可提交 scri
 
 一般讀取、列目錄、搜尋與文字轉換優先使用 `bash`；列目錄與搜尋使用 Bash 的 `ls`／`find`／`grep`。需要 revision、完整讀取證據、原子多檔寫入或精確替換時，使用結構化 `read`／`write`／`edit`。工具參數及 Shell 指令清單使用 `help({command: "工具名稱"})` 查詢。工具呼叫與 `help` 查詢名稱不分大小寫；Bash 的 `if`／`then`／`for` 等語法關鍵字仍採標準大小寫。
 
-預設結構化工具為 `read`、`write`、`edit`、`skill_load`、`read_host_page`、`help`、`agents`、`install_joke_demo`、`reload_tools`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+預設結構化工具為 `read`、`write`、`edit`、`skill_load`、`read_host_page`、`help`、`agents`、`install_joke_demo`、`reload_tools`、`reset_workspace`，供 AI 以結構化參數呼叫。工具 `.js` 放在 `~/bin`，工具說明／JSON schema 的 `.tool.json` 集中於 `~/bin/manifests/`；新增或修改後使用 `reload_tools({})`。JS 在隔離 iframe 的 Worker 執行，透過 manifest 宣告的 capabilities 存取 VFS 或呼叫宿主 bridge，無法直接取得 app DOM、IndexedDB 或 provider credentials；目前不支援 Node API、npm packages 或外部 imports。
+
+初始檔案集中於 Git 內的 `workspace/`，結構對應虛擬檔案系統的 `/`。首次初始化與 `reset_workspace({})` 使用相同範本及原子還原流程；完整重設會刪除自訂檔案、規則、技能、範例與工具，保留對話、分頁與 provider 設定。
 
 快速體驗檔案式 skill：
 

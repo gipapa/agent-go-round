@@ -5,7 +5,6 @@ import { PreviewSurface, type PreviewConfig } from "./preview-surface";
 import { FileEditor, type EditorDraft } from "./file-editor";
 import { PreviewPicker } from "./preview-picker";
 import { IndexedDbFileSystem, VFS_HOME, displayPath, resolvePath } from "./core/fs";
-import { installDefaultBin } from "./core/bin-defaults";
 import { BinRegistry, NO_HOST_PAGE } from "./core/bin";
 import { SandboxedBinExecutor } from "./core/bin-sandbox";
 import { executeTerminalInput } from "./terminal/controller";
@@ -138,7 +137,6 @@ const filesReady = (async () => {
     });
     fileRuntime = { fs, bin };
     await initializeWorkspace(fs);
-    await installDefaultBin(fs);
     await bin.reload();
   } catch (error) { fileRuntimeError = error instanceof Error ? error.message : String(error); }
 })();

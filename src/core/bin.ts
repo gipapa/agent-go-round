@@ -7,6 +7,7 @@ import type { BinExecutor } from "./bin-sandbox";
 import { commandHelp } from "./shell-help";
 import { AGENTS_PARAMETERS } from "./tab-agents";
 import { validateArgumentsWithGuidance } from "./tool-arguments";
+import { initializeWorkspace } from "./workspace-bootstrap";
 
 type LoadedBin = { manifest: BinManifest; source: string };
 
@@ -67,6 +68,19 @@ export class BinRegistry {
     const rpc = async (method: BinCapability, values: unknown[]): Promise<unknown> => {
       if (!active || execution.signal.aborted) throw new Error("Tool cancelled");
       if (!manifest.capabilities.includes(method) || !BIN_CAPABILITIES.includes(method)) throw new Error(`Tool lacks filesystem capability: ${method}`);
+      if (method === "resetWorkspace") {
+        if (!Array.isArray(values) || values.length) throw new Error("Invalid resetWorkspace arguments");
+        mutations++;
+        try {
+          await initializeWorkspace(this.fs.withAccessRecorder(access => {
+            if (access.method === "writeBytes" || access.method === "remove") accessed({ method: access.method === "writeBytes" ? "writeFile" : "remove", path: access.path, revision: access.revision });
+          }), { reset: true });
+        }
+        catch (error) { mutations--; throw error; }
+        onCwd?.(VFS_HOME);
+        await this.reload();
+        return { cwd: VFS_HOME, tools: this.list().map(tool => tool.name), message: "Workspace files reset to initial state. Conversations, tabs and provider settings preserved. New tool definitions apply on the next run." };
+      }
       if (method === "home" || method === "reloadTools") {
         if (!Array.isArray(values) || values.length) throw new Error(`Invalid ${method} arguments`);
         if (method === "home") {

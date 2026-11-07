@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "skill_load",
+  "description": "Read a skill's SKILL.md from the available skill catalog. Follow its instructions and use absolute paths to read its resources.",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "name"
+    ],
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "additionalProperties": false
+  },
+  "capabilities": [
+    "loadSkill"
+  ]
+}

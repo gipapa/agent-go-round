@@ -86,18 +86,23 @@ export async function prepareFileContext(fs: VirtualFileSystem, cwd: string, exp
   const catalog = JSON.stringify(skills.map(({ name, description, path }) => ({ name, description, path })));
   if (catalog.length > 32_000) throw new SkillLoadError("Skill catalog exceeds 32000 characters");
   if (skills.length) sections.push(`Available skills (metadata only; use skill_load to read instructions):\n${catalog}`);
-  if (explicitSkill) {
-    const loaded = await loader.load(explicitSkill, skills);
-    sources.push({ kind: "skill", path: loaded.path, revision: loaded.revision });
-    sections.push(`Explicitly selected skill ${loaded.name}, directory ${loaded.path.slice(0, loaded.path.lastIndexOf("/"))}:\n${loaded.instructions}`);
-  }
-  return { systemPrompt: sections.join("\n\n"), sources, skills };
+  const context = { systemPrompt: sections.join("\n\n"), sources, skills };
+  if (explicitSkill) await selectSkillContext(fs, context, explicitSkill);
+  return context;
+}
+
+async function selectSkillContext(fs: VirtualFileSystem, context: FileContext, name: string): Promise<void> {
+  const loaded = await new VfsSkillLoader(fs).load(name, context.skills);
+  context.sources.push({ kind: "skill", path: loaded.path, revision: loaded.revision });
+  context.systemPrompt += `\n\nExplicitly selected skill ${loaded.name}, directory ${loaded.path.slice(0, loaded.path.lastIndexOf("/"))}:\n${loaded.instructions}`;
 }
 
 /** Shared by the product UI and acceptance runner; replaces context without duplicating history. */
 export async function configureFileAgent(session: AgentSession, fs: VirtualFileSystem, cwd: string, bin: BinRegistry, explicitSkill?: string, extraTools: SessionTool[] = [], runtime: { shell?: ShellExecutor; identity?: ShellIdentity; onCwd?: (cwd: string) => void } = {}): Promise<FileContext> {
-  const selected = explicitSkill ?? session.activeSkill;
-  const context = await prepareFileContext(fs, cwd, selected);
+  const context = await prepareFileContext(fs, cwd);
+  // A workspace reset may remove a skill still selected by this or another tab.
+  const selected = explicitSkill ?? (context.skills.some(skill => skill.name === session.activeSkill) ? session.activeSkill : undefined);
+  if (selected) await selectSkillContext(fs, context, selected);
   session.activeSkill = selected;
   const loader = new VfsSkillLoader(fs);
   const run = { cwd: resolvePath(cwd) };

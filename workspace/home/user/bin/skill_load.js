@@ -1,0 +1,1 @@
+async function main(args, api) { return api.skills.load(args.name); }

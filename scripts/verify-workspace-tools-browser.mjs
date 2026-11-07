@@ -20,6 +20,7 @@ const shell = async script => {
 try {
   await mkdir("test-results", { recursive: true });
   await ui.call("open", url.href); await ui.ready(); await ui.call("snapshot");
+  const initialFiles = (await ui.durable(workspaceId)).files.map(({ path, kind, mode, content }) => ({ path, kind, mode, ...(kind === "file" ? { content } : {}) })).sort((a, b) => a.path.localeCompare(b.path));
   assert(await ui.evaluate('return !document.querySelector("#history-toggle,#conversation-history,.workspace-menu,#new-conversation,#route-tab,#route-dialog,.pane-tools")&&document.querySelectorAll(".pane-header-actions > #mode-toggle").length===1'), "Removed UI still present");
   const initial = (await layout()).tabs[0].session.sessionId;
   await ui.call("screenshot", "test-results/workspace-tools-desktop.png");
@@ -34,7 +35,7 @@ try {
   await runTool("help", { command: "bash" });
   assert(JSON.stringify(fixture.requests.at(-1).messages).includes("Commands:"), "Shell guide did not reach the model");
   const exposed = fixture.requests.at(-1).tools.map(tool => tool.function.name);
-  assert(exposed.length === 10 && !["shell_guide", "home", "ls", "find", "grep", "open_preview"].some(name => exposed.includes(name)), "Redundant default tools remain exposed");
+  assert(exposed.length === 11 && exposed.includes("reset_workspace") && !["shell_guide", "home", "ls", "find", "grep", "open_preview"].some(name => exposed.includes(name)), "Default tool catalog is incorrect");
   await runTool("bash", { script: "cd ~/Project" });
   await runTool("bash", { script: "cd ~" });
   await runTool("read", { path: "home.txt" });
@@ -79,6 +80,32 @@ try {
   assert(JSON.stringify(after.tabs.map(tab => tab.session.sessionId)) === JSON.stringify(before.tabs.map(tab => tab.session.sessionId)), "Reload lost tab identities");
   assert(await ui.evaluate('return !document.querySelector("#history-toggle,.workspace-menu")'), "Reload restored removed controls");
   check("new tabs have independent sessions and reload preserves all open tab identities");
+
+  await ui.evaluate('document.querySelector("#tab-list .tab").click();return true');
+  await runTool("bash", { script: "cd ~/Project" });
+  await runTool("skill_load", { name: "joke-master" });
+  const beforeReset = await layout();
+  assert(beforeReset.tabs[0].session.activeSkill === "joke-master", "Active skill fixture was not saved");
+  assert(JSON.stringify(beforeReset.tabs[0].session.messages).includes("custom-tool-value"), "Conversation fixture result was not saved before reset");
+  await runTool("reset_workspace");
+  const resetState = await ui.durable(workspaceId);
+  const restoredFiles = resetState.files.map(({ path, kind, mode, content }) => ({ path, kind, mode, ...(kind === "file" ? { content } : {}) })).sort((a, b) => a.path.localeCompare(b.path));
+  assert(JSON.stringify(restoredFiles) === JSON.stringify(initialFiles), "Reset did not restore the exact initial workspace");
+  const resetLayout = await layout();
+  assert(JSON.stringify(resetLayout.tabs.map(tab => tab.session.sessionId)) === JSON.stringify(beforeReset.tabs.map(tab => tab.session.sessionId)), "Reset replaced sessions or tabs");
+  assert(resetLayout.tabs[0].agentCwd === "/home/user", "Reset did not return the calling agent home");
+  await runTool("help");
+  const restoredTools = fixture.requests.at(-1).tools.map(tool => tool.function.name);
+  assert(restoredTools.length === 11 && !restoredTools.includes("probe"), "Reset did not reload the default tool catalog");
+  assert(!(await layout()).tabs[0].session.activeSkill, "Reset left the next run stuck on a deleted active skill");
+  assert(beforeReset.tabs.every(tab => {
+    const restored = resetLayout.tabs.find(candidate => candidate.id === tab.id);
+    return JSON.stringify(restored.session.messages.slice(0, tab.session.messages.length)) === JSON.stringify(tab.session.messages);
+  }), "Reset lost conversation history");
+  await ui.call("reload"); await ui.ready();
+  const persisted = (await ui.durable(workspaceId)).files.map(({ path, kind, mode, content }) => ({ path, kind, mode, ...(kind === "file" ? { content } : {}) })).sort((a, b) => a.path.localeCompare(b.path));
+  assert(JSON.stringify(persisted) === JSON.stringify(initialFiles), "Reload changed the restored initial workspace");
+  check("reset_workspace restores the exact initial VFS, reloads tools and preserves sessions/history across reload");
   assert(!fixture.failures.length, fixture.failures.join("; "));
   report.status = "pass";
 } catch (error) { report.status = "fail"; report.failure = error.message; process.exitCode = 1; }

@@ -1,0 +1,1 @@
+async function main(args, api) { return { text: await api.tools.help(args.command) }; }

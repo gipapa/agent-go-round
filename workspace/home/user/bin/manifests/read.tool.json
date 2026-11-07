@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "name": "read",
+  "description": "Read UTF-8 files and obtain the revision needed for write overwrites. path accepts one path string or an array of up to 32 paths. offset is a 1-based line number; limit defaults to 200 (max 500). Follow nextOffset until absent for a complete read. Pass the returned revision as write.expectedRevision, not as a field named revision.",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "path"
+    ],
+    "properties": {
+      "path": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive."
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "description": "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive."
+            },
+            "minItems": 1,
+            "maxItems": 32
+          }
+        ]
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Starting line, 1-based; default 1. Continue with the previous result's nextOffset."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "description": "Maximum lines per file; default 200, max 500. Follow nextOffset when present."
+      }
+    },
+    "additionalProperties": false
+  },
+  "capabilities": [
+    "readFile"
+  ]
+}

@@ -12,12 +12,13 @@ import { createScriptedSession } from "./scripted";
 import { createAssistantMessageEventStream, type AssistantMessage, type ToolCall } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { SHELL_COMMANDS, SHELL_BUILTINS } from "./shell-catalog";
+import { initializeWorkspace, DEFAULT_AGENT_RULES } from "./workspace-bootstrap";
 
 // Browser smoke separately exercises the actual opaque iframe + Worker executor.
 const testExecutor: BinExecutor = {
   async execute(source, args, rpc: FileRpc) {
     const main = runInNewContext(`(${source})`, {}, { timeout: 1000 });
-    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]), reload: () => rpc("reloadTools", []) }, workspace: { home: () => rpc("home", []) }, agents: { execute: (options: unknown) => rpc("tabAgents", [options]) } }));
+    return structuredClone(await main(args, { fs: Object.fromEntries(FILE_METHODS.map((method) => [method, (...values: unknown[]) => rpc(method, values)])), host: { readPage: (options: unknown) => rpc("readHostPage", [options]) }, tools: { help: (command?: string) => rpc("commandHelp", [command]), reload: () => rpc("reloadTools", []) }, workspace: { home: () => rpc("home", []), reset: () => rpc("resetWorkspace", []) }, agents: { execute: (options: unknown) => rpc("tabAgents", [options]) } }));
   }
 };
 async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}) {
@@ -29,6 +30,47 @@ async function setup(services: ConstructorParameters<typeof BinRegistry>[2] = {}
 }
 
 describe("VFS ~/bin JavaScript tools", () => {
+  it("resets files through the bin capability, restores cwd and reloads the next run's catalog", async () => {
+    const { fs, bin } = await setup();
+    await initializeWorkspace(fs);
+    await bin.execute("install_joke_demo", {});
+    await fs.writeFile("~/bin/probe.js", 'async function main() { return "custom"; }');
+    await fs.writeFile("~/bin/manifests/probe.tool.json", JSON.stringify({ version: 1, name: "probe", description: "Custom tool", parameters: { type: "object", properties: {}, additionalProperties: false }, capabilities: [] }));
+    await bin.reload();
+    let cwd = "/home/user/jokes";
+    const access: BinFileAccess[] = [];
+    const tools = bin.sessionTools(() => cwd, entry => access.push(entry), undefined, "reset-session", next => { cwd = next; });
+    const originalProbe = tools.find(tool => tool.name === "probe")!;
+    const reset = tools.find(tool => tool.name === "reset_workspace")!;
+    await expect(reset.execute("invalid-reset", { confirm: false }, new AbortController().signal)).rejects.toThrow();
+    expect(await fs.stat("~/jokes")).toMatchObject({ kind: "directory" });
+    const result = await reset.execute("reset", {}, new AbortController().signal);
+    expect(result.details).toMatchObject({ cwd: "/home/user", tools: expect.arrayContaining(DEFAULT_BIN_TOOLS.map(tool => tool.name)) });
+    expect(cwd).toBe("/home/user");
+    expect((await fs.readFile("~/agents.md")).content).toBe(DEFAULT_AGENT_RULES);
+    await expect(fs.stat("~/jokes")).rejects.toMatchObject({ code: "not_found" });
+    await expect(fs.stat("~/skills/joke-master")).rejects.toMatchObject({ code: "not_found" });
+    await expect(fs.stat("~/bin/probe.js")).rejects.toMatchObject({ code: "not_found" });
+    expect(bin.list().map(tool => tool.name)).not.toContain("probe");
+    // Existing runs keep their captured definitions even when reset reloads the registry.
+    expect((await originalProbe.execute("probe", {}, new AbortController().signal)).details).toBe("custom");
+    expect(access).toContainEqual(expect.objectContaining({ method: "writeFile", path: "/home/user/agents.md" }));
+    expect(access).toContainEqual(expect.objectContaining({ method: "remove", path: "/home/user/bin/probe.js" }));
+    await bin.execute("RESET_WORKSPACE", {});
+  });
+
+  it("rejects reset RPCs without capability or with extra RPC arguments", async () => {
+    const fs = new MemoryFileSystem();
+    await initializeWorkspace(fs);
+    await fs.writeFile("~/personal", "preserve");
+    const unauthorized = new BinRegistry(fs, { execute: (_source, _args, rpc) => rpc("resetWorkspace", []) });
+    await unauthorized.reload();
+    await expect(unauthorized.execute("help", {})).rejects.toThrow("lacks filesystem capability");
+    const invalid = new BinRegistry(fs, { execute: (_source, _args, rpc) => rpc("resetWorkspace", ["/"]) });
+    await invalid.reload();
+    await expect(invalid.execute("reset_workspace", {})).rejects.toThrow("Invalid resetWorkspace arguments");
+    expect((await fs.readFile("~/personal")).content).toBe("preserve");
+  });
   it("loads full tool and shell reference through help on demand", async () => {
     const { bin } = await setup();
     const catalog = await bin.execute("help", {}) as { text: string };

@@ -12,7 +12,7 @@ describe.each([
   it("initializes an empty skills folder and Traditional Chinese rules without overwriting existing rules", async () => {
     const fs = create();
     await initializeWorkspace(fs);
-    expect((await fs.listDirectory("~")).map(node => node.path)).toEqual(["/home/user/agents.md", "/home/user/skills"]);
+    expect((await fs.listDirectory("~")).map(node => node.path)).toEqual(["/home/user/agents.md", "/home/user/bin", "/home/user/skills"]);
     expect(await fs.listDirectory("~/skills")).toEqual([]);
     expect(await fs.readFile("~/agents.md")).toMatchObject({ content: DEFAULT_AGENT_RULES, revision: 1 });
     await fs.writeFile("~/agents.md", "自訂規則");

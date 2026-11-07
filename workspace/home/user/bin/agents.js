@@ -1,0 +1,1 @@
+async function main(args, api) { return api.agents.execute(args); }

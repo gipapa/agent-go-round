@@ -25,6 +25,7 @@ const prompts: Record<string, string> = {
   read_host_page: "請使用 read_host_page 讀取已連接的宿主頁面，回覆頁面標題。",
   install_joke_demo: "請使用 install_joke_demo 安裝笑話範例，簡短回報新增結果。",
   reload_tools: "請使用 reload_tools 重新載入目前的自訂工具 catalog，回報是否成功。",
+  reset_workspace: "請使用 reset_workspace 把整個虛擬工作區還原初始狀態，確認所有自訂檔案都可以刪除。完成後簡短回報。",
   agents: "用 agents list 找出可用的 audit-target 分頁，發送『請回覆 audit-reply』，用回傳 requestId 讀取實際結果後回覆。pending 時讀同一 requestId，不要重送。"
 };
 
@@ -60,7 +61,7 @@ it("audits every exposed tool with a real model and records actual calls, argume
         fs: Object.fromEntries(FILE_METHODS.map(method => [method, (...values: unknown[]) => rpc(method, values)])),
         skills: { load: (name: string) => rpc("loadSkill", [name]) },
         tools: { help: (name?: string) => rpc("commandHelp", [name]), reload: () => rpc("reloadTools", []) },
-        workspace: { home: () => rpc("home", []) },
+        workspace: { home: () => rpc("home", []), reset: () => rpc("resetWorkspace", []) },
         host: { readPage: (options: unknown) => rpc("readHostPage", [options]) },
         agents: { execute: (options: unknown) => rpc("tabAgents", [options]) }
       }));

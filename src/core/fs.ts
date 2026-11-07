@@ -42,6 +42,8 @@ export interface VirtualFileSystem {
   mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<FileStat>;
   remove(path: string, options?: RemoveOptions): Promise<void>;
   removeFiles(files: readonly FileRemoval[]): Promise<void>;
+  /** Host-only atomic replacement of this workspace's entire virtual filesystem. */
+  replaceWorkspace(files: readonly Pick<FileWrite, "path" | "content">[], directories: readonly string[], options?: { onlyIfEmpty?: boolean }): Promise<boolean>;
   rename(from: string, to: string, options?: WriteOptions & { replace?: boolean }): Promise<void>;
   copy(from: string, to: string, options?: { recursive?: boolean }): Promise<void>;
   symlink(target: string, path: string): Promise<FileStat>;
@@ -277,6 +279,40 @@ abstract class BaseFileSystem implements VirtualFileSystem {
     if (options.mode !== undefined) checkMode(options.mode);
     const now = Date.now();
     return { ...(previous ?? nodeAt(path, "file", options.mode)), path, kind: "file", size: content.byteLength, revision: (previous?.revision ?? 0) + 1, updatedAt: now, mtime: now };
+  }
+  async replaceWorkspace(files: readonly Pick<FileWrite, "path" | "content">[], directories: readonly string[], options: { onlyIfEmpty?: boolean } = {}): Promise<boolean> {
+    const paths = new Set<string>();
+    const batch = files.map(file => {
+      const path = resolvePath(file.path);
+      if (paths.has(path)) throw new FileSystemError("invalid_batch", `Duplicate file path: ${path}`);
+      paths.add(path);
+      if (typeof file.content !== "string") throw new FileSystemError("invalid_content", "File content must be text");
+      return { path, content: bytes(encoder.encode(file.content)) };
+    });
+    const folders = new Set([...ROOTS, ...directories.map(path => resolvePath(path))]);
+    for (const path of [...paths, ...folders]) {
+      let directory = parent(path);
+      while (directory) { folders.add(directory); directory = parent(directory); }
+    }
+    if ([...folders].some(path => paths.has(path))) throw new FileSystemError("invalid_batch", "File and directory paths overlap");
+    return this.mutate(async tx => {
+      if (options.onlyIfEmpty) {
+        for (const root of ROOTS) if ((await tx.children(root)).some(node => !ROOTS.includes(node.path))) return false;
+      }
+      // Walk physical entries, never follow symlinks, and commit deletion and seeding together.
+      const entries = [(await tx.get("/"))!];
+      for (let index = 0; index < entries.length; index++) {
+        if (entries[index].kind === "directory") entries.push(...await tx.children(entries[index].path));
+      }
+      const previous = new Map(entries.map(node => [node.path, node]));
+      for (const node of entries.reverse()) await tx.removeNode(node.path);
+      const fresh = (path: string, kind: FileStat["kind"]): FileStat => ({
+        ...nodeAt(path, kind), revision: (previous.get(path)?.revision ?? 0) + 1
+      });
+      for (const path of folders) await tx.save(fresh(path, "directory"));
+      for (const file of batch) await tx.save({ ...fresh(file.path, "file"), size: file.content.byteLength }, file.content);
+      return true;
+    });
   }
   async appendBytes(path: string, content: Uint8Array, options: WriteOptions = {}): Promise<FileStat> {
     const suffix = bytes(content);

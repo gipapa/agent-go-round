@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "help",
+  "description": "Inspect structured AI tool descriptions and JSON schemas. Omit command for the tool catalog. Bash uses its own help builtin; this tool does not execute scripts.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "capabilities": [
+    "commandHelp"
+  ]
+}

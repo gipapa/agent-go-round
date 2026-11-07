@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "name": "write",
+  "description": "Save complete literal UTF-8 text/HTML without shell quoting. Use either path/content for one file or files:[{path,content,expectedRevision?}] for an atomic batch. Omitted expectedRevision or 0 creates only: existing files fail unchanged. To overwrite, call read first, then pass its revision as expectedRevision. On conflict read again before deciding to overwrite. createParents=true creates missing parent directories. Returns saved path, revision and bytes; no extra write is needed to confirm success.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "description": "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive.",
+        "~optional": true
+      },
+      "content": {
+        "type": "string",
+        "maxLength": 524288,
+        "description": "Complete literal UTF-8 text to save, including actual line breaks. No shell quoting or HTML escaping is needed. Replaces the entire file; not an append."
+      },
+      "expectedRevision": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "For write, omitted or 0 means create only. To overwrite, read the file first and pass its returned revision here. After a conflict, read again; do not guess or reuse a stale revision. For edit, optional additional revision check."
+      },
+      "createParents": {
+        "type": "boolean",
+        "description": "Create missing parent directories; default false. Directory creation occurs before the file write batch."
+      },
+      "files": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "path",
+            "content"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "description": "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive."
+            },
+            "content": {
+              "type": "string",
+              "maxLength": 524288,
+              "description": "Complete literal UTF-8 text to save, including actual line breaks. No shell quoting or HTML escaping is needed. Replaces the entire file; not an append."
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "For write, omitted or 0 means create only. To overwrite, read the file first and pass its returned revision here. After a conflict, read again; do not guess or reuse a stale revision. For edit, optional additional revision check."
+            }
+          },
+          "additionalProperties": false
+        },
+        "minItems": 1,
+        "maxItems": 32,
+        "description": "Atomic batch of 1–32 files; cannot combine with top-level path/content. Each existing file needs its own expectedRevision."
+      }
+    },
+    "additionalProperties": false,
+    "anyOf": [
+      {
+        "required": [
+          "path",
+          "content"
+        ]
+      },
+      {
+        "required": [
+          "files"
+        ]
+      }
+    ]
+  },
+  "capabilities": [
+    "writeFile",
+    "writeFiles",
+    "mkdir"
+  ]
+}

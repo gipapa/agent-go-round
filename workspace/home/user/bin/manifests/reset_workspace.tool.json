@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "reset_workspace",
+  "description": "Reset the entire shared virtual filesystem to the app's checked-in initial workspace, using the same template as initialization. Deletes all custom files, skills, installed demos and custom bin tools, including files outside ~, and restores default rules and tools. Destructive: use only when the user requests a full workspace reset. Preserves conversations, tabs and provider settings. Resets this agent's cwd to ~ and reloads tools for the next run; running calls keep their original definitions.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "capabilities": ["resetWorkspace"]
+}

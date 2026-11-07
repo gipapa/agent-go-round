@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "install_joke_demo",
+  "description": "Install the optional joke demo files, skill and rules in the shared VFS. Only creates missing files and preserves existing files and lowercase rules. Returns created/kept paths and a suggested prompt; does not run the demo.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "capabilities": [
+    "mkdir",
+    "listDirectory",
+    "writeFiles"
+  ]
+}

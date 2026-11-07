@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "name": "edit",
+  "description": "Replace exact literal oldText with newText in an existing file; not a regex or patch. Read first to obtain the actual text. Ambiguous matches fail unless replaceAll is true. Uses revision conflict detection; expectedRevision is an optional additional check.",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "path",
+      "oldText",
+      "newText"
+    ],
+    "properties": {
+      "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024,
+        "description": "VFS path: ~ is /home/user; relative paths use this agent's cwd. Paths are case-sensitive."
+      },
+      "oldText": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Exact existing substring, including whitespace/newlines. Include enough context for one match."
+      },
+      "newText": {
+        "type": "string",
+        "description": "Literal replacement text; empty string deletes oldText."
+      },
+      "replaceAll": {
+        "type": "boolean",
+        "description": "Replace every exact match; default false rejects multiple matches."
+      },
+      "expectedRevision": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "For write, omitted or 0 means create only. To overwrite, read the file first and pass its returned revision here. After a conflict, read again; do not guess or reuse a stale revision. For edit, optional additional revision check."
+      }
+    },
+    "additionalProperties": false
+  },
+  "capabilities": [
+    "readFile",
+    "writeFile"
+  ]
+}

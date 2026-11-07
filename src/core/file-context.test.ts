@@ -7,6 +7,7 @@ import { createScriptedSession, createScriptedStreamFn } from "./scripted";
 import { AgentSession } from "./session";
 import { BinRegistry } from "./bin";
 import { installDefaultBin } from "./bin-defaults";
+import { initializeWorkspace } from "./workspace-bootstrap";
 
 describe("VFS instructions and skills", () => {
   it("keeps home rules and skills when a run starts outside home", async () => {
@@ -83,5 +84,22 @@ describe("VFS instructions and skills", () => {
     const next = await configureFileAgent(restored, fs, "/home/user", bin);
     expect(next.systemPrompt).toContain("新的評分指示");
     expect(next.sources.at(-1)).toMatchObject({ kind: "skill", revision: 2 });
+  });
+
+  it("continues after a workspace reset removes a saved active skill, while explicit missing skills still fail", async () => {
+    const fs = new MemoryFileSystem();
+    await initializeWorkspace(fs); await installJokeDemo(fs);
+    const session = createScriptedSession([]);
+    const bin = new BinRegistry(fs, { async execute() { throw new Error("Not used"); } });
+    await bin.reload();
+    await configureFileAgent(session, fs, "/home/user", bin, "joke-master");
+    const restored = AgentSession.fromSnapshot(session.snapshot(), { streamFn: createScriptedStreamFn([]) });
+    await initializeWorkspace(fs, { reset: true });
+    const next = await configureFileAgent(restored, fs, "/home/user", bin);
+    expect(restored.activeSkill).toBeUndefined();
+    expect(next.skills).toEqual([]);
+    expect(next.sources.some(source => source.kind === "skill")).toBe(false);
+    expect(next.systemPrompt).not.toContain("joke-master");
+    await expect(configureFileAgent(restored, fs, "/home/user", bin, "joke-master")).rejects.toThrow("Unknown skill");
   });
 });

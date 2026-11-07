@@ -30,7 +30,7 @@ scores 必須包含指定目錄內每個笑話一次；winner.text 必須與實�
   "~/jokes/笑話5.md": "我把 Wi-Fi 名稱改成「正在連線中」，結果鄰居等了一整個下午。"
 };
 
-/** Shared implementation for SDK fixtures and the editable bin tool; only uses VFS methods. */
+/** SDK fixture installer; the editable product tool lives in workspace/home/user/bin. */
 async function installDemoFiles(fs: Pick<VirtualFileSystem, "mkdir" | "listDirectory" | "writeFiles">, files: Readonly<Record<string, string>>): Promise<{ created: string[]; kept: string[] }> {
   const kept: string[] = [];
   const pending: Array<{ path: string; content: string; expectedRevision: number }> = [];
@@ -55,8 +55,3 @@ async function installDemoFiles(fs: Pick<VirtualFileSystem, "mkdir" | "listDirec
 export function installJokeDemo(fs: VirtualFileSystem): Promise<{ created: string[]; kept: string[] }> {
   return installDemoFiles(fs, JOKE_DEMO_FILES);
 }
-
-export const JOKE_DEMO_SOURCE = `async function main(args, api) {
-  const installed = await (${installDemoFiles.toString()})(api.fs, ${JSON.stringify(JOKE_DEMO_FILES)});
-  return { ...installed, prompt: ${JSON.stringify(JOKE_PROMPT)} };
-}`;

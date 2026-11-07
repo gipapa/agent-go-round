@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "reload_tools",
+  "description": "Reload ~/bin JavaScript and manifests after editing tools. Loading is atomic: an invalid catalog leaves the previous catalog available. New definitions apply on the next agent run; running calls keep their original definitions.",
+  "parameters": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "capabilities": [
+    "reloadTools"
+  ]
+}

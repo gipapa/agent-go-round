@@ -42,6 +42,7 @@ Preview 與人類 Edit 使用左下角齒輪上方的按鈕，不需要連接模
   agents.js
   install_joke_demo.js
   reload_tools.js
+  reset_workspace.js
   manifests/
     read.tool.json
     write.tool.json
@@ -52,12 +53,14 @@ Preview 與人類 Edit 使用左下角齒輪上方的按鈕，不需要連接模
     agents.tool.json
     install_joke_demo.tool.json
     reload_tools.tool.json
+    reset_workspace.tool.json
 ```
 
 | 工具 | 參數與行為 |
 |---|---|
 | install_joke_demo | `{}`；在 bin JS 透過 VFS 安裝笑話範例，只補缺檔，回傳 created／kept 與建議 prompt，不直接執行評分 |
 | reload_tools | `{}`；原子重載 JS 與 manifests，失敗保留舊 catalog；新定義在下一次 agent run 生效，進行中的 run 保留原定義 |
+| reset_workspace | `{}`；以單一交易清除整個共用 VFS（包含 `~` 外的檔案、自訂規則、技能、範例與 bin 工具），從 Git 內的 `workspace/` 範本還原初始內容。保留對話、分頁與 provider 設定；呼叫中的 AI cwd 回到 `~`，並重載預設工具，下一輪套用。僅於使用者要求完整重設時呼叫 |
 | read | `path` 可為單一路徑或最多 32 個路徑的陣列，選填 `offset`（行號，從 1 開始）、`limit`；回傳內容、revision、totalLines、nextOffset |
 | write | 單檔用 `path`／`content`；多檔用 `files:[{path,content,expectedRevision?}]` 原子提交，最多 32 檔。`createParents:true` 建父目錄；覆寫需提供 revision；回傳 path、revision、bytes（UTF-8） |
 | edit | `path`、`oldText`、`newText`，選填 `replaceAll`、`expectedRevision`；精確替換，多處匹配預設失敗 |
@@ -66,7 +69,7 @@ Preview 與人類 Edit 使用左下角齒輪上方的按鈕，不需要連接模
 | help | 選填 `command`；經 `api.tools.help` 取得結構化 AI 工具說明與 schema；AI 的 help 同樣從 bin JS 載入 |
 | agents | `action:list` 列出本頁工作區 tabs、來源 ID、模式／provider／可用狀態與本 tab 的請求 ID；`action:send` 搭配 `target`、`text` 發送至指定 AI 並取得 `requestId`；`action:read` 搭配 `requestId` 讀回結果，選填 `waitMs:0–5000`（預設 5000）。`pending` 時讀同一 ID；成功後回傳對方實際的 `text`，亦保留 error／aborted 狀態 |
 
-VFS 的 `stat`／`listDirectory`／寫入結果只提供 `FileStat`；只有 `readFile` 取得正文。`ls -l` 直接使用 metadata 的 size，不會為了計算大小重讀檔案。Workspace 預設檔案由 `workspace-bootstrap.ts` 建立；檔案能力與 Worker 共用 `file-capabilities.ts` 的名單及 VFS 型別。
+VFS 的 `stat`／`listDirectory`／寫入結果只提供 `FileStat`；只有 `readFile` 取得正文。`ls -l` 直接使用 metadata 的 size，不會為了計算大小重讀檔案。初始檔案保存在專案的 `workspace/`，目錄結構對應虛擬 `/`；`.gitkeep` 僅保留空目錄，不複製到 VFS。`workspace-template.ts` 在建置時載入檔案原文，`workspace-bootstrap.ts` 讓首次初始化與完整重設共用相同範本與原子交易；既有工作區啟動仍只補缺檔、遷移已知預設並保留自訂內容。檔案能力與 Worker 共用 `file-capabilities.ts` 的名單及 VFS 型別。
 
 ## Shell 與 AI 工具的邊界
 
@@ -109,6 +112,8 @@ async function main(args, api) {
 工具函式可用的 `api.fs` 方法為 `stat`、`readFile`、`listDirectory`、`writeFile`、`writeFiles`、`mkdir`、`remove`；每一項必須列在 manifest capabilities。相對路徑依呼叫 tab 的 cwd 解析，所有路徑限定在該 workspace 的虛擬 `/`，`~` 為 `/home/user`。`stat` / `listDirectory` 不回傳檔案正文，內容必須透過 `readFile` 取得。寫入可帶 `{ expectedRevision }`，新增可用 0。
 
 為相容自訂工具，保留 `api.workspace.home()` 與 `home` capability，由呼叫 session 的 cwd callback 更新本輪目錄。Preview 僅供人類按鈕啟動，`open_preview`、`openPreview` capability 與 `api.workspace.openPreview` 已移除；舊版自訂 Preview 檔案保留，但不載入 AI catalog。`api.tools.reload()` 需要 `reloadTools` capability，由 registry 原子重載，沒有直接操控 session 的能力。
+
+`api.workspace.reset()` 需要 `resetWorkspace` capability；宿主僅接受空參數，使用建置時的初始範本還原該 workspace 的整個 VFS，工具不能指定其他 workspace 或提供還原內容。還原不跟隨符號連結，失敗時整筆回滾；成功後更新呼叫者 AI cwd 並重載工具。各分頁下一輪對話會清除已不存在的作用中技能；明確指定不存在的 `/skill NAME` 仍會報錯。其他已開啟的分頁、Shell cwd 與進行中的工具定義保留，目錄遭刪除時可用 `cd ~` 回到家目錄。
 
 `api.skills.load(name)` 需要 manifest 的 `loadSkill` capability，並只在 Pi 配置過的本輪 skill catalog 中解析名稱。工具 JS 無法自行把任意文字當作工作區指示。
 
